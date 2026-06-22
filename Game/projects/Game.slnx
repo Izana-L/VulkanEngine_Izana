@@ -11,5 +11,6 @@
   <Project Path="../../Platform/projects/Platform.vcxproj" Id="5a02578f-f863-41d6-ab96-27213a14cf96" />
   <Project Path="../../Renderer/projects/Renderer.vcxproj" Id="6bd90eb4-87be-448f-843c-a1952e6608eb" />
   <Project Path="../../ResourceManager/projects/ResourceManager.vcxproj" Id="1639033b-8845-4722-8d9f-703e94856276" />
+  <Project Path="../../ThreadDispatcher/projects/ThreadDispatcher.vcxproj" Id="68d560f5-4ecd-4c60-a9a2-341a3a437f8d" />
   <Project Path="Game.vcxproj" Id="e6d6970f-e8a5-484f-9632-45621121b407" />
 </Solution>
