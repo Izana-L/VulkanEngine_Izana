@@ -1,0 +1,39 @@
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.opendb
+
+# Carpetas de compilacion
+x64/
+x86/
+Debug/
+Release/
+output/
+bin/
+obj/
+
+# Archivos compilados
+*.exe
+*.dll
+*.lib
+*.pdb
+*.ilk
+*.exp
+*.obj
+*.iobj
+*.ipdb
+
+# Shaders compilados (se regeneran automaticamente con el Pre-Build Event)
+**/shaders/compiled/*.spv
+
+# Archivos de log
+*.log
+
+# CMake (por si acaso)
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake

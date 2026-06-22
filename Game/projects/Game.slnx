@@ -1,0 +1,15 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+  </Configurations>
+  <Project Path="../../Audio/projects/Audio.vcxproj" Id="04cbe0d2-9dbe-49ba-a9ef-8122694a859c" />
+  <Project Path="../../ECS/projects/ECS.vcxproj" Id="2c556eff-191e-47cf-8797-88b6472f725e" />
+  <Project Path="../../EngineCore/projects/EngineCore.vcxproj" Id="16ff3621-ff24-4b34-8421-f7a2fea7bb39" />
+  <Project Path="../../Input/projects/Input.vcxproj" Id="1b09c67d-9203-4c30-afa1-960dc9421842" />
+  <Project Path="../../Math/projects/Math.vcxproj" Id="434ebd9e-992c-49c1-80d7-cdb46be089e4" />
+  <Project Path="../../Physics/projects/Physics.vcxproj" Id="2e6c2481-0bb3-4e60-ba4d-224672f95aa5" />
+  <Project Path="../../Platform/projects/Platform.vcxproj" Id="5a02578f-f863-41d6-ab96-27213a14cf96" />
+  <Project Path="../../Renderer/projects/Renderer.vcxproj" Id="6bd90eb4-87be-448f-843c-a1952e6608eb" />
+  <Project Path="../../ResourceManager/projects/ResourceManager.vcxproj" Id="1639033b-8845-4722-8d9f-703e94856276" />
+  <Project Path="Game.vcxproj" Id="e6d6970f-e8a5-484f-9632-45621121b407" />
+</Solution>
