@@ -93,10 +93,16 @@
     <ClCompile Include="..\code\sources\ECS_lib.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\code\headers\Component_Storage.hpp" />
+    <ClInclude Include="..\code\headers\ECS.hpp" />
+    <ClInclude Include="..\code\headers\Entity.hpp" />
     <ClInclude Include="..\code\headers\fnv.hpp" />
+    <ClInclude Include="..\code\headers\IComponent_Storage.hpp" />
     <ClInclude Include="..\code\headers\Id.hpp" />
     <ClInclude Include="..\code\headers\Id_Provider.hpp" />
     <ClInclude Include="..\code\headers\Sparse_Array.hpp" />
+    <ClInclude Include="..\code\headers\Sparse_Set.hpp" />
+    <ClInclude Include="..\code\headers\World.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
