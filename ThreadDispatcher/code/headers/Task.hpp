@@ -24,6 +24,23 @@ namespace ThreadDispatcher
     // a tight inner loop.
     struct Task
     {
+    private:
+
+        // The actual work to perform. std::function<void()> provides
+        // type-erased storage for any callable - the type erasure cost
+        // (one heap allocation for large callables, one indirect call
+        // per Execute()) is paid once per task, which is acceptable.
+        std::function< void() > callable;
+
+        // Optional counter to decrement when Execute() completes.
+        // nullptr means this is a fire-and-forget task with no tracking.
+        // shared_ptr because the same counter may be shared with other
+        // tasks (all tasks in a group share the same counter) and with
+        // the thread that is Wait()-ing on the group.
+        Counter_Ptr counter;
+
+    public :
+
         // =========================================================
         // Construction
         // =========================================================
@@ -46,10 +63,7 @@ namespace ThreadDispatcher
             // Verify at compile time that the callable can be invoked
             // with no arguments and returns void. This gives a clear
             // error message instead of a cryptic template failure.
-            static_assert(
-                std::is_invocable_r_v< void, CALLABLE >,
-                "Task callable must be invocable as void()"
-                );
+            static_assert( std::is_invocable_r_v< void, CALLABLE >, "Task callable must be invocable as void()" );
         }
 
         // Tasks are movable (transferred into the queue) but not copyable
@@ -120,20 +134,7 @@ namespace ThreadDispatcher
             return counter;
         }
 
-    private:
-
-        // The actual work to perform. std::function<void()> provides
-        // type-erased storage for any callable - the type erasure cost
-        // (one heap allocation for large callables, one indirect call
-        // per Execute()) is paid once per task, which is acceptable.
-        std::function< void() > callable;
-
-        // Optional counter to decrement when Execute() completes.
-        // nullptr means this is a fire-and-forget task with no tracking.
-        // shared_ptr because the same counter may be shared with other
-        // tasks (all tasks in a group share the same counter) and with
-        // the thread that is Wait()-ing on the group.
-        Counter_Ptr counter;
+    
     };
 
     // =========================================================
