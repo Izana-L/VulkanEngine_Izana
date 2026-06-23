@@ -60,13 +60,13 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(SolutionDir)..\..\EngineCore\code\headers;$(SolutionDir)..\..\ECS\code\headers;$(SolutionDir)..\..\Renderer\code\headers;$(SolutionDir)..\..\Physics\code\headers;$(SolutionDir)..\..\Audio\code\headers;$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\ResourceManager\code\headers;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Input\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(SolutionDir)..\..\ThirdParty\glm\include;$(VULKAN_SDK)\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)..\..\EngineCore\code\headers;$(SolutionDir)..\..\ECS\code\headers;$(SolutionDir)..\..\Renderer\code\headers;$(SolutionDir)..\..\Physics\code\headers;$(SolutionDir)..\..\Audio\code\headers;$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\ResourceManager\code\headers;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Input\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(SolutionDir)..\..\ThirdParty\glm\include;$(VULKAN_SDK)\Include;$(SolutionDir)..\..\ThreadDispatcher\code\headers;$(SolutionDir)..\..\CoreTypes\code\headers;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(SolutionDir)..\output\$(Configuration)\lib\;$(SolutionDir)..\..\ThirdParty\glfw\lib-vc2022;$(VULKAN_SDK)\Lib</AdditionalLibraryDirectories>
-      <AdditionalDependencies>EngineCore.lib;ECS.lib;Renderer.lib;Physics.lib;Audio.lib;ResourceManager.lib;Platform.lib;Input.lib;glfw3.lib;vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>EngineCore.lib;ECS.lib;Renderer.lib;Physics.lib;Audio.lib;ResourceManager.lib;Platform.lib;Input.lib;CoreTypes.lib;ThreadDispatcher.lib;glfw3.lib;vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>
@@ -81,13 +81,13 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(SolutionDir)..\..\EngineCore\code\headers;$(SolutionDir)..\..\ECS\code\headers;$(SolutionDir)..\..\Renderer\code\headers;$(SolutionDir)..\..\Physics\code\headers;$(SolutionDir)..\..\Audio\code\headers;$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\ResourceManager\code\headers;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Input\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(SolutionDir)..\..\ThirdParty\glm\include;$(VULKAN_SDK)\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)..\..\EngineCore\code\headers;$(SolutionDir)..\..\ECS\code\headers;$(SolutionDir)..\..\Renderer\code\headers;$(SolutionDir)..\..\Physics\code\headers;$(SolutionDir)..\..\Audio\code\headers;$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\ResourceManager\code\headers;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Input\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(SolutionDir)..\..\ThirdParty\glm\include;$(VULKAN_SDK)\Include;$(SolutionDir)..\..\ThreadDispatcher\code\headers;$(SolutionDir)..\..\CoreTypes\code\headers;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(SolutionDir)..\output\$(Configuration)\lib\;$(SolutionDir)..\..\ThirdParty\glfw\lib-vc2022;$(VULKAN_SDK)\Lib</AdditionalLibraryDirectories>
-      <AdditionalDependencies>EngineCore.lib;ECS.lib;Renderer.lib;Physics.lib;Audio.lib;ResourceManager.lib;Platform.lib;Input.lib;glfw3.lib;vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>EngineCore.lib;ECS.lib;Renderer.lib;Physics.lib;Audio.lib;ResourceManager.lib;Platform.lib;Input.lib;CoreTypes.lib;ThreadDispatcher.lib;glfw3.lib;vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>

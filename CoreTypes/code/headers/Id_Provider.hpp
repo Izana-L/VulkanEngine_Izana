@@ -3,7 +3,7 @@
 #include <vector>
 #include <Id.hpp>
 
-namespace ECS
+namespace CoreTypes
 {
 
     // Id_Provider: manages a pool of reusable numeric IDs.

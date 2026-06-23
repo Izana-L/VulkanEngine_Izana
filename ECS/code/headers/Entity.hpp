@@ -13,7 +13,7 @@ namespace ECS
     // Using a named alias (rather than a raw Id/uint32_t everywhere)
     // makes intent clear at the call site: a function that takes an
     // Entity is asking for an object in the world, not just any integer.
-    using Entity = Id;
+    using Entity = CoreTypes::Id;
 
     // Sentinel value representing an entity that doesn't exist or
     // hasn't been assigned yet. Equivalent to INVALID_ID.
@@ -22,13 +22,13 @@ namespace ECS
     // Returns true if the entity is a valid (non-sentinel) value.
     constexpr inline bool Is_valid_entity(Entity _entity)
     {
-        return Is_valid(_entity);
+        return CoreTypes::Is_valid(_entity);
     }
 
     // Returns true if the entity is the sentinel/invalid value.
     constexpr inline bool Is_invalid_entity(Entity _entity)
     {
-        return Not_valid(_entity);
+        return CoreTypes::Not_valid(_entity);
     }
 
 }

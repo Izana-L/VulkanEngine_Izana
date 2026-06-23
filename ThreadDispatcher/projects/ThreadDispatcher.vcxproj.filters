@@ -15,7 +15,7 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\code\sources\Source.cpp">
+    <ClCompile Include="..\code\sources\Thread_Dispatcher.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -27,6 +27,15 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\code\headers\Task.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code\headers\Thread_Dispatcher.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code\headers\Parallel_For.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code\headers\Job_Graph.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

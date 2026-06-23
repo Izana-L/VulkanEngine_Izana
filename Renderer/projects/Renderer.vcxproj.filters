@@ -92,9 +92,6 @@
     <ClInclude Include="..\code\headers\Vulkan_Depth_Resources.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\code\headers\Vertex.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="..\code\headers\Vulkan_Buffer_Utils.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>

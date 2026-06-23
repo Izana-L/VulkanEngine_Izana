@@ -3,6 +3,7 @@
     <Platform Name="x64" />
   </Configurations>
   <Project Path="../../Audio/projects/Audio.vcxproj" Id="04cbe0d2-9dbe-49ba-a9ef-8122694a859c" />
+  <Project Path="../../CoreTypes/projects/CoreTypes.vcxproj" Id="42e1e361-2f20-45d8-a380-df96f749e4dd" />
   <Project Path="../../ECS/projects/ECS.vcxproj" Id="2c556eff-191e-47cf-8797-88b6472f725e" />
   <Project Path="../../EngineCore/projects/EngineCore.vcxproj" Id="16ff3621-ff24-4b34-8421-f7a2fea7bb39" />
   <Project Path="../../Input/projects/Input.vcxproj" Id="1b09c67d-9203-4c30-afa1-960dc9421842" />

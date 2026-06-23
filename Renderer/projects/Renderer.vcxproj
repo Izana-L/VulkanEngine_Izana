@@ -60,7 +60,7 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>..\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(VULKAN_SDK)\Include;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Math\code\headers</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(VULKAN_SDK)\Include;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\CoreTypes\code\headers</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -85,7 +85,7 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>..\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(VULKAN_SDK)\Include;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Math\code\headers</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(VULKAN_SDK)\Include;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\CoreTypes\code\headers</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -118,7 +118,6 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\code\headers\Renderer.hpp" />
-    <ClInclude Include="..\code\headers\Vertex.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Buffer_Utils.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Command_Pool.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Depth_Resources.hpp" />

@@ -6,7 +6,7 @@
 
 #define ID(X) FNV(X)
 
-namespace ECS
+namespace CoreTypes
 {
     using Id = unsigned int;
 

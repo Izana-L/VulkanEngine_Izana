@@ -10,7 +10,7 @@
 #include <cstdint>
 
 
-namespace Renderer {
+namespace CoreTypes {
 
     // =========================================================
     // Vertex_Simple

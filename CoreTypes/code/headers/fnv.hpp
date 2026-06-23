@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <string>
-namespace ECS
+namespace CoreTypes
 {
     namespace internal
     {

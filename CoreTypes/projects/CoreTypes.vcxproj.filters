@@ -15,30 +15,21 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\code\sources\ECS_lib.cpp">
+    <ClCompile Include="..\code\sources\Source.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\code\headers\Sparse_Array.hpp">
+    <ClInclude Include="..\code\headers\fnv.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\code\headers\Sparse_Set.hpp">
+    <ClInclude Include="..\code\headers\Id_Provider.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\code\headers\Component_Storage.hpp">
+    <ClInclude Include="..\code\headers\Id.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\code\headers\IComponent_Storage.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="..\code\headers\World.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="..\code\headers\ECS.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="..\code\headers\Entity.hpp">
+    <ClInclude Include="..\code\headers\Vertex.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
