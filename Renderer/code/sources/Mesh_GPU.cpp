@@ -27,8 +27,8 @@ namespace Renderer
         vertex_count(static_cast<uint32_t>(_mesh_data.vertices.size())),
         index_count(static_cast<uint32_t>(_mesh_data.indices.size())),
         index_type(_mesh_data.index_type == CoreTypes::Index_Type::UINT16
-                                                                ? VK_INDEX_TYPE_UINT16
-                                                                : VK_INDEX_TYPE_UINT32)
+            ? VK_INDEX_TYPE_UINT16
+            : VK_INDEX_TYPE_UINT32)
     {
         assert(device_handle != VK_NULL_HANDLE &&
             "Vulkan_Device must be fully constructed before creating a Mesh_GPU");
@@ -43,16 +43,18 @@ namespace Renderer
         // Vertex buffer
         // =========================================================
 
-        const VkDeviceSize vertex_buffer_size = sizeof(CoreTypes::Vertex_Static_Mesh) * _mesh_data.vertices.size();
+        const VkDeviceSize vertex_buffer_size =
+            sizeof(CoreTypes::Vertex_Static_Mesh) * _mesh_data.vertices.size();
 
         // Staging: CPU-visible, source of the transfer.
-        Vulkan_Buffer_Utils::Create_buffer(_device,
-                                            vertex_buffer_size,
-                                            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                            vertex_staging_buffer,
-                                            vertex_staging_memory );
-            
+        Vulkan_Buffer_Utils::Create_buffer(
+            _device,
+            vertex_buffer_size,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            vertex_staging_buffer,
+            vertex_staging_memory
+        );
 
         // Copy vertex data into the staging buffer.
         void* vertex_data = nullptr;
@@ -81,11 +83,15 @@ namespace Renderer
         // Index buffer
         // =========================================================
 
-        // Index data is always stored as uint32 on the CPU side in
-        // MeshData regardless of index_type. index_type only affects
-        // how the GPU reads the buffer at draw time.
-        const VkDeviceSize index_buffer_size =
-            sizeof(uint32_t) * _mesh_data.indices.size();
+        // Index data is stored as uint32_t on the CPU side regardless
+        // of index_type. If index_type is UINT16 we convert to uint16_t
+        // here so the GPU buffer uses half the memory.
+        const bool use_uint16 =
+            (_mesh_data.index_type == CoreTypes::Index_Type::UINT16);
+
+        const VkDeviceSize index_buffer_size = use_uint16
+            ? sizeof(uint16_t) * _mesh_data.indices.size()
+            : sizeof(uint32_t) * _mesh_data.indices.size();
 
         // Staging
         Vulkan_Buffer_Utils::Create_buffer(
@@ -99,7 +105,21 @@ namespace Renderer
 
         void* index_data = nullptr;
         vkMapMemory(device_handle, index_staging_memory, 0, index_buffer_size, 0, &index_data);
-        std::memcpy(index_data, _mesh_data.indices.data(), static_cast<size_t>(index_buffer_size));
+
+        if (use_uint16)
+        {
+            // Downcast uint32_t → uint16_t into the staging buffer.
+            uint16_t* dst = static_cast<uint16_t*>(index_data);
+            for (size_t i = 0; i < _mesh_data.indices.size(); ++i)
+                dst[i] = static_cast<uint16_t>(_mesh_data.indices[i]);
+        }
+        else
+        {
+            std::memcpy(index_data,
+                _mesh_data.indices.data(),
+                static_cast<size_t>(index_buffer_size));
+        }
+
         vkUnmapMemory(device_handle, index_staging_memory);
 
         // Final
