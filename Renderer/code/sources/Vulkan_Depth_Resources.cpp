@@ -85,7 +85,7 @@ namespace Renderer {
         VkResult result = vkCreateImage(device_handle, &image_info, nullptr, &depth_image);
         if (result != VK_SUCCESS) {
             throw std::runtime_error(
-                "Failed to create depth image: " + Vulkan_utils::Vk_result_to_string(result)
+                "Failed to create depth image: " + Vulkan_Utils::Vk_result_to_string(result)
             );
         }
 
@@ -111,7 +111,7 @@ namespace Renderer {
         result = vkAllocateMemory(device_handle, &alloc_info, nullptr, &depth_image_memory);
         if (result != VK_SUCCESS) {
             throw std::runtime_error(
-                "Failed to allocate depth image memory: " + Vulkan_utils::Vk_result_to_string(result)
+                "Failed to allocate depth image memory: " + Vulkan_Utils::Vk_result_to_string(result)
             );
         }
 
@@ -142,7 +142,7 @@ namespace Renderer {
         result = vkCreateImageView(device_handle, &view_info, nullptr, &depth_image_view);
         if (result != VK_SUCCESS) {
             throw std::runtime_error(
-                "Failed to create depth image view: " + Vulkan_utils::Vk_result_to_string(result)
+                "Failed to create depth image view: " + Vulkan_Utils::Vk_result_to_string(result)
             );
         }
 

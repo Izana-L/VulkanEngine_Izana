@@ -25,7 +25,7 @@ namespace Renderer {
 
         if (result != VK_SUCCESS) {
             throw std::runtime_error(
-                "Failed to create window surface: " + Vulkan_utils::Vk_result_to_string(result)
+                "Failed to create window surface: " + Vulkan_Utils::Vk_result_to_string(result)
             );
         }
 

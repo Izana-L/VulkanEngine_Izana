@@ -35,7 +35,7 @@ namespace Renderer {
         VkResult result = vkCreateCommandPool(device_handle, &pool_info, nullptr, &command_pool);
         if (result != VK_SUCCESS) {
             throw std::runtime_error(
-                "Failed to create command pool: " + Vulkan_utils::Vk_result_to_string(result)
+                "Failed to create command pool: " + Vulkan_Utils::Vk_result_to_string(result)
             );
         }
 
@@ -58,7 +58,7 @@ namespace Renderer {
         result = vkAllocateCommandBuffers(device_handle, &alloc_info, command_buffers.data());
         if (result != VK_SUCCESS) {
             throw std::runtime_error(
-                "Failed to allocate command buffers: " + Vulkan_utils::Vk_result_to_string(result)
+                "Failed to allocate command buffers: " + Vulkan_Utils::Vk_result_to_string(result)
             );
         }
 

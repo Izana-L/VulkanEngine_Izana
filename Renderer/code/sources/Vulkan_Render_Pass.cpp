@@ -129,7 +129,7 @@ namespace Renderer {
         VkResult result = vkCreateRenderPass(device_handle, &render_pass_info, nullptr, &render_pass);
         if (result != VK_SUCCESS) {
             throw std::runtime_error(
-                "Failed to create render pass: " + Vulkan_utils::Vk_result_to_string(result)
+                "Failed to create render pass: " + Vulkan_Utils::Vk_result_to_string(result)
             );
         }
 

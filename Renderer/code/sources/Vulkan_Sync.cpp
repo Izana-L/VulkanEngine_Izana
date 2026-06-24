@@ -33,7 +33,7 @@ namespace Renderer {
             if (result != VK_SUCCESS) {
                 throw std::runtime_error(
                     "Failed to create image_available semaphore " + std::to_string(i) + ": " +
-                    Vulkan_utils::Vk_result_to_string(result)
+                    Vulkan_Utils::Vk_result_to_string(result)
                 );
             }
         }
@@ -43,7 +43,7 @@ namespace Renderer {
             if (result != VK_SUCCESS) {
                 throw std::runtime_error(
                     "Failed to create render_finished semaphore " + std::to_string(i) + ": " +
-                    Vulkan_utils::Vk_result_to_string(result)
+                    Vulkan_Utils::Vk_result_to_string(result)
                 );
             }
 
@@ -51,7 +51,7 @@ namespace Renderer {
             if (result != VK_SUCCESS) {
                 throw std::runtime_error(
                     "Failed to create in_flight fence " + std::to_string(i) + ": " +
-                    Vulkan_utils::Vk_result_to_string(result)
+                    Vulkan_Utils::Vk_result_to_string(result)
                 );
             }
         }
@@ -66,7 +66,7 @@ namespace Renderer {
                 if (result != VK_SUCCESS) {
                     throw std::runtime_error(
                         "Failed to create present fence " + std::to_string(i) + ": " +
-                        Vulkan_utils::Vk_result_to_string(result)
+                        Vulkan_Utils::Vk_result_to_string(result)
                     );
                 }
             }

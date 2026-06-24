@@ -36,7 +36,7 @@ namespace Renderer
             VkResult result = vkCreateBuffer(device_handle, &buffer_info, nullptr, &_out_buffer);
             if (result != VK_SUCCESS) {
                 throw std::runtime_error(
-                    "Failed to create buffer: " + Vulkan_utils::Vk_result_to_string(result)
+                    "Failed to create buffer: " + Vulkan_Utils::Vk_result_to_string(result)
                 );
             }
 
@@ -60,7 +60,7 @@ namespace Renderer
                 _out_buffer = VK_NULL_HANDLE;
 
                 throw std::runtime_error(
-                    "Failed to allocate buffer memory: " + Vulkan_utils::Vk_result_to_string(result)
+                    "Failed to allocate buffer memory: " + Vulkan_Utils::Vk_result_to_string(result)
                 );
             }
 

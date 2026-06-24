@@ -131,7 +131,7 @@ namespace Renderer
         // move assignment, and Recreate() (which destroys the old swapchain
         // before building the new one).
         void Destroy();
-
+        void Create_swapchain_internal();
         // Builds the swapchain itself - shared by the constructor and
         // Recreate(), since both need to do the same work, just at
         // different points in the object's lifetime.

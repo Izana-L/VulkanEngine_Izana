@@ -17,7 +17,7 @@ namespace ECS
 
     // Sentinel value representing an entity that doesn't exist or
     // hasn't been assigned yet. Equivalent to INVALID_ID.
-    constexpr Entity INVALID_ENTITY = INVALID_ID;
+    constexpr Entity INVALID_ENTITY = CoreTypes::INVALID_ID;
 
     // Returns true if the entity is a valid (non-sentinel) value.
     constexpr inline bool Is_valid_entity(Entity _entity)

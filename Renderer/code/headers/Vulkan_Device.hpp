@@ -49,7 +49,7 @@ namespace Renderer {
         VkQueue present_queue;
 
         Queue_Family_Indices queue_family_indices;
-        std::string device_name;
+        mutable std::string device_name;
         bool swapchain_maintenance1_enabled;
 
     public:

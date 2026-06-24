@@ -6,7 +6,7 @@
 #include <string>
 #include <cstdint>
 
-namespace Renderer::Vulkan_utils 
+namespace Renderer::Vulkan_Utils 
 {
 
     // Vulkan_utils: shared helper functions used across multiple Vulkan_*

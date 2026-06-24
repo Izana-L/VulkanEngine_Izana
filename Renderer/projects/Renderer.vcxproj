@@ -102,6 +102,7 @@
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\code\sources\Mesh_GPU.cpp" />
     <ClCompile Include="..\code\sources\Renderer.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Buffer_Utils.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Command_Pool.cpp" />
@@ -117,6 +118,8 @@
     <ClCompile Include="..\code\sources\Vulkan_Utils.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\code\headers\Frame_Data.hpp" />
+    <ClInclude Include="..\code\headers\Mesh_GPU.hpp" />
     <ClInclude Include="..\code\headers\Renderer.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Buffer_Utils.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Command_Pool.hpp" />
@@ -130,6 +133,7 @@
     <ClInclude Include="..\code\headers\Vulkan_Swapchain.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Sync.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Utils.hpp" />
+    <ClInclude Include="..\code\headers\Vulkan_Vertex_Layout.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -60,7 +60,7 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(SolutionDir)..\..\EngineCore\code\headers;$(SolutionDir)..\..\ECS\code\headers;$(SolutionDir)..\..\Renderer\code\headers;$(SolutionDir)..\..\Physics\code\headers;$(SolutionDir)..\..\Audio\code\headers;$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\ResourceManager\code\headers;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Input\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(SolutionDir)..\..\ThirdParty\glm\include;$(VULKAN_SDK)\Include;$(SolutionDir)..\..\ThreadDispatcher\code\headers;$(SolutionDir)..\..\CoreTypes\code\headers;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)..\..\EngineCore\code\headers;$(SolutionDir)..\..\ECS\code\headers;$(SolutionDir)..\..\Renderer\code\headers;$(SolutionDir)..\..\Physics\code\headers;$(SolutionDir)..\..\Audio\code\headers;$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\ResourceManager\code\headers;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Input\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(SolutionDir)..\..\ThirdParty\glm;$(VULKAN_SDK)\Include;$(SolutionDir)..\..\ThreadDispatcher\code\headers;$(SolutionDir)..\..\CoreTypes\code\headers;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -81,7 +81,7 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(SolutionDir)..\..\EngineCore\code\headers;$(SolutionDir)..\..\ECS\code\headers;$(SolutionDir)..\..\Renderer\code\headers;$(SolutionDir)..\..\Physics\code\headers;$(SolutionDir)..\..\Audio\code\headers;$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\ResourceManager\code\headers;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Input\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(SolutionDir)..\..\ThirdParty\glm\include;$(VULKAN_SDK)\Include;$(SolutionDir)..\..\ThreadDispatcher\code\headers;$(SolutionDir)..\..\CoreTypes\code\headers;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)..\..\EngineCore\code\headers;$(SolutionDir)..\..\ECS\code\headers;$(SolutionDir)..\..\Renderer\code\headers;$(SolutionDir)..\..\Physics\code\headers;$(SolutionDir)..\..\Audio\code\headers;$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\ResourceManager\code\headers;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Input\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(SolutionDir)..\..\ThirdParty\glm;$(VULKAN_SDK)\Include;$(SolutionDir)..\..\ThreadDispatcher\code\headers;$(SolutionDir)..\..\CoreTypes\code\headers;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>

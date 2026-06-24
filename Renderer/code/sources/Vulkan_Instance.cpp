@@ -142,7 +142,7 @@ namespace Renderer
         VkResult result = vkCreateInstance(&create_info, nullptr, &instance);
         if (result != VK_SUCCESS) {
             throw std::runtime_error(
-                "Failed to create Vulkan instance: " + Vulkan_utils::Vk_result_to_string(result)
+                "Failed to create Vulkan instance: " + Vulkan_Utils::Vk_result_to_string(result)
             );
         }
 
@@ -361,7 +361,7 @@ namespace Renderer
 
         VkResult result = Create_debug_utils_messenger_ext(instance, &create_info, nullptr, &debug_messenger);
         if (result != VK_SUCCESS) {
-            std::cerr << "[Vulkan_instance] Failed to set up debug messenger: " << Vulkan_utils::Vk_result_to_string(result) << "\n";
+            std::cerr << "[Vulkan_instance] Failed to set up debug messenger: " << Vulkan_Utils::Vk_result_to_string(result) << "\n";
         }
     }
 

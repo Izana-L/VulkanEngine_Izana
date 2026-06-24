@@ -7,10 +7,6 @@
 // the World container.
 // =========================================================
 
-// --- Hashing and ID utilities ---
-#include <fnv.hpp>
-#include <Id.hpp>
-#include <Id_Provider.hpp>
 
 // --- Entity ---
 #include <Entity.hpp>

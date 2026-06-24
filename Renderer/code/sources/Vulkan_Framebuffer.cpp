@@ -75,7 +75,7 @@ namespace Renderer {
             if (result != VK_SUCCESS) {
                 throw std::runtime_error(
                     "Failed to create framebuffer " + std::to_string(i) + ": " +
-                    Vulkan_utils::Vk_result_to_string(result)
+                    Vulkan_Utils::Vk_result_to_string(result)
                 );
             }
         }

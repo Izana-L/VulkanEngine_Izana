@@ -1,6 +1,7 @@
 #pragma once
 #include <glm/glm.hpp>
-namespace MathLib {
+namespace MathLib 
+{
 
     template< unsigned DIMENSION, typename TYPE >
     using Vector = glm::vec< DIMENSION, TYPE >;

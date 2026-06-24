@@ -18,6 +18,9 @@
     <ClCompile Include="..\code\sources\Source.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\code\headers\RenderPacket.hpp">
+      <Filter>Header Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\code\headers\fnv.hpp">
@@ -30,6 +33,15 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\code\headers\Vertex.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code\headers\Imagedata.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code\headers\Meshdata.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code\headers\Asset_Handle.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

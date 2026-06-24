@@ -54,6 +54,9 @@
     <ClCompile Include="..\code\sources\Renderer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\code\sources\Mesh_GPU.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\code\headers\Vulkan_Instance.hpp">
@@ -93,6 +96,15 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\code\headers\Vulkan_Buffer_Utils.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code\headers\Vulkan_Vertex_Layout.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code\headers\Mesh_GPU.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code\headers\Frame_Data.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

@@ -1,6 +1,6 @@
 #include <Vulkan_Utils.hpp>
 
-namespace Renderer ::Vulkan_utils
+namespace Renderer ::Vulkan_Utils
 {
    
 

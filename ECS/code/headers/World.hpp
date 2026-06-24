@@ -47,7 +47,7 @@ namespace ECS
         // Members
         // =========================================================
 
-        Id_Provider id_provider;
+        CoreTypes::Id_Provider id_provider;
 
         // One storage per component type, lazily created on first use.
         // Stored as unique_ptr<IComponent_Storage> for type erasure -
