@@ -89,7 +89,16 @@ namespace CoreTypes
 
         return hash;
     }
-
+    inline uint64_t fnv64(const std::string& s)
+    {
+        uint64_t hash = internal::fnv_basis_64;
+        for (auto c : s)
+        {
+            hash ^= static_cast<uint8_t>(c);
+            hash *= internal::fnv_prime_64;
+        }
+        return hash;
+    }
 }
 
 #define FNV(X)   ECS::static_fnv   (#X)

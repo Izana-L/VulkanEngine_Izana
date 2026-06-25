@@ -2,35 +2,39 @@
 
 #include <Image_Loader.hpp>
 #include <Mesh_Loader.hpp>
+#include <Primitive_Builder.hpp>
+#include <Primitive_Desc.hpp>
 #include <Asset_Handle.hpp>
 #include <Id_Provider.hpp>
+#include <Fnv.hpp>
 #include <ImageData.hpp>
 #include <MeshData.hpp>
 
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace ResourceManager
 {
 
-    // Resource_Manager: loads assets from disk and maintains the mapping
-    // from Asset_Handle to CPU data and GPU ids.
+    // Resource_Manager: loads, generates, deduplicates and tracks assets.
     //
     // Sits in Layer 1 — knows nothing about Vulkan or the Renderer.
-    // EngineCore (Layer 3) bridges the two:
+    // EngineCore (Layer 3) bridges to the Renderer for GPU upload.
     //
-    //   auto handles = resource_manager.Load_mesh("model.glb");
-    //   for (auto handle : handles)
-    //   {
-    //       uint32_t gpu_id = renderer.Upload_mesh(
-    //           resource_manager.Get_mesh_data(handle));
-    //       resource_manager.Register_gpu_id(handle, gpu_id);
-    //   }
+    // Deduplication: loading the same file twice, or requesting the same
+    // primitive twice, returns the same Asset_Handle(s) without reloading
+    // or regenerating. This mirrors Unity/Unreal: many entities share one
+    // GPU mesh, differing only by their Transform.
     //
-    // After that, the extract can resolve handles to gpu_ids:
-    //   uint32_t gpu_id = resource_manager.Get_gpu_id(handle);
+    // Cache keys (uint64_t):
+    //   - File assets:  FNV64(path) combined with format, bit 63 = 0.
+    //   - Primitives:   structured packing from Primitive_Desc, bit 63 = 1.
+    //   The discriminator bit keeps the two key spaces from colliding.
+    //   A stored source string allows a full comparison on hash hit to
+    //   rule out the (rare) FNV collision.
     class Resource_Manager
     {
     public:
@@ -44,43 +48,49 @@ namespace ResourceManager
         Resource_Manager& operator=(Resource_Manager&&) = default;
 
         // =========================================================
-        // Mesh
+        // Mesh — file
         // =========================================================
 
-        // Loads all triangle primitives from a glTF or GLB file.
-        // Returns one Asset_Handle per primitive found.
-        // gpu_id is not set yet — call Register_gpu_id() after uploading
-        // each mesh to the Renderer.
+        // Loads all primitives from a glTF/GLB file, or returns the
+        // cached handles if this file was already loaded. One handle
+        // per primitive. gpu_id must still be registered after upload.
         std::vector<CoreTypes::Asset_Handle>
             Load_mesh(const std::string& _path);
 
-        // Registers the gpu_id returned by Renderer::Upload_mesh() for
-        // the given handle. Must be called before Get_gpu_id().
-        void Register_gpu_id(CoreTypes::Asset_Handle _handle, uint32_t _gpu_id);
+        // =========================================================
+        // Mesh — primitive
+        // =========================================================
 
-        // Resolves a mesh handle to its GPU id.
-        // Asserts in debug if the handle is invalid or gpu_id has not
-        // been registered yet.
+        // Generates a procedural primitive, or returns the cached handle
+        // if an identical primitive (same type + topology params) already
+        // exists. Returns a single handle (primitives are one mesh each).
+        CoreTypes::Asset_Handle
+            Create_primitive(const Primitive_Desc& _desc);
+
+        // =========================================================
+        // Mesh — shared queries
+        // =========================================================
+
+        void     Register_gpu_id(CoreTypes::Asset_Handle _handle, uint32_t _gpu_id);
         uint32_t Get_gpu_id(CoreTypes::Asset_Handle _handle) const;
 
-        // Returns the CPU-side mesh data for a given handle.
-        // Useful for debug, reimport, or physics (collision mesh).
-        const CoreTypes::MeshData& Get_mesh_data(CoreTypes::Asset_Handle _handle) const;
+        const CoreTypes::MeshData&
+            Get_mesh_data(CoreTypes::Asset_Handle _handle) const;
 
         // =========================================================
         // Image
         // =========================================================
 
-        // Loads an image from disk and returns a handle to it.
-        // The image is kept in CPU memory — GPU upload happens in Fase 2
-        // when Renderer::Upload_texture() is implemented.
+        // Loads an image, or returns the cached handle if the same path
+        // was already loaded with the same format. Format is part of the
+        // key: the same file as SRGB vs UNORM are distinct GPU resources.
         CoreTypes::Asset_Handle
             Load_image(const std::string& _path,
                 CoreTypes::Pixel_Format  _format =
                 CoreTypes::Pixel_Format::RGBA8_SRGB);
 
-        // Returns the CPU-side image data for a given handle.
-        const CoreTypes::ImageData& Get_image_data(CoreTypes::Asset_Handle _handle) const;
+        const CoreTypes::ImageData&
+            Get_image_data(CoreTypes::Asset_Handle _handle) const;
 
     private:
 
@@ -88,19 +98,24 @@ namespace ResourceManager
         // Internal types
         // =========================================================
 
-        static constexpr uint32_t INVALID_GPU_ID = std::numeric_limits<uint32_t>::max();
+        static constexpr uint32_t INVALID_GPU_ID =
+            std::numeric_limits<uint32_t>::max();
 
         struct Mesh_Entry
         {
             CoreTypes::MeshData data;
             uint32_t            gpu_id = INVALID_GPU_ID;
             uint32_t            generation = 0;
+            uint32_t            ref_count = 0;    // reserved — no unload logic yet
+            std::string         source;            // path or primitive description
         };
 
         struct Image_Entry
         {
             CoreTypes::ImageData data;
             uint32_t             generation = 0;
+            uint32_t             ref_count = 0;    // reserved
+            std::string          source;
             // gpu_id added in Fase 2
         };
 
@@ -108,10 +123,18 @@ namespace ResourceManager
         // Internal helpers
         // =========================================================
 
-        // Validates a mesh handle and returns the corresponding entry.
-        // Asserts in debug on invalid handle or generation mismatch.
         const Mesh_Entry& Get_mesh_entry(CoreTypes::Asset_Handle _handle) const;
         const Image_Entry& Get_image_entry(CoreTypes::Asset_Handle _handle) const;
+
+        // Creates a new mesh entry from ready MeshData, returns its handle.
+        CoreTypes::Asset_Handle
+            Register_mesh(CoreTypes::MeshData&& _data, const std::string& _source);
+
+        // Builds a file-asset cache key: FNV64(path) folded with format,
+        // bit 63 forced to 0 to stay in the file key space.
+        static uint64_t Make_file_key(const std::string& _path);
+        static uint64_t Make_image_key(const std::string& _path,
+            CoreTypes::Pixel_Format  _format);
 
         // =========================================================
         // Data
@@ -122,6 +145,12 @@ namespace ResourceManager
 
         CoreTypes::Id_Provider   image_id_provider;
         std::vector<Image_Entry> images;
+
+        // key -> handles. Mesh files yield several handles (one per
+        // primitive); primitives yield exactly one (stored as a 1-element
+        // vector for uniformity).
+        std::unordered_map<uint64_t, std::vector<CoreTypes::Asset_Handle>> mesh_cache;
+        std::unordered_map<uint64_t, CoreTypes::Asset_Handle>              image_cache;
     };
 
 } // namespace ResourceManager
