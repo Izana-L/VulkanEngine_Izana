@@ -58,7 +58,10 @@ namespace Platform {
         glfwSetWindowFocusCallback(window_handle, Window_focus_callback);
         glfwSetWindowIconifyCallback(window_handle, Window_iconify_callback);
         glfwSetWindowPosCallback(window_handle, Window_position_callback);
-
+        glfwSetKeyCallback(window_handle, Key_callback_internal);
+        glfwSetMouseButtonCallback(window_handle, Mouse_button_callback_internal);
+        glfwSetCursorPosCallback(window_handle, Mouse_move_callback_internal);
+        glfwSetScrollCallback(window_handle, Scroll_callback_internal);
         glfwGetWindowPos(window_handle, &windowed_pos_x, &windowed_pos_y);
         windowed_width = static_cast<int>(_width);
         windowed_height = static_cast<int>(_height);
@@ -438,10 +441,33 @@ namespace Platform {
         assert(window_handle != nullptr && "Set_iconify_callback() called on a moved-from Window");
         iconify_callback = std::move(_callback);
     }
-
+    
     void Window::Set_position_callback(Position_callback _callback) {
         assert(window_handle != nullptr && "Set_position_callback() called on a moved-from Window");
         position_callback = std::move(_callback);
+    }
+    void Window::Set_key_callback(Key_callback _callback)
+    {
+        assert(window_handle != nullptr && "Set_key_callback() called on a moved-from Window");
+        key_callback = std::move(_callback);
+    }
+
+    void Window::Set_mouse_button_callback(Mouse_button_callback _callback)
+    {
+        assert(window_handle != nullptr && "Set_mouse_button_callback() called on a moved-from Window");
+        mouse_button_callback = std::move(_callback);
+    }
+
+    void Window::Set_mouse_move_callback(Mouse_move_callback _callback)
+    {
+        assert(window_handle != nullptr && "Set_mouse_move_callback() called on a moved-from Window");
+        mouse_move_callback = std::move(_callback);
+    }
+
+    void Window::Set_scroll_callback(Scroll_callback _callback)
+    {
+        assert(window_handle != nullptr && "Set_scroll_callback() called on a moved-from Window");
+        scroll_callback = std::move(_callback);
     }
 
     // =========================================================
@@ -483,6 +509,33 @@ namespace Platform {
         if (owner && owner->position_callback) {
             owner->position_callback(_x, _y);
         }
+    }
+    void Window::Key_callback_internal(GLFWwindow* _w, int _key, int /*_scancode*/, int _action, int /*_mods*/)
+    {
+        Window* owner = reinterpret_cast<Window*>(glfwGetWindowUserPointer(_w));
+        if (owner && owner->key_callback && _action != GLFW_REPEAT)
+            owner->key_callback(_key, _action);
+    }
+
+    void Window::Mouse_button_callback_internal(GLFWwindow* _w, int _button, int _action, int /*_mods*/)
+    {
+        Window* owner = reinterpret_cast<Window*>(glfwGetWindowUserPointer(_w));
+        if (owner && owner->mouse_button_callback)
+            owner->mouse_button_callback(_button, _action);
+    }
+
+    void Window::Mouse_move_callback_internal(GLFWwindow* _w, double _xpos, double _ypos)
+    {
+        Window* owner = reinterpret_cast<Window*>(glfwGetWindowUserPointer(_w));
+        if (owner && owner->mouse_move_callback)
+            owner->mouse_move_callback(_xpos, _ypos);
+    }
+
+    void Window::Scroll_callback_internal(GLFWwindow* _w, double /*_xoffset*/, double _yoffset)
+    {
+        Window* owner = reinterpret_cast<Window*>(glfwGetWindowUserPointer(_w));
+        if (owner && owner->scroll_callback)
+            owner->scroll_callback(_yoffset);
     }
 
 }

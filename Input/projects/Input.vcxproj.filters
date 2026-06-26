@@ -18,5 +18,19 @@
     <ClCompile Include="..\code\sources\Source.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\code\headers\Input_Action.hpp">
+      <Filter>Header Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code\sources\Input.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\code\headers\Key.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code\headers\Input.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

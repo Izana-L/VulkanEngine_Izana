@@ -60,6 +60,7 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
+      <AdditionalIncludeDirectories>..\code\headers;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(SolutionDir)..\..\ThirdParty\tinygltf\include</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -78,6 +79,7 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
+      <AdditionalIncludeDirectories>..\code\headers;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(SolutionDir)..\..\ThirdParty\tinygltf\include</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -88,7 +90,13 @@
     </Manifest>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\code\headers\Input_Action.hpp" />
+    <ClCompile Include="..\code\sources\Input.cpp" />
     <ClCompile Include="..\code\sources\Source.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\code\headers\Input.hpp" />
+    <ClInclude Include="..\code\headers\Key.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

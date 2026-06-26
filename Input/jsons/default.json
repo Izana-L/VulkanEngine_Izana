@@ -1,0 +1,44 @@
+{
+    "actions": [
+        {
+            "name": "MoveForward",
+            "bindings": [ "W", "Arrow_Up" ]
+        },
+        {
+            "name": "MoveBack",
+            "bindings": [ "S", "Arrow_Down" ]
+        },
+        {
+            "name": "MoveLeft",
+            "bindings": [ "A", "Arrow_Left" ]
+        },
+        {
+            "name": "MoveRight",
+            "bindings": [ "D", "Arrow_Right" ]
+        },
+        {
+            "name": "MoveUp",
+            "bindings": [ "E" ]
+        },
+        {
+            "name": "MoveDown",
+            "bindings": [ "Q" ]
+        },
+        {
+            "name": "Sprint",
+            "bindings": [ "Left_Shift" ]
+        },
+        {
+            "name": "Jump",
+            "bindings": [ "Space" ]
+        },
+        {
+            "name": "ToggleCamera",
+            "bindings": [ "Right_Mouse" ]
+        },
+        {
+            "name": "Interact",
+            "bindings": [ "F", "Left_Mouse" ]
+        }
+    ]
+}
