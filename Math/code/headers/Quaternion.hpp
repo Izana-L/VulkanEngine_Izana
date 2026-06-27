@@ -4,12 +4,13 @@
 #include <glm/gtx/quaternion.hpp>
 #include <MathConstants.hpp>
 #include <cmath>
-
+#include <Vector.hpp>
+#include <Matrix.hpp>
 
 namespace MathLib {
 
-    
-    namespace Quaternion 
+
+    namespace Quaternion
     {
         using Quaternion = glm::quat;
         // Quaternion: represents a 3D rotation using 4 components (x, y, z, w).
@@ -35,7 +36,7 @@ namespace MathLib {
         // The axis does NOT need to be normalized beforehand; glm handles that.
         // This is the most common way to build a rotation procedurally
         // (e.g. "rotate 90 degrees around the Y axis").
-        inline Quaternion From_axis_angle(const glm::vec3& axis, float radians) {
+        inline Quaternion From_axis_angle(const Vector3& axis, float radians) {
             return glm::angleAxis(radians, glm::normalize(axis));
         }
 
@@ -45,30 +46,30 @@ namespace MathLib {
         // NOTE: convert back and forth carries the usual Euler angle quirks
         // (gimbal lock when reading back, ambiguity near +-90 degrees pitch).
         inline Quaternion From_euler(float pitch, float yaw, float roll) {
-            return glm::quat(glm::vec3(pitch, yaw, roll));
+            return glm::quat(Vector3(pitch, yaw, roll));
         }
 
-        inline Quaternion From_euler(const glm::vec3& eulerRadians) {
+        inline Quaternion From_euler(const Vector3& eulerRadians) {
             return glm::quat(eulerRadians);
         }
 
         // Builds a quaternion from a 3x3 or 4x4 rotation matrix.
         // Useful when you've computed a rotation as a matrix (e.g. from LookAt)
         // and need to store/interpolate it as a quaternion instead.
-        inline Quaternion From_matrix(const glm::mat3& m) {
+        inline Quaternion From_matrix(const Matrix3& m) {
             return glm::quat_cast(m);
         }
 
-        inline Quaternion From_matrix(const glm::mat4& m) {
+        inline Quaternion From_matrix(const Matrix4& m) {
             return glm::quat_cast(m);
         }
 
         // Builds a quaternion that rotates "from" direction to "to" direction.
         // Useful for orienting an object to face a target, or aligning a vector
         // with a surface normal.
-        inline Quaternion From_to_rotation(const glm::vec3& from, const glm::vec3& to) {
-            glm::vec3 f = glm::normalize(from);
-            glm::vec3 t = glm::normalize(to);
+        inline Quaternion From_to_rotation(const Vector3& from, const Vector3& to) {
+            Vector3 f = glm::normalize(from);
+            Vector3 t = glm::normalize(to);
             float dot = glm::dot(f, t);
 
             // vectors point in the same direction, no rotation needed
@@ -78,14 +79,14 @@ namespace MathLib {
 
             // vectors point in opposite directions: pick an arbitrary perpendicular axis
             if (dot <= -1.0f + Constants::EPSILON_SMALL) {
-                glm::vec3 axis = glm::cross(glm::vec3(1.0f, 0.0f, 0.0f), f);
+                Vector3 axis = glm::cross(Vector3(1.0f, 0.0f, 0.0f), f);
                 if (glm::length2(axis) < Constants::EPSILON_SMALL) {
-                    axis = glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), f);
+                    axis = glm::cross(Vector3(0.0f, 1.0f, 0.0f), f);
                 }
                 return glm::angleAxis(Constants::PI, glm::normalize(axis));
             }
 
-            glm::vec3 axis = glm::normalize(glm::cross(f, t));
+            Vector3 axis = glm::normalize(glm::cross(f, t));
             float angle = std::acos(dot);
             return glm::angleAxis(angle, axis);
         }
@@ -93,7 +94,7 @@ namespace MathLib {
         // Builds a quaternion that orients an object to look toward "forward",
         // with "up" defining the roll. Equivalent to a rotation-only LookAt.
         // Useful for making an object face a target (e.g. a turret aiming at a player).
-        inline Quaternion Look_rotation(const glm::vec3& forward, const glm::vec3& up = glm::vec3(0.0f, 1.0f, 0.0f)) {
+        inline Quaternion Look_rotation(const Vector3& forward, const Vector3& up = Vector3(0.0f, 1.0f, 0.0f)) {
             return glm::quatLookAt(glm::normalize(forward), up);
         }
 
@@ -108,7 +109,7 @@ namespace MathLib {
         }
 
         // Rotates a 3D vector by this quaternion.
-        inline glm::vec3 Rotate_vector(const Quaternion& q, const glm::vec3& v) {
+        inline Vector3 Rotate_vector(const Quaternion& q, const  Vector3& v) {
             return q * v;
         }
 
@@ -156,12 +157,12 @@ namespace MathLib {
         // Converts the quaternion to a 3x3 rotation matrix.
         // Use this when you need to combine the rotation with a Matrix4 TRS,
         // or pass it to systems that expect matrices instead of quaternions.
-        inline glm::mat3 To_matrix3(const Quaternion& q) {
+        inline Matrix3 To_matrix3(const Quaternion& q) {
             return glm::mat3_cast(q);
         }
 
         // Converts the quaternion to a 4x4 rotation matrix (no translation/scale)
-        inline glm::mat4 To_matrix4(const Quaternion& q) {
+        inline Matrix4 To_matrix4(const Quaternion& q) {
             return glm::mat4_cast(q);
         }
 
@@ -170,13 +171,13 @@ namespace MathLib {
         // NOTE: this conversion is not perfectly stable - the same rotation can
         // map to different Euler angle results depending on the order/convention,
         // and gimbal lock can occur near +-90 degree pitch values.
-        inline glm::vec3 ToEuler(const Quaternion& q) {
+        inline Vector3 ToEuler(const Quaternion& q) {
             return glm::eulerAngles(q);
         }
 
         // Extracts the rotation axis and angle (in radians) from the quaternion.
         // Useful for debugging or for systems that work with axis-angle directly.
-        inline void To_axis_angle(const Quaternion& q, glm::vec3& outAxis, float& outAngle) {
+        inline void To_axis_angle(const Quaternion& q, Vector3& outAxis, float& outAngle) {
             outAngle = glm::angle(q);
             outAxis = glm::axis(q);
         }
@@ -229,18 +230,18 @@ namespace MathLib {
         // Returns the local "forward" direction after applying this rotation.
         // Assumes -Z is forward in local space (common convention; verify against
         // your engine's coordinate system, some use +Z as forward instead).
-        inline glm::vec3 GetForward(const Quaternion& q) {
-            return Rotate_vector(q, glm::vec3(0.0f, 0.0f, -1.0f));
+        inline Vector3 GetForward(const Quaternion& q) {
+            return Rotate_vector(q, Vector3(0.0f, 0.0f, -1.0f));
         }
 
         // Returns the local "right" direction after applying this rotation
-        inline glm::vec3 GetRight(const Quaternion& q) {
-            return Rotate_vector(q, glm::vec3(1.0f, 0.0f, 0.0f));
+        inline Vector3 GetRight(const Quaternion& q) {
+            return Rotate_vector(q, Vector3(1.0f, 0.0f, 0.0f));
         }
 
         // Returns the local "up" direction after applying this rotation
-        inline glm::vec3 GetUp(const Quaternion& q) {
-            return Rotate_vector(q, glm::vec3(0.0f, 1.0f, 0.0f));
+        inline Vector3 GetUp(const Quaternion& q) {
+            return Rotate_vector(q, Vector3(0.0f, 1.0f, 0.0f));
         }
 
         // =========================================================
