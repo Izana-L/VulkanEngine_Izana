@@ -358,7 +358,34 @@ namespace ECS
                 }
             }
         }
+        template< typename FIRST_COMPONENT, typename... REST_COMPONENTS, typename FUNCTION >
+        void Query(FUNCTION&& _function) const
+        {
+            size_t first_id = Component_Id< FIRST_COMPONENT >();
 
+            if (first_id >= MAX_COMPONENT_TYPES || !storages[first_id]) return;
+
+            Entity_Mask required_mask;
+            required_mask.set(first_id);
+            (required_mask.set(Component_Id< REST_COMPONENTS >()), ...);
+
+            const auto& first_storage = Get_storage< FIRST_COMPONENT >();  // const version
+            const std::vector< Entity >& entities = first_storage.Get_entities();
+
+            for (size_t i = 0; i < entities.size(); ++i)
+            {
+                Entity entity = entities[i];
+
+                if ((Mask_of(entity) & required_mask) == required_mask)
+                {
+                    _function(
+                        entity,
+                        first_storage.Get_components()[i],
+                        Get_storage< REST_COMPONENTS >().Get(entity)...
+                    );
+                }
+            }
+        }
         // Calls _function(entity, component) for every entity that has
         // the given component type. Simpler than Query when you only
         // need one component type - no mask check needed.
@@ -398,7 +425,30 @@ namespace ECS
             alive_flags->fill(false);
             alive_entity_count = 0;
         }
+       
+        // Reorders the component storage of type T so entities appear in
+        // _new_order sequence. Both the dense component array and the sparse
+        // index map are updated atomically.
+        //
+        // Preconditions:
+        //   - _new_order must be a permutation of all entities that currently
+        //     have a component of type T.
+        //   - _new_order.size() must equal the number of entities with T.
+        //
+        // Used by Transform_System to keep Transform_Components in
+        // hierarchical order (parents before children) after any Set_parent
+        // call, so Transform_System::Update() can run as a single
+        // cache-friendly Each() pass without an external sorted list.
 
+        template< typename COMPONENT_TYPE >
+        void Reorder_storage(const std::vector<ECS::Entity>& _new_order)
+        {
+            size_t type_id = Component_Id< COMPONENT_TYPE >();
+
+            if (type_id >= MAX_COMPONENT_TYPES || !storages[type_id]) return;
+
+            Get_storage< COMPONENT_TYPE >().Reorder(_new_order);
+        }
     private:
 
         // =========================================================

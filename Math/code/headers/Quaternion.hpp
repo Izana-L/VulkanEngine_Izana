@@ -10,9 +10,10 @@
 namespace MathLib {
 
 
-    namespace Quaternion
+    namespace Quat
     {
         using Quaternion = glm::quat;
+        
         // Quaternion: represents a 3D rotation using 4 components (x, y, z, w).
         // Why quaternions instead of Euler angles or matrices?
         //   - No gimbal lock (Euler angles can lose a degree of freedom)

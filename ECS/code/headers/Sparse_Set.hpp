@@ -23,101 +23,99 @@ namespace ECS
     {
     private:
 
-        // Sparse array: Entity ID → index in the dense array.
-        // Only populated for entities currently in the set.
         Sparse_Array<uint32_t> sparse;
+        std::vector<Entity>    dense;
 
-        // Dense array: all entities in the set, always compact.
-        // Same index as the component data array in Component_Storage.
-        std::vector<Entity> dense;
     public:
 
         // =========================================================
         // Modifiers
         // =========================================================
 
-        // Adds an entity to the set. No-op if already present.
         void Insert(Entity _entity)
         {
             assert(Is_valid_entity(_entity) && "Insert() called with INVALID_ENTITY");
 
             if (Has(_entity)) return;
 
-            // Store the index where this entity will live in the dense array
             sparse.Set(_entity, static_cast<uint32_t>(dense.size()));
             dense.push_back(_entity);
         }
 
-        // Removes an entity from the set using the swap-with-last trick,
-        // keeping the dense array compact without shifting elements.
-        // No-op if the entity is not in the set.
         void Remove(Entity _entity)
         {
             assert(Is_valid_entity(_entity) && "Remove() called with INVALID_ENTITY");
 
             if (!Has(_entity)) return;
 
-            // Index of the entity being removed in the dense array
             uint32_t removed_index = sparse[_entity];
-
-            // The last entity in the dense array - it will take the
-            // removed entity's slot to keep the array compact.
-            Entity last_entity = dense.back();
+            Entity   last_entity = dense.back();
 
             if (last_entity != _entity)
             {
-                // Move last entity into the removed slot
                 dense[removed_index] = last_entity;
-
-                // Update last entity's sparse entry to its new index
                 sparse.Set(last_entity, removed_index);
             }
 
-            // Remove the now-duplicate last element and clear the sparse entry
             dense.pop_back();
             sparse.Unset(_entity);
         }
 
-        // Removes all entities from the set.
         void Clear()
         {
             for (Entity entity : dense)
-            {
                 sparse.Unset(entity);
-            }
             dense.clear();
         }
-        // Reserves capacity in the dense entity array to avoid
-        // reallocations as entities are inserted.
+
         void Reserve(size_t _capacity)
         {
             dense.reserve(_capacity);
         }
+
+        // Reorders the dense array to match _new_order and updates the
+        // sparse array so every entity still maps to its correct index.
+        //
+        // Preconditions (asserted in debug):
+        //   - _new_order.size() == dense.size()
+        //   - _new_order is a permutation of the current dense array
+        //     (every entity appears exactly once)
+        //
+        // Called by Component_Storage::Reorder() when Transform_System
+        // needs to keep transforms in hierarchical order (parents before
+        // children) so Update() can do a single cache-friendly Each() pass.
+        void Reorder(const std::vector<Entity>& _new_order)
+        {
+            assert(_new_order.size() == dense.size() &&"Reorder(): new_order size must match current dense size");
+
+            // Rebuild dense in the new order and update sparse in one pass.
+            for (uint32_t new_index = 0;
+                new_index < static_cast<uint32_t>(_new_order.size());
+                ++new_index)
+            {
+                Entity entity = _new_order[new_index];
+
+                assert(Has(entity) && "Reorder(): entity in new_order is not in this Sparse_Set");
+
+                dense[new_index] = entity;
+                sparse.Set(entity, new_index);
+            }
+        }
+
         // =========================================================
         // Queries
         // =========================================================
 
-        // Returns true if the entity is in the set.
         bool Has(Entity _entity) const
         {
             assert(Is_valid_entity(_entity) && "Has() called with INVALID_ENTITY");
             return sparse.Has_value(_entity);
         }
 
-        // Returns the number of entities currently in the set.
-        size_t Size() const
-        {
-            return dense.size();
-        }
+        size_t Size() const { return dense.size(); }
 
-        // Returns true if the set contains no entities.
-        bool Is_empty() const
-        {
-            return dense.empty();
-        }
+        bool Is_empty() const { return dense.empty(); }
 
-        // Returns the dense array index of an entity.
-        // Precondition: Has(entity) must be true.
         uint32_t Index_of(Entity _entity) const
         {
             assert(Has(_entity) && "Index_of() called for an entity not in the set");
@@ -125,27 +123,15 @@ namespace ECS
         }
 
         // =========================================================
-        // Iteration (over the dense array, cache-friendly)
+        // Iteration
         // =========================================================
 
-        // Range-based for support - iterates the dense array directly.
-        // WARNING: do NOT insert or remove entities during iteration,
-        // as Remove() modifies the dense array in place (swap-with-last),
-        // which would invalidate the iteration.
         auto begin() { return dense.begin(); }
         auto end() { return dense.end(); }
         auto begin() const { return dense.begin(); }
         auto end()   const { return dense.end(); }
 
-        // Direct access to the underlying dense array, useful when
-        // Component_Storage needs to iterate entities and components
-        // in parallel (same index in both arrays).
-        const std::vector<Entity>& Get_dense() const
-        {
-            return dense;
-        }
-
-   
+        const std::vector<Entity>& Get_dense() const { return dense; }
     };
 
-}
+} // namespace ECS

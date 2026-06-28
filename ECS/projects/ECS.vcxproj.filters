@@ -44,10 +44,10 @@
     <ClInclude Include="..\code\headers\Transform_Component.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\code\headers\Mesh_Component .hpp">
+    <ClInclude Include="..\code\headers\Mesh_Component.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\code\headers\Material_Component .hpp">
+    <ClInclude Include="..\code\headers\Material_Component.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\code\headers\Light_Component.hpp">

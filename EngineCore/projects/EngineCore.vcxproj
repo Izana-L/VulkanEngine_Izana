@@ -11,10 +11,19 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\code\headers\EngineCore_main.hpp" />
+    <ClInclude Include="..\code\headers\Camera_Controller.hpp" />
+    <ClInclude Include="..\code\headers\Engine.hpp" />
+    <ClInclude Include="..\code\headers\Engine_Loop.hpp" />
+    <ClInclude Include="..\code\headers\Extractor.hpp" />
+    <ClInclude Include="..\code\headers\Time.hpp" />
+    <ClInclude Include="..\code\headers\Transform_System.hpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\code\sources\EngineCore_main.cpp" />
+    <ClCompile Include="..\code\sources\Camera_Controller.cpp" />
+    <ClCompile Include="..\code\sources\Engine.cpp" />
+    <ClCompile Include="..\code\sources\Engine_Loop.cpp" />
+    <ClCompile Include="..\code\sources\Extractor.cpp" />
+    <ClCompile Include="..\code\sources\Transform_System.cpp" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>18.0</VCProjectVersion>
@@ -68,7 +77,7 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\CoreTypes\code\headers</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\code\headers;$(SolutionDir)..\..\ECS\code\headers;$(SolutionDir)..\..\Renderer\code\headers;$(SolutionDir)..\..\Physics\code\headers;$(SolutionDir)..\..\Audio\code\headers;$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\ResourceManager\code\headers;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Input\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(SolutionDir)..\..\ThirdParty\glm;$(VULKAN_SDK)\Include;$(SolutionDir)..\..\ThreadDispatcher\code\headers;$(SolutionDir)..\..\CoreTypes\code\headers;$(SolutionDir)..\..\ThirdParty\stb_image\include;$(SolutionDir)..\..\ThirdParty\tinygltf\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -91,7 +100,7 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\CoreTypes\code\headers</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\code\headers;$(SolutionDir)..\..\ECS\code\headers;$(SolutionDir)..\..\Renderer\code\headers;$(SolutionDir)..\..\Physics\code\headers;$(SolutionDir)..\..\Audio\code\headers;$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\ResourceManager\code\headers;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Input\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(SolutionDir)..\..\ThirdParty\glm;$(VULKAN_SDK)\Include;$(SolutionDir)..\..\ThreadDispatcher\code\headers;$(SolutionDir)..\..\CoreTypes\code\headers;$(SolutionDir)..\..\ThirdParty\stb_image\include;$(SolutionDir)..\..\ThirdParty\tinygltf\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>

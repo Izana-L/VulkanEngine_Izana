@@ -37,7 +37,7 @@ namespace ECS
         // =========================================================
 
         MathLib::Vector3                    position = { 0.0f, 0.0f, 0.0f };
-        MathLib::Quaternion::Quaternion     rotation = MathLib::Quaternion::Identity();
+        MathLib::Quat::Quaternion     rotation = MathLib::Quat::Identity();
         MathLib::Vector3                    scale = { 1.0f, 1.0f, 1.0f };
 
         // =========================================================
@@ -73,9 +73,9 @@ namespace ECS
             dirty = true;
         }
 
-        void Set_rotation(const MathLib::Quaternion::Quaternion& _rotation)
+        void Set_rotation(const MathLib::Quat::Quaternion& _rotation)
         {
-            rotation = MathLib::Quaternion::Normalize(_rotation);
+            rotation = MathLib::Quat::Normalize(_rotation);
             dirty = true;
         }
 
@@ -88,25 +88,25 @@ namespace ECS
         // Convenience: set rotation from Euler angles (pitch, yaw, roll) in radians.
         void Set_rotation_euler(float _pitch, float _yaw, float _roll)
         {
-            rotation = MathLib::Quaternion::Normalize(
-                MathLib::Quaternion::From_euler(_pitch, _yaw, _roll));
+            rotation = MathLib::Quat::Normalize(
+                MathLib::Quat::From_euler(_pitch, _yaw, _roll));
             dirty = true;
         }
 
         void Set_rotation_euler(const MathLib::Vector3& _euler_radians)
         {
-            rotation = MathLib::Quaternion::Normalize(
-                MathLib::Quaternion::From_euler(_euler_radians));
+            rotation = MathLib::Quat::Normalize(
+                MathLib::Quat::From_euler(_euler_radians));
             dirty = true;
         }
 
         // Convenience: set all three at once (avoids three separate dirty marks).
         void Set(const MathLib::Vector3& _position,
-            const MathLib::Quaternion::Quaternion& _rotation,
+            const MathLib::Quat::Quaternion& _rotation,
             const MathLib::Vector3& _scale)
         {
             position = _position;
-            rotation = MathLib::Quaternion::Normalize(_rotation);
+            rotation = MathLib::Quat::Normalize(_rotation);
             scale = _scale;
             dirty = true;
         }
@@ -118,17 +118,17 @@ namespace ECS
         // Returns the local forward direction in world space (-Z by convention).
         MathLib::Vector3 Forward() const
         {
-            return MathLib::Quaternion::GetForward(rotation);
+            return MathLib::Quat::GetForward(rotation);
         }
 
         MathLib::Vector3 Right() const
         {
-            return MathLib::Quaternion::GetRight(rotation);
+            return MathLib::Quat::GetRight(rotation);
         }
 
         MathLib::Vector3 Up() const
         {
-            return MathLib::Quaternion::GetUp(rotation);
+            return MathLib::Quat::GetUp(rotation);
         }
     };
 
