@@ -279,8 +279,10 @@ namespace Renderer
 
         // VK_EXT_debug_utils is required to use the debug messenger system
         // (vkCreateDebugUtilsMessengerEXT etc.) - only needed if validation is on.
-        if (validation_enabled) {
+        if (validation_enabled)
+        {
             extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+
         }
 
         return extensions;

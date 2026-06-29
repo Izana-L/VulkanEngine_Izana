@@ -3,6 +3,8 @@
 #include <Vulkan_Utils.hpp>
 #include <Filesystem.hpp>
 
+#include <glm/glm.hpp>
+
 #include <stdexcept>
 #include <iostream>
 #include <cassert>
@@ -147,8 +149,6 @@ namespace Renderer
         pipeline_info.renderPass = _render_pass.Get_handle();
         pipeline_info.subpass = 0;
 
-        // Shader modules are only needed during pipeline creation.
-        // Destroy them here regardless of success or failure below.
         VkResult result = vkCreateGraphicsPipelines(
             device_handle,
             VK_NULL_HANDLE,
@@ -273,11 +273,22 @@ namespace Renderer
     // ---------- Create_pipeline_layout ----------
     void Vulkan_Pipeline::Create_pipeline_layout()
     {
+        // Push constant range for the per-draw model matrix.
+        // The vertex shader declares:
+        //   layout(push_constant) uniform Push_Constants { mat4 model; } push;
+        // 64 bytes (one mat4) is well within the guaranteed 128-byte minimum
+        // push constant size, so this is portable across all Vulkan devices.
+        VkPushConstantRange push_range{};
+        push_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        push_range.offset = 0;
+        push_range.size = sizeof(glm::mat4);   // 64 bytes
+
         VkPipelineLayoutCreateInfo layout_info{};
         layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         layout_info.setLayoutCount = 1;
         layout_info.pSetLayouts = &descriptor_set_layout;
-        layout_info.pushConstantRangeCount = 0;
+        layout_info.pushConstantRangeCount = 1;
+        layout_info.pPushConstantRanges = &push_range;
 
         VkResult result = vkCreatePipelineLayout(
             device_handle, &layout_info, nullptr, &pipeline_layout);

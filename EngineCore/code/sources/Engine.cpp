@@ -39,7 +39,7 @@ namespace EngineCore
         , loop()
     {
         // Load action bindings from JSON.
-        input.Load_actions("assets/input_actions.json");
+        input.Load_actions("../../Input/jsons/default_input_actions.json");
 
         std::cout << "[Engine] All subsystems initialized.\n";
     }

@@ -92,7 +92,6 @@
   <ItemGroup>
     <ClCompile Include="..\code\headers\Input_Action.hpp" />
     <ClCompile Include="..\code\sources\Input.cpp" />
-    <ClCompile Include="..\code\sources\Source.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\code\headers\Input.hpp" />

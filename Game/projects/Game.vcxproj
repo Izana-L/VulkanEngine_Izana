@@ -65,8 +65,8 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(SolutionDir)..\output\$(Configuration)\lib\;$(SolutionDir)..\..\ThirdParty\glfw\lib-vc2022;$(VULKAN_SDK)\Lib;$(SolutionDir)..\..\ThirdParty\stb_image\lib;$(SolutionDir)..\..\ThirdParty\tinygltf\lib</AdditionalLibraryDirectories>
-      <AdditionalDependencies>EngineCore.lib;ECS.lib;Renderer.lib;Physics.lib;Audio.lib;ResourceManager.lib;Platform.lib;Input.lib;CoreTypes.lib;ThreadDispatcher.lib;glfw3.lib;vulkan-1.lib;tinygltf.lib;stb_image.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(SolutionDir)..\output\$(Configuration)\lib\;$(SolutionDir)..\..\ThirdParty\glfw\lib-vc2022;$(VULKAN_SDK)\Lib;$(SolutionDir)..\..\ThirdParty\stb_image\lib\$(Configuration)\;$(SolutionDir)..\..\ThirdParty\tinygltf\lib\$(Configuration)\</AdditionalLibraryDirectories>
+      <AdditionalDependencies>EngineCore.lib;ECS.lib;Renderer.lib;Physics.lib;Audio.lib;ResourceManager.lib;Platform.lib;Input.lib;ThreadDispatcher.lib;glfw3.lib;vulkan-1.lib;tinygltf.lib;stb_image.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>
@@ -86,8 +86,8 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(SolutionDir)..\output\$(Configuration)\lib\;$(SolutionDir)..\..\ThirdParty\glfw\lib-vc2022;$(VULKAN_SDK)\Lib;$(SolutionDir)..\..\ThirdParty\stb_image\lib;$(SolutionDir)..\..\ThirdParty\tinygltf\lib</AdditionalLibraryDirectories>
-      <AdditionalDependencies>EngineCore.lib;ECS.lib;Renderer.lib;Physics.lib;Audio.lib;ResourceManager.lib;Platform.lib;Input.lib;CoreTypes.lib;ThreadDispatcher.lib;glfw3.lib;vulkan-1.lib;tinygltf.lib;stb_image.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(SolutionDir)..\output\$(Configuration)\lib\;$(SolutionDir)..\..\ThirdParty\glfw\lib-vc2022;$(VULKAN_SDK)\Lib;$(SolutionDir)..\..\ThirdParty\stb_image\lib\$(Configuration)\;$(SolutionDir)..\..\ThirdParty\tinygltf\lib\$(Configuration)\</AdditionalLibraryDirectories>
+      <AdditionalDependencies>EngineCore.lib;ECS.lib;Renderer.lib;Physics.lib;Audio.lib;ResourceManager.lib;Platform.lib;Input.lib;ThreadDispatcher.lib;glfw3.lib;vulkan-1.lib;tinygltf.lib;stb_image.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>

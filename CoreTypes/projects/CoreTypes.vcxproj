@@ -150,7 +150,6 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\code\headers\RenderPacket.hpp" />
-    <ClCompile Include="..\code\sources\Source.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\code\headers\Asset_Handle.hpp" />

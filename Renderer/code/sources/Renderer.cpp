@@ -2,6 +2,8 @@
 #include <Vulkan_Buffer_Utils.hpp>
 #include <Vulkan_Utils.hpp>
 
+#include <glm/glm.hpp>
+
 #include <stdexcept>
 #include <iostream>
 #include <cassert>
@@ -23,14 +25,14 @@ namespace Renderer
         surface(instance, _window),
         device(instance, surface),
         swapchain(device, surface, _window, 3, false),
-        render_pass(device,swapchain.Get_image_format(),device.Find_supported_depth_format()),
-        depth_resources(device,device.Find_supported_depth_format(),swapchain.Get_extent()),
+        render_pass(device, swapchain.Get_image_format(), device.Find_supported_depth_format()),
+        depth_resources(device, device.Find_supported_depth_format(), swapchain.Get_extent()),
         framebuffers(device, render_pass, swapchain, depth_resources),
         pipeline(device, render_pass, []
             {
                 Pipeline_Config config;
-                config.vertex_shader_path = "shaders/mesh.vert.spv";
-                config.fragment_shader_path = "shaders/mesh.frag.spv";
+                config.vertex_shader_path = "..\\..\\Renderer\\shaders\\compiled\\triangle.vert.spv";
+                config.fragment_shader_path = "..\\..\\Renderer\\shaders\\compiled\\triangle.frag.spv";
                 return config;
             }()),
         descriptor_pool(VK_NULL_HANDLE),
@@ -316,6 +318,22 @@ namespace Renderer
         for (const CoreTypes::Draw_Item& item : _packet.opaque_items)
         {
             if (item.mesh_gpu_id >= meshes.size()) continue;
+
+            // Push this item's model matrix to the vertex shader.
+            // transform_idx indexes into the packet's transform array,
+            // which the Extractor filled with world matrices.
+            assert(item.transform_idx < _packet.transform_count &&
+                "Record_command_buffer: transform_idx out of range");
+
+            const glm::mat4& model = _packet.transforms[item.transform_idx];
+            vkCmdPushConstants(
+                frame.command_buffer,
+                pipeline.Get_layout_handle(),
+                VK_SHADER_STAGE_VERTEX_BIT,
+                0,
+                sizeof(glm::mat4),
+                &model
+            );
 
             Mesh_GPU& mesh = meshes[item.mesh_gpu_id];
             mesh.Bind(frame.command_buffer);
