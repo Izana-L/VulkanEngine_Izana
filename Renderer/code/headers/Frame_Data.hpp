@@ -68,6 +68,19 @@ namespace Renderer
         // Created pre-signaled so the first wait returns immediately.
         VkFence in_flight_fence = VK_NULL_HANDLE;
 
+        // Signaled by the presentation engine when the present operation
+        // for this slot completes (VK_KHR_swapchain_maintenance1).
+        // Waited on before reusing render_finished_semaphore, which is the
+        // semaphore the present operation waits on — without this, the
+        // semaphore could be reused while still pending in a present.
+        // NOT pre-signaled: the first frame has no prior present to wait on,
+        // so present_fence_pending tracks whether it's been used yet.
+        VkFence present_fence = VK_NULL_HANDLE;
+
+        // True once present_fence has been submitted to a present at least
+        // once. Guards the first-frame case where there's nothing to wait on.
+        bool present_fence_pending = false;
+
         // =========================================================
         // Uniform buffer
         // =========================================================
@@ -137,9 +150,9 @@ namespace Renderer
                 );
             }
 
-            // ── Fence (pre-signaled) ───────────────────────────────
-            // Pre-signaled so the first vkWaitForFences on frame 0
-            // returns immediately — there's nothing in flight yet.
+            // ── Fences ─────────────────────────────────────────────
+            // in_flight_fence is pre-signaled so the first vkWaitForFences
+            // on frame 0 returns immediately — there's nothing in flight yet.
             VkFenceCreateInfo fence_info{};
             fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
             fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
@@ -148,6 +161,21 @@ namespace Renderer
             if (result != VK_SUCCESS) {
                 throw std::runtime_error(
                     "Frame_Data: failed to create in_flight fence: " +
+                    Vulkan_Utils::Vk_result_to_string(result)
+                );
+            }
+
+            // present_fence is NOT pre-signaled — it's only signaled after
+            // a real present operation. present_fence_pending guards the
+            // first-frame case.
+            VkFenceCreateInfo present_fence_info{};
+            present_fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+            present_fence_info.flags = 0;
+
+            result = vkCreateFence(device, &present_fence_info, nullptr, &present_fence);
+            if (result != VK_SUCCESS) {
+                throw std::runtime_error(
+                    "Frame_Data: failed to create present fence: " +
                     Vulkan_Utils::Vk_result_to_string(result)
                 );
             }
@@ -184,6 +212,10 @@ namespace Renderer
             if (uniform_memory != VK_NULL_HANDLE) {
                 vkFreeMemory(_device, uniform_memory, nullptr);
                 uniform_memory = VK_NULL_HANDLE;
+            }
+            if (present_fence != VK_NULL_HANDLE) {
+                vkDestroyFence(_device, present_fence, nullptr);
+                present_fence = VK_NULL_HANDLE;
             }
             if (in_flight_fence != VK_NULL_HANDLE) {
                 vkDestroyFence(_device, in_flight_fence, nullptr);

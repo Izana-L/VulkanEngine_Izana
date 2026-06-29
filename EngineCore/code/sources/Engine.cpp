@@ -78,10 +78,9 @@ namespace EngineCore
 
         // Place camera at (0, 1, -5) looking toward +Z.
         world.Add_component<ECS::Transform_Component>(camera_entity);
-        auto& cam_transform =
-            world.Get_component<ECS::Transform_Component>(camera_entity);
-        cam_transform.Set_position({ 0.0f, 1.0f, -5.0f });
-
+        auto& cam_transform =world.Get_component<ECS::Transform_Component>(camera_entity);
+   
+        cam_transform.Set_position({ 0.0f, 1.0f, 5.0f });
         world.Add_component<ECS::Camera_Component>(camera_entity,
             ECS::Camera_Component::Make_perspective(
                 MathLib::Constants::FOV_DEFAULT,

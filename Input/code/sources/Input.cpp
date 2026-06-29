@@ -52,9 +52,15 @@ namespace Input
         previous_keys = current_keys;
         previous_buttons = current_buttons;
 
-        // Flush per-frame data.
-        mouse_delta_x = 0.0f;
-        mouse_delta_y = 0.0f;
+        // Transfer accumulated mouse delta to the readable fields,
+        // then reset the accumulators for the next frame.
+        // This mirrors the scroll pattern: accumulate during Poll_events(),
+        // expose via Update(), reset for next frame.
+        mouse_delta_x = mouse_delta_x_acc;
+        mouse_delta_y = mouse_delta_y_acc;
+        mouse_delta_x_acc = 0.0f;
+        mouse_delta_y_acc = 0.0f;
+
         scroll_delta = scroll_accumulator;
         scroll_accumulator = 0.0f;
 
@@ -256,12 +262,13 @@ namespace Input
             mouse_x = fx;
             mouse_y = fy;
             first_mouse = false;
+            return;
         }
 
-        // Accumulate delta within the frame — multiple move events
-        // can arrive per Poll_events() call.
-        mouse_delta_x += fx - mouse_x;
-        mouse_delta_y += fy - mouse_y;
+        // Accumulate delta into separate accumulators.
+        // Update() transfers them to mouse_delta_x/y each frame.
+        mouse_delta_x_acc += fx - mouse_x;
+        mouse_delta_y_acc += fy - mouse_y;
         mouse_x = fx;
         mouse_y = fy;
     }

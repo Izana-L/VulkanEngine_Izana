@@ -282,7 +282,8 @@ namespace Renderer
         if (validation_enabled)
         {
             extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-
+            extensions.push_back(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
+            extensions.push_back(VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
         }
 
         return extensions;

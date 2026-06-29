@@ -25,14 +25,14 @@ namespace Renderer
         surface(instance, _window),
         device(instance, surface),
         swapchain(device, surface, _window, 3, false),
-        render_pass(device, swapchain.Get_image_format(), device.Find_supported_depth_format()),
-        depth_resources(device, device.Find_supported_depth_format(), swapchain.Get_extent()),
+        render_pass(device,swapchain.Get_image_format(),device.Find_supported_depth_format()),
+        depth_resources(device,device.Find_supported_depth_format(),swapchain.Get_extent()),
         framebuffers(device, render_pass, swapchain, depth_resources),
         pipeline(device, render_pass, []
             {
                 Pipeline_Config config;
-                config.vertex_shader_path = "..\\..\\Renderer\\shaders\\compiled\\triangle.vert.spv";
-                config.fragment_shader_path = "..\\..\\Renderer\\shaders\\compiled\\triangle.frag.spv";
+                config.vertex_shader_path = "..\\..\\Renderer\\shaders\\compiled\\mesh.vert.spv";
+                config.fragment_shader_path = "..\\..\\Renderer\\shaders\\compiled\\mesh.frag.spv";
                 return config;
             }()),
         descriptor_pool(VK_NULL_HANDLE),
@@ -165,6 +165,19 @@ namespace Renderer
         // ── Wait for this frame slot to be free ───────────────────
         vkWaitForFences(dev, 1, &frame.in_flight_fence, VK_TRUE, UINT64_MAX);
 
+        // ── Wait for this slot's previous present to complete ─────
+        // With swapchain_maintenance1, the present operation signals
+        // present_fence when done. We must wait on it before reusing
+        // render_finished_semaphore (which the present waits on).
+        // present_fence_pending guards the first-frame case where no
+        // present has happened yet for this slot.
+        if (device.Is_swapchain_maintenance1_enabled() && frame.present_fence_pending)
+        {
+            vkWaitForFences(dev, 1, &frame.present_fence, VK_TRUE, UINT64_MAX);
+            vkResetFences(dev, 1, &frame.present_fence);
+            frame.present_fence_pending = false;
+        }
+
         // ── Acquire swapchain image ───────────────────────────────
         uint32_t image_index = 0;
         VkResult result = vkAcquireNextImageKHR(
@@ -234,6 +247,20 @@ namespace Renderer
         VkSwapchainKHR swapchain_handle = swapchain.Get_handle();
         present_info.pSwapchains = &swapchain_handle;
         present_info.pImageIndices = &image_index;
+
+        // Attach a present fence so we know when the present completes and
+        // can safely reuse render_finished_semaphore next time this slot
+        // comes around (VK_KHR_swapchain_maintenance1).
+        VkSwapchainPresentFenceInfoEXT present_fence_info{};
+        if (device.Is_swapchain_maintenance1_enabled())
+        {
+            present_fence_info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT;
+            present_fence_info.swapchainCount = 1;
+            present_fence_info.pFences        = &frame.present_fence;
+            present_info.pNext = &present_fence_info;
+
+            frame.present_fence_pending = true;
+        }
 
         result = vkQueuePresentKHR(device.Get_present_queue(), &present_info);
 
@@ -351,6 +378,23 @@ namespace Renderer
     void Renderer::Recreate_swapchain()
     {
         vkDeviceWaitIdle(device.Get_logical_device_handle());
+
+        // After waiting idle, any pending present operations are done.
+        // Reset the present fences and their pending flags so the next
+        // frames don't wait on a fence that will never be signaled by an
+        // operation that belonged to the old swapchain.
+        if (device.Is_swapchain_maintenance1_enabled())
+        {
+            VkDevice dev = device.Get_logical_device_handle();
+            for (auto& frame : frames)
+            {
+                if (frame.present_fence_pending)
+                {
+                    vkResetFences(dev, 1, &frame.present_fence);
+                    frame.present_fence_pending = false;
+                }
+            }
+        }
 
         swapchain.Recreate();
         depth_resources.Recreate(swapchain.Get_extent());

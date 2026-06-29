@@ -52,8 +52,7 @@ namespace EngineCore
                 ? static_cast<float>(fb_width) / static_cast<float>(fb_height)
                 : 1.0f;
 
-            const bool has_camera =
-                _extractor.Extract(_world, _resources, aspect_ratio, packet);
+            const bool has_camera = _extractor.Extract(_world, _resources, aspect_ratio, packet);
 
             // ── 7. Render ─────────────────────────────────────────
             if (has_camera)

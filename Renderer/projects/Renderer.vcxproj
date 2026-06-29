@@ -70,10 +70,11 @@
       <EnableSegmentHeap>true</EnableSegmentHeap>
     </Manifest>
     <PreBuildEvent>
-      <Command>"%VULKAN_SDK%\Bin\glslc.exe" "$(ProjectDir)..\shaders\triangle.vert" -o "$(ProjectDir)..\shaders\compiled\triangle.vert.spv"
-"%VULKAN_SDK%\Bin\glslc.exe" "$(ProjectDir)..\shaders\triangle.frag" -o "$(ProjectDir)..\shaders\compiled\triangle.frag.spv"
-
-</Command>
+      <Command>if not exist "$(ProjectDir)..\shaders\compiled" mkdir "$(ProjectDir)..\shaders\compiled"
+for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$(ProjectDir)..\shaders\*.comp") do (
+    echo Compiling %%~nxf
+    "%VULKAN_SDK%\Bin\glslc.exe" "%%f" -o "$(ProjectDir)..\shaders\compiled\%%~nxf.spv" || exit 1
+)</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -95,10 +96,11 @@
       <EnableSegmentHeap>true</EnableSegmentHeap>
     </Manifest>
     <PreBuildEvent>
-      <Command>"%VULKAN_SDK%\Bin\glslc.exe" "$(ProjectDir)..\shaders\triangle.vert" -o "$(ProjectDir)..\shaders\compiled\triangle.vert.spv"
-"%VULKAN_SDK%\Bin\glslc.exe" "$(ProjectDir)..\shaders\triangle.frag" -o "$(ProjectDir)..\shaders\compiled\triangle.frag.spv"
-
-</Command>
+      <Command>if not exist "$(ProjectDir)..\shaders\compiled" mkdir "$(ProjectDir)..\shaders\compiled"
+for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$(ProjectDir)..\shaders\*.comp") do (
+    echo Compiling %%~nxf
+    "%VULKAN_SDK%\Bin\glslc.exe" "%%f" -o "$(ProjectDir)..\shaders\compiled\%%~nxf.spv" || exit 1
+)</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>

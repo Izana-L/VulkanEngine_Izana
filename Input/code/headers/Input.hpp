@@ -168,9 +168,11 @@ namespace Input
         // Mouse position and delta.
         float mouse_x = 0.0f;
         float mouse_y = 0.0f;
-        float mouse_delta_x = 0.0f;
-        float mouse_delta_y = 0.0f;
-        bool  first_mouse = true;     // skip delta on first event
+        float mouse_delta_x = 0.0f;   // exposed to callers via Get_mouse_delta_x()
+        float mouse_delta_y = 0.0f;   // exposed to callers via Get_mouse_delta_y()
+        float mouse_delta_x_acc = 0.0f; // accumulates during Poll_events()
+        float mouse_delta_y_acc = 0.0f; // accumulates during Poll_events()
+        bool  first_mouse = true;
 
         float scroll_delta = 0.0f;
         float scroll_accumulator = 0.0f;  // accumulate during Poll_events()
