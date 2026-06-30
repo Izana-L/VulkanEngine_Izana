@@ -104,13 +104,17 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\code\headers\Bindless_Registry.cpp" />
     <ClCompile Include="..\code\sources\Mesh_GPU.cpp" />
     <ClCompile Include="..\code\sources\Renderer.cpp" />
+    <ClCompile Include="..\code\sources\Sampler_Cache.cpp" />
+    <ClCompile Include="..\code\sources\Texture_GPU.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Buffer_Utils.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Command_Pool.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Depth_Resources.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Device.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Framebuffer.cpp" />
+    <ClCompile Include="..\code\sources\Vulkan_Image_Utils.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Instance.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Pipeline.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Render_Pass.cpp" />
@@ -120,14 +124,18 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
     <ClCompile Include="..\code\sources\Vulkan_Utils.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\code\headers\Bindless_Registry.hpp" />
     <ClInclude Include="..\code\headers\Frame_Data.hpp" />
     <ClInclude Include="..\code\headers\Mesh_GPU.hpp" />
     <ClInclude Include="..\code\headers\Renderer.hpp" />
+    <ClInclude Include="..\code\headers\Sampler_Cache.hpp" />
+    <ClInclude Include="..\code\headers\Texture_GPU.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Buffer_Utils.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Command_Pool.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Depth_Resources.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Device.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Framebuffer.hpp" />
+    <ClInclude Include="..\code\headers\Vulkan_Image_Utils.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Instance.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Pipeline.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Render_Pass.hpp" />

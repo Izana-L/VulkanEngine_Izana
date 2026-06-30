@@ -74,8 +74,7 @@ namespace ResourceManager
         void     Register_gpu_id(CoreTypes::Asset_Handle _handle, uint32_t _gpu_id);
         uint32_t Get_gpu_id(CoreTypes::Asset_Handle _handle) const;
 
-        const CoreTypes::MeshData&
-            Get_mesh_data(CoreTypes::Asset_Handle _handle) const;
+        const CoreTypes::MeshData& Get_mesh_data(CoreTypes::Asset_Handle _handle) const;
 
         // =========================================================
         // Image
@@ -84,10 +83,9 @@ namespace ResourceManager
         // Loads an image, or returns the cached handle if the same path
         // was already loaded with the same format. Format is part of the
         // key: the same file as SRGB vs UNORM are distinct GPU resources.
-        CoreTypes::Asset_Handle
-            Load_image(const std::string& _path,
-                CoreTypes::Pixel_Format  _format =
-                CoreTypes::Pixel_Format::RGBA8_SRGB);
+        CoreTypes::Asset_Handle Load_image(const std::string& _path,
+                                            CoreTypes::Pixel_Format  _format =
+                                            CoreTypes::Pixel_Format::RGBA8_SRGB);
 
         const CoreTypes::ImageData&
             Get_image_data(CoreTypes::Asset_Handle _handle) const;

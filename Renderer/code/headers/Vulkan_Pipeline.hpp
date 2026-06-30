@@ -22,6 +22,14 @@ namespace Renderer
         std::string vertex_shader_path;
         std::string fragment_shader_path;
 
+        // ── Bindless textures (optional) ─────────────────────────────
+        // Set 1 in the pipeline layout. VK_NULL_HANDLE means this pipeline
+        // doesn't sample bindless textures (e.g. a future skybox pipeline
+        // might use its own dedicated cubemap descriptor instead).
+        // When set, the pipeline layout gains a second descriptor set
+        // alongside set 0 (the per-frame view/projection UBO).
+        VkDescriptorSetLayout bindless_set_layout = VK_NULL_HANDLE;
+
         // ── Rasterization ─────────────────────────────────────────────
         VkPolygonMode   polygon_mode = VK_POLYGON_MODE_FILL;
         VkCullModeFlags cull_mode = VK_CULL_MODE_BACK_BIT;
@@ -71,10 +79,11 @@ namespace Renderer
         // Creates the pipeline from a Pipeline_Config built against
         // the given render pass. Shader modules are created internally
         // and destroyed immediately after pipeline creation.
-        Vulkan_Pipeline(const Vulkan_Device& _device,
-                        const Vulkan_Render_Pass& _render_pass,
-                        Pipeline_Config           _config);
-            
+        Vulkan_Pipeline(
+            const Vulkan_Device& _device,
+            const Vulkan_Render_Pass& _render_pass,
+            Pipeline_Config           _config
+        );
 
         ~Vulkan_Pipeline();
 
@@ -102,7 +111,7 @@ namespace Renderer
 
         void Destroy();
         void Create_descriptor_set_layout();
-        void Create_pipeline_layout();
+        void Create_pipeline_layout(VkDescriptorSetLayout _bindless_set_layout);
         VkShaderModule Create_shader_module(const std::string& _spv_file_path) const;
     };
 

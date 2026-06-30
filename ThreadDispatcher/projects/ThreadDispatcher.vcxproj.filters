@@ -35,8 +35,5 @@
     <ClInclude Include="..\code\headers\Parallel_For.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\code\headers\Job_Graph.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
   </ItemGroup>
 </Project>

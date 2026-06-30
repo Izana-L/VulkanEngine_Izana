@@ -25,16 +25,19 @@ namespace Renderer
         surface(instance, _window),
         device(instance, surface),
         swapchain(device, surface, _window, 3, false),
-        render_pass(device,swapchain.Get_image_format(),device.Find_supported_depth_format()),
-        depth_resources(device,device.Find_supported_depth_format(),swapchain.Get_extent()),
+        render_pass(device, swapchain.Get_image_format(), device.Find_supported_depth_format()),
+        depth_resources(device, device.Find_supported_depth_format(), swapchain.Get_extent()),
         framebuffers(device, render_pass, swapchain, depth_resources),
-        pipeline(device, render_pass, []
+        bindless_registry(device, 1024),
+        pipeline(device, render_pass, [this]
             {
                 Pipeline_Config config;
                 config.vertex_shader_path = "..\\..\\Renderer\\shaders\\compiled\\mesh.vert.spv";
                 config.fragment_shader_path = "..\\..\\Renderer\\shaders\\compiled\\mesh.frag.spv";
+                config.bindless_set_layout = bindless_registry.Get_layout();
                 return config;
             }()),
+        sampler_cache(device),
         descriptor_pool(VK_NULL_HANDLE),
         transfer_command_pool(VK_NULL_HANDLE)
     {
@@ -75,8 +78,10 @@ namespace Renderer
         // Wait for the GPU to finish before destroying anything.
         vkDeviceWaitIdle(device.Get_logical_device_handle());
 
-        // Meshes first — they hold GPU buffers.
+        // Assets first — they hold GPU buffers/images that may still be
+        // referenced by in-flight command buffers otherwise.
         meshes.clear();
+        textures.clear();
 
         if (transfer_command_pool != VK_NULL_HANDLE)
             vkDestroyCommandPool(device.Get_logical_device_handle(),
@@ -90,7 +95,8 @@ namespace Renderer
             frame.Destroy(device.Get_logical_device_handle());
 
         // Vulkan core objects are destroyed in reverse construction
-        // order by their own destructors (RAII).
+        // order by their own destructors (RAII). sampler_cache destroys
+        // all cached VkSampler handles in its own destructor.
         std::cout << "[Renderer] Destroyed.\n";
     }
 
@@ -151,6 +157,76 @@ namespace Renderer
         const uint32_t gpu_id = static_cast<uint32_t>(meshes.size() - 1);
         std::cout << "[Renderer] Mesh uploaded, gpu_id = " << gpu_id << "\n";
         return gpu_id;
+    }
+
+    // =========================================================
+    // Upload_texture
+    // =========================================================
+
+    uint32_t Renderer::Upload_texture(const CoreTypes::ImageData& _image_data, VkFormat _format)
+    {
+        assert(!_image_data.pixels.empty() && "Upload_texture: ImageData has no pixel data");
+        assert(_image_data.width > 0 && _image_data.height > 0 &&
+            "Upload_texture: ImageData has zero dimensions");
+
+        VkDevice device_handle = device.Get_logical_device_handle();
+
+        // Same one-off transfer command buffer pattern as Upload_mesh —
+        // shares the same transfer_command_pool.
+        VkCommandBufferAllocateInfo alloc_info{};
+        alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        alloc_info.commandPool = transfer_command_pool;
+        alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        alloc_info.commandBufferCount = 1;
+
+        VkCommandBuffer transfer_cmd = VK_NULL_HANDLE;
+        VkResult result = vkAllocateCommandBuffers(device_handle, &alloc_info, &transfer_cmd);
+        if (result != VK_SUCCESS) {
+            throw std::runtime_error(
+                "Upload_texture: failed to allocate transfer command buffer: " +
+                Vulkan_Utils::Vk_result_to_string(result)
+            );
+        }
+
+        VkCommandBufferBeginInfo begin_info{};
+        begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(transfer_cmd, &begin_info);
+
+        // Texture_GPU records the upload + mipmap generation into
+        // transfer_cmd. Staging buffer stays alive inside it until we
+        // call Release_staging_buffers() below.
+        textures.emplace_back(device, transfer_cmd, _image_data, _format);
+
+        vkEndCommandBuffer(transfer_cmd);
+
+        VkSubmitInfo submit_info{};
+        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit_info.commandBufferCount = 1;
+        submit_info.pCommandBuffers = &transfer_cmd;
+
+        vkQueueSubmit(device.Get_graphics_queue(), 1, &submit_info, VK_NULL_HANDLE);
+        vkQueueWaitIdle(device.Get_graphics_queue());
+
+        // GPU has consumed the staging data — safe to free.
+        textures.back().Release_staging_buffers();
+
+        vkFreeCommandBuffers(device_handle, transfer_command_pool, 1, &transfer_cmd);
+
+        // Register this texture in the global bindless array using the
+        // cache's default sampler (linear filtering, repeat wrap — correct
+        // for the overwhelming majority of PBR textures). The returned
+        // bindless_index, NOT the textures.size()-1 registry index, is
+        // what callers should store and what shaders will use.
+        const uint32_t bindless_index = bindless_registry.Register_texture(
+            textures.back().Get_image_view(),
+            sampler_cache.Get_default_sampler()
+        );
+
+        std::cout << "[Renderer] Texture uploaded, bindless_index = " << bindless_index
+            << " (" << _image_data.width << "x" << _image_data.height
+            << ", " << textures.back().Get_mip_levels() << " mips)\n";
+        return bindless_index;
     }
 
     // =========================================================
@@ -256,7 +332,7 @@ namespace Renderer
         {
             present_fence_info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT;
             present_fence_info.swapchainCount = 1;
-            present_fence_info.pFences        = &frame.present_fence;
+            present_fence_info.pFences = &frame.present_fence;
             present_info.pNext = &present_fence_info;
 
             frame.present_fence_pending = true;
@@ -331,13 +407,22 @@ namespace Renderer
         scissor.extent = extent;
         vkCmdSetScissor(frame.command_buffer, 0, 1, &scissor);
 
-        // ── Bind descriptor set (VP matrices) ────────────────────
+        // ── Bind descriptor sets ─────────────────────────────────
+        // Set 0: per-frame view/projection UBO.
+        // Set 1: global bindless texture array — bound once here, shared
+        // by every draw item this frame via texture indices in the
+        // material data, not via per-draw descriptor binding.
+        VkDescriptorSet sets[] = {
+            descriptor_sets[current_frame],
+            bindless_registry.Get_set()
+        };
+
         vkCmdBindDescriptorSets(
             frame.command_buffer,
             VK_PIPELINE_BIND_POINT_GRAPHICS,
             pipeline.Get_layout_handle(),
-            0, 1,
-            &descriptor_sets[current_frame],
+            0, 2,
+            sets,
             0, nullptr
         );
 

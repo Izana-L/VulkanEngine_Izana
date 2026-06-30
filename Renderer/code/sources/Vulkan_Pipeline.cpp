@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <iostream>
 #include <cassert>
+#include <vector>
 
 namespace Renderer
 {
@@ -31,7 +32,7 @@ namespace Renderer
             "Pipeline_Config: fragment_shader_path must not be empty");
 
         Create_descriptor_set_layout();
-        Create_pipeline_layout();
+        Create_pipeline_layout(_config.bindless_set_layout);
 
         // ---------- Shader modules ----------
         VkShaderModule vertex_shader_module = Create_shader_module(_config.vertex_shader_path);
@@ -271,7 +272,7 @@ namespace Renderer
     }
 
     // ---------- Create_pipeline_layout ----------
-    void Vulkan_Pipeline::Create_pipeline_layout()
+    void Vulkan_Pipeline::Create_pipeline_layout(VkDescriptorSetLayout _bindless_set_layout)
     {
         // Push constant range for the per-draw model matrix.
         // The vertex shader declares:
@@ -283,10 +284,20 @@ namespace Renderer
         push_range.offset = 0;
         push_range.size = sizeof(glm::mat4);   // 64 bytes
 
+        // Set 0 is always the per-frame view/projection UBO. Set 1, when
+        // _bindless_set_layout is non-null, is the global bindless texture
+        // array (Bindless_Registry::Get_layout()) — the same layout is
+        // shared across every pipeline that samples bindless textures.
+        std::vector<VkDescriptorSetLayout> set_layouts;
+        set_layouts.push_back(descriptor_set_layout);
+
+        if (_bindless_set_layout != VK_NULL_HANDLE)
+            set_layouts.push_back(_bindless_set_layout);
+
         VkPipelineLayoutCreateInfo layout_info{};
         layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        layout_info.setLayoutCount = 1;
-        layout_info.pSetLayouts = &descriptor_set_layout;
+        layout_info.setLayoutCount = static_cast<uint32_t>(set_layouts.size());
+        layout_info.pSetLayouts = set_layouts.data();
         layout_info.pushConstantRangeCount = 1;
         layout_info.pPushConstantRanges = &push_range;
 

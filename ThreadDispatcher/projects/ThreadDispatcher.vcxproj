@@ -154,7 +154,6 @@
   <ItemGroup>
     <ClInclude Include="..\code\headers\Atomic_Counter.hpp" />
     <ClInclude Include="..\code\headers\Circular_Queue.hpp" />
-    <ClInclude Include="..\code\headers\Job_Graph.hpp" />
     <ClInclude Include="..\code\headers\Parallel_For.hpp" />
     <ClInclude Include="..\code\headers\Task.hpp" />
     <ClInclude Include="..\code\headers\Thread_Dispatcher.hpp" />

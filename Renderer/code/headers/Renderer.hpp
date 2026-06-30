@@ -13,7 +13,11 @@
 #include <Vulkan_Pipeline.hpp>
 #include <Frame_Data.hpp>
 #include <Mesh_GPU.hpp>
+#include <Texture_GPU.hpp>
+#include <Sampler_Cache.hpp>
+#include <Bindless_Registry.hpp>
 #include <RenderPacket.hpp>
+#include <ImageData.hpp>
 
 #include <array>
 #include <cstdint>
@@ -27,10 +31,11 @@ namespace Renderer
     // Renderer: the only Vulkan-facing class that EngineCore knows about.
     //
     // Owns the entire Vulkan stack (instance → device → swapchain → pipeline)
-    // and all per-frame resources. Exposes two operations to EngineCore:
+    // and all per-frame resources. Exposes operations to EngineCore:
     //
-    //   Upload_mesh()  — uploads geometry to the GPU once at load time.
-    //   Render()       — consumes a RenderPacket and produces one frame.
+    //   Upload_mesh()    — uploads geometry to the GPU once at load time.
+    //   Upload_texture() — uploads a texture (with mipmaps) once at load time.
+    //   Render()         — consumes a RenderPacket and produces one frame.
     //
     // Swapchain recreation on resize is handled internally — EngineCore
     // never sees it happen.
@@ -60,6 +65,24 @@ namespace Renderer
         // during loading, not during rendering.
         uint32_t Upload_mesh(const CoreTypes::MeshData& _mesh_data);
 
+        // Uploads a texture (with a full mip chain) to the GPU, registers
+        // it in the global bindless descriptor array, and returns its
+        // BINDLESS INDEX — the value shaders use to index into the
+        // sampler array (set 1, binding 0), e.g.:
+        //   texture(textures[nonuniformEXT(material.albedo_index)], uv)
+        //
+        // This is distinct from the internal Texture_GPU registry index
+        // (used only to keep the Texture_GPU object alive) — callers
+        // (ResourceManager, Material loading) should only ever store and
+        // use the bindless index returned here.
+        //
+        // _format: VK_FORMAT_R8G8B8A8_SRGB for color textures (albedo,
+        //   emissive), VK_FORMAT_R8G8B8A8_UNORM for data textures (normal,
+        //   metallic-roughness, AO). Caller decides based on texture role.
+        // Thread-safety: not thread-safe — call from the main thread
+        // during loading, not during rendering.
+        uint32_t Upload_texture(const CoreTypes::ImageData& _image_data, VkFormat _format);
+
         // =========================================================
         // Render
         // =========================================================
@@ -72,10 +95,7 @@ namespace Renderer
 
     private:
 
-        // =========================================================
         // Vulkan core — construction order matters for destruction
-        // =========================================================
-
         Vulkan_Instance        instance;
         Vulkan_Surface         surface;
         Vulkan_Device          device;
@@ -83,7 +103,17 @@ namespace Renderer
         Vulkan_Render_Pass     render_pass;
         Vulkan_Depth_Resources depth_resources;
         Vulkan_Framebuffer     framebuffers;
+
+        // Bindless registry must exist BEFORE the pipeline, since the
+        // pipeline layout references bindless_registry.Get_layout() as
+        // its set 1. Declared here (before pipeline) so construction
+        // order is correct — C++ builds members in declaration order.
+        Bindless_Registry      bindless_registry;
+
         Vulkan_Pipeline        pipeline;
+
+        // Shared sampler configurations, deduplicated.
+        Sampler_Cache sampler_cache;
 
         // =========================================================
         // Frame resources
@@ -102,16 +132,18 @@ namespace Renderer
         std::array<VkDescriptorSet, FRAMES_IN_FLIGHT>     descriptor_sets;
 
         // =========================================================
-        // Mesh registry
+        // Asset registries
         // =========================================================
 
         // gpu_id = index into this vector.
-        // Meshes are never removed during a session (no gpu_id recycling).
-        std::vector<Mesh_GPU> meshes;
+        // Meshes/textures are never removed during a session (no gpu_id
+        // recycling).
+        std::vector<Mesh_GPU>    meshes;
+        std::vector<Texture_GPU> textures;
 
-        // Dedicated command pool for transfer operations (Upload_mesh).
-        // Separate from the per-frame render command pools so uploads
-        // don't interfere with frames in flight.
+        // Dedicated command pool for transfer operations (Upload_mesh,
+        // Upload_texture). Separate from the per-frame render command
+        // pools so uploads don't interfere with frames in flight.
         VkCommandPool transfer_command_pool;
 
         // =========================================================
