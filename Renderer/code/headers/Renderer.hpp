@@ -145,14 +145,22 @@ namespace Renderer_System
         // Upload_texture). Separate from the per-frame render command
         // pools so uploads don't interfere with frames in flight.
         VkCommandPool transfer_command_pool;
-
+        // Fence for the one-off transfer submissions above. Reused across
+        // uploads (reset before each submit) rather than created and
+        // destroyed per upload.
+        VkFence transfer_fence;
         // =========================================================
         // Internal helpers
         // =========================================================
 
         void Init_descriptor_pool();
         void Init_descriptor_sets();
-
+        // Ends recording of _transfer_cmd, submits it signaling
+        // transfer_fence, and blocks the CPU until that fence is signaled.
+        // The CPU waits, so the primitive is a fence — not vkQueueWaitIdle,
+        // which would also stall every frame already in flight on the
+        // graphics queue.
+        void Submit_and_wait_transfer(VkCommandBuffer _transfer_cmd);
         // Records all render commands for one frame into the command
         // buffer of the current frame slot.
         void Record_command_buffer(const CoreTypes::RenderPacket& _packet,

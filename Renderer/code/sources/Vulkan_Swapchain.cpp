@@ -11,25 +11,20 @@ namespace Renderer_System
 {
 
     // ---------- Constructor ----------
-    Vulkan_Swapchain::Vulkan_Swapchain(
-        const Vulkan_Device& _device,
-        const Vulkan_Surface& _surface,
-        const Platform::Window& _window,
-        uint32_t _preferred_image_count,
-        bool _prefer_mailbox)
-
-        : device_handle(_device.Get_logical_device_handle()),
-        physical_device_handle(_device.Get_physical_device_handle()),
-        surface_handle(_surface.Get_handle()),
-        present_queue_handle(_device.Get_present_queue()),
-        window(&_window),
-        preferred_image_count(_preferred_image_count),
-        prefer_mailbox(_prefer_mailbox),
-        queue_family_indices(_device.Get_queue_family_indices()),
-        swapchain(VK_NULL_HANDLE),
-        image_format(VK_FORMAT_UNDEFINED),
-        extent{ 0, 0 },
-        selected_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+    Vulkan_Swapchain::Vulkan_Swapchain( const Vulkan_Device& _device,const Vulkan_Surface& _surface,const 
+                                        Platform::Window& _window,uint32_t _preferred_image_count,bool _prefer_mailbox)
+                                        : device_handle(_device.Get_logical_device_handle()),
+                                        physical_device_handle(_device.Get_physical_device_handle()),
+                                        surface_handle(_surface.Get_handle()),
+                                        present_queue_handle(_device.Get_present_queue()),
+                                        window(&_window),
+                                        preferred_image_count(_preferred_image_count),
+                                        prefer_mailbox(_prefer_mailbox),
+                                        queue_family_indices(_device.Get_queue_family_indices()),
+                                        swapchain(VK_NULL_HANDLE),
+                                        image_format(VK_FORMAT_UNDEFINED),
+                                        extent{ 0, 0 },
+                                        selected_present_mode(VK_PRESENT_MODE_FIFO_KHR)
     {
         assert(device_handle != VK_NULL_HANDLE && "Vulkan_Device must be fully constructed before creating a swapchain");
         assert(surface_handle != VK_NULL_HANDLE && "Vulkan_Surface must be fully constructed before creating a swapchain");
@@ -85,73 +80,7 @@ namespace Renderer_System
             << extent.width << "x" << extent.height << "\n";
     }
 
-    // ---------- Acquire_next_image ----------
-    bool Vulkan_Swapchain::Acquire_next_image(
-        VkSemaphore _image_available_semaphore,
-        uint32_t& _out_image_index,
-        uint64_t _timeout)
-    {
-        assert(swapchain != VK_NULL_HANDLE && "Acquire_next_image() called on a moved-from or destroyed Vulkan_Swapchain");
-        assert(_image_available_semaphore != VK_NULL_HANDLE && "Acquire_next_image() called with a null semaphore");
-
-        VkResult result = vkAcquireNextImageKHR(
-            device_handle,
-            swapchain,
-            _timeout,
-            _image_available_semaphore,
-            VK_NULL_HANDLE,
-            &_out_image_index
-        );
-
-        if (result == VK_ERROR_OUT_OF_DATE_KHR) return false;
-        if (result == VK_SUBOPTIMAL_KHR)         return false;
-
-        if (result != VK_SUCCESS) {
-            throw std::runtime_error(
-                "Failed to acquire swapchain image: " + Vulkan_Utils::Vk_result_to_string(result)
-            );
-        }
-
-        return true;
-    }
-
-    // ---------- Present ----------
-    bool Vulkan_Swapchain::Present(
-        VkSemaphore _render_finished_semaphore,
-        uint32_t    _image_index,
-        VkFence     _present_fence)
-    {
-        assert(swapchain != VK_NULL_HANDLE && "Present() called on a moved-from or destroyed Vulkan_Swapchain");
-        assert(_render_finished_semaphore != VK_NULL_HANDLE && "Present() called with a null semaphore");
-
-        VkPresentInfoKHR present_info{};
-        present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-        present_info.waitSemaphoreCount = 1;
-        present_info.pWaitSemaphores = &_render_finished_semaphore;
-        present_info.swapchainCount = 1;
-        present_info.pSwapchains = &swapchain;
-        present_info.pImageIndices = &_image_index;
-
-        VkSwapchainPresentFenceInfoEXT fence_info{};
-        if (_present_fence != VK_NULL_HANDLE) {
-            fence_info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT;
-            fence_info.swapchainCount = 1;
-            fence_info.pFences = &_present_fence;
-            present_info.pNext = &fence_info;
-        }
-
-        VkResult result = vkQueuePresentKHR(present_queue_handle, &present_info);
-
-        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) return false;
-
-        if (result != VK_SUCCESS) {
-            throw std::runtime_error(
-                "Failed to present swapchain image: " + Vulkan_Utils::Vk_result_to_string(result)
-            );
-        }
-
-        return true;
-    }
+   
 
     // ---------- Move constructor ----------
     Vulkan_Swapchain::Vulkan_Swapchain(Vulkan_Swapchain&& _other) noexcept

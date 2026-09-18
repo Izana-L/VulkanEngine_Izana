@@ -106,24 +106,7 @@ namespace Renderer_System
         // in a settings menu based on this).
         VkPresentModeKHR Get_present_mode() const;
 
-        // Acquires the index of the next available swapchain image to
-        // render into. Blocks until an image is available (or until
-        // _timeout expires). _image_available_semaphore will be signaled
-        // by the GPU once the image is actually ready to be written to -
-        // pass that same semaphore to your render command submission so
-        // the GPU waits before drawing.
-        //
-        // Returns true if an image was successfully acquired (the index is
-        // written to _out_image_index). Returns false if the swapchain is
-        // out of date (e.g. after a resize) and must be recreated via
-        // Recreate() before trying again - in that case _out_image_index
-        // is left unmodified and no rendering should be attempted this frame.
-        bool Acquire_next_image(VkSemaphore _image_available_semaphore,uint32_t& _out_image_index,uint64_t _timeout = UINT64_MAX);
-
-        // _present_fence: optional fence (VK_NULL_HANDLE if not using
-        // VK_KHR_swapchain_maintenance1) that will be signaled when the
-        // presentation engine has finished with this image's semaphore.
-        bool Present(VkSemaphore _render_finished_semaphore,uint32_t _image_index,VkFence _present_fence = VK_NULL_HANDLE);
+        
 
     private:
         // Destroys the swapchain and its image views, but NOT the device/
@@ -135,13 +118,9 @@ namespace Renderer_System
         // Builds the swapchain itself - shared by the constructor and
         // Recreate(), since both need to do the same work, just at
         // different points in the object's lifetime.
-        void Create_swapchain(
-            const Vulkan_Device& _device,
-            const Vulkan_Surface& _surface,
-            const Platform::Window& _window,
-            uint32_t _preferred_image_count,
-            bool _prefer_mailbox
-        );
+        void Create_swapchain(const Vulkan_Device& _device,const Vulkan_Surface& _surface,const Platform::Window& _window,
+                              uint32_t _preferred_image_count, bool _prefer_mailbox);
+            
 
         // Creates one VkImageView per swapchain image - image views are
         // required to actually use the raw VkImage as a render target.

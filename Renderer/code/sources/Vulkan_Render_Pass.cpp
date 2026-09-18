@@ -103,16 +103,23 @@ namespace Renderer_System {
         dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
         dependency.dstSubpass = 0; // our only subpass, at index 0
 
-        // Wait at this stage (color attachment output + early depth test)
-        // before allowing the dependency to be satisfied
-        dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-        dependency.srcAccessMask = 0;
+        // Source scope: everything submitted before this render pass —
+        // including the PREVIOUS FRAME. The depth image is shared by every
+        // framebuffer, so the previous frame's depth writes are a genuine
+        // write-after-write hazard against this frame's depth clear.
+        //
+        // LATE_FRAGMENT_TESTS is listed explicitly even though
+        // COLOR_ATTACHMENT_OUTPUT already implies it (a stage mask covers
+        // all logically earlier stages) — being explicit documents which
+        // hazard this dependency actually closes.
+        dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        // Those writes must be made AVAILABLE, not merely finished: an empty
+        // srcAccessMask gives the execution dependency but performs no
+        // availability operation for the write-after-write.
+        dependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
-        dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
         // ---------- Render pass creation ----------
         std::array<VkAttachmentDescription, 2> attachments = { color_attachment, depth_attachment };

@@ -47,10 +47,22 @@ namespace Renderer_System {
         framebuffers.resize(color_image_views.size());
 
         // Create one framebuffer per swapchain color image view. Each
-        // framebuffer shares the SAME depth image view - this is valid
-        // and expected, since only one frame is ever actively being
-        // rendered to the depth buffer at a time (we don't need a
-        // separate depth buffer per swapchain image).
+        // framebuffer shares the SAME depth image view.
+        //
+        // This is safe, but NOT because only one frame touches the depth
+        // buffer at a time — with FRAMES_IN_FLIGHT = 2, two submissions can
+        // be executing on the GPU simultaneously. What makes it safe is the
+        // subpass dependency in Vulkan_Render_Pass: srcSubpass is
+        // VK_SUBPASS_EXTERNAL (which covers everything submitted earlier on
+        // the queue, the previous frame included) and its srcStageMask
+        // includes COLOR_ATTACHMENT_OUTPUT, which implicitly pulls in every
+        // logically earlier stage — LATE_FRAGMENT_TESTS among them. The
+        // previous frame's depth writes are therefore fully ordered before
+        // this frame's depth clear.
+        //
+        // Consequence: the two frames in flight overlap CPU/GPU work, not
+        // GPU/GPU work. If that dependency is ever relaxed, or a second
+        // render pass is added, this shared depth image must be revisited.
         for (size_t i = 0; i < color_image_views.size(); ++i) {
             std::array<VkImageView, 2> attachments = {
                 color_image_views[i],

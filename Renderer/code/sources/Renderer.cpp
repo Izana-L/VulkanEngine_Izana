@@ -18,28 +18,26 @@ namespace Renderer_System
     // =========================================================
 
     Renderer::Renderer(const Platform::Window& _window, bool _enable_validation)
-
-        // Construction order mirrors member declaration order.
-        // Each object depends on the ones above it.
-        : instance(_enable_validation, "Game", "Engine"),
-        surface(instance, _window),
-        device(instance, surface),
-        swapchain(device, surface, _window, 3, false),
-        render_pass(device, swapchain.Get_image_format(), device.Find_supported_depth_format()),
-        depth_resources(device, device.Find_supported_depth_format(), swapchain.Get_extent()),
-        framebuffers(device, render_pass, swapchain, depth_resources),
-        bindless_registry(device, 1024),
-        pipeline(device, render_pass, [this]
-            {
-                Pipeline_Config config;
-                config.vertex_shader_path = "..\\..\\Renderer\\shaders\\compiled\\mesh.vert.spv";
-                config.fragment_shader_path = "..\\..\\Renderer\\shaders\\compiled\\mesh.frag.spv";
-                config.bindless_set_layout = bindless_registry.Get_layout();
-                return config;
-            }()),
-        sampler_cache(device),
-        descriptor_pool(VK_NULL_HANDLE),
-        transfer_command_pool(VK_NULL_HANDLE)
+                        : instance(_enable_validation, "Game", "Engine"),
+                        surface(instance, _window),
+                        device(instance, surface),
+                        swapchain(device, surface, _window, 3, false),
+                        render_pass(device, swapchain.Get_image_format(), device.Find_supported_depth_format()),
+                        depth_resources(device, device.Find_supported_depth_format(), swapchain.Get_extent()),
+                        framebuffers(device, render_pass, swapchain, depth_resources),
+                        bindless_registry(device, 1024),
+                        pipeline(device, render_pass, [this]
+                            {
+                                Pipeline_Config config;
+                                config.vertex_shader_path = "..\\..\\Renderer\\shaders\\compiled\\mesh.vert.spv";
+                                config.fragment_shader_path = "..\\..\\Renderer\\shaders\\compiled\\mesh.frag.spv";
+                                config.bindless_set_layout = bindless_registry.Get_layout();
+                                return config;
+                            }()),
+                        sampler_cache(device),
+                        descriptor_pool(VK_NULL_HANDLE),
+                        transfer_command_pool(VK_NULL_HANDLE),
+                        transfer_fence(VK_NULL_HANDLE)
     {
         // ── Frame resources ────────────────────────────────────────
         for (auto& frame : frames)
@@ -59,13 +57,22 @@ namespace Renderer_System
         VkResult result = vkCreateCommandPool(
             device.Get_logical_device_handle(), &pool_info, nullptr, &transfer_command_pool);
 
-        if (result != VK_SUCCESS) {
-            throw std::runtime_error(
-                "Renderer: failed to create transfer command pool: " +
-                Vulkan_Utils::Vk_result_to_string(result)
-            );
+        if (result != VK_SUCCESS) 
+        {
+            throw std::runtime_error( "Renderer: failed to create transfer command pool: " + Vulkan_Utils::Vk_result_to_string(result) );
         }
+        // ── Transfer fence ─────────────────────────────────────────
+        // NOT pre-signaled: Submit_and_wait_transfer resets it before every
+        // submit, so its state at creation time is irrelevant.
+        VkFenceCreateInfo transfer_fence_info{};
+        transfer_fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 
+        result = vkCreateFence(device.Get_logical_device_handle(),&transfer_fence_info, nullptr, &transfer_fence);
+
+        if (result != VK_SUCCESS) 
+        {
+            throw std::runtime_error("Renderer: failed to create transfer fence: " + Vulkan_Utils::Vk_result_to_string(result));
+        }
         std::cout << "[Renderer] Initialized.\n";
     }
 
@@ -82,6 +89,10 @@ namespace Renderer_System
         // referenced by in-flight command buffers otherwise.
         meshes.clear();
         textures.clear();
+
+        if (transfer_fence != VK_NULL_HANDLE)
+            vkDestroyFence(device.Get_logical_device_handle(),
+                transfer_fence, nullptr);
 
         if (transfer_command_pool != VK_NULL_HANDLE)
             vkDestroyCommandPool(device.Get_logical_device_handle(),
@@ -138,16 +149,7 @@ namespace Renderer_System
         // call Release_staging_buffers() below.
         meshes.emplace_back(device, transfer_cmd, _mesh_data);
 
-        vkEndCommandBuffer(transfer_cmd);
-
-        // Submit and wait — acceptable for load-time uploads.
-        VkSubmitInfo submit_info{};
-        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submit_info.commandBufferCount = 1;
-        submit_info.pCommandBuffers = &transfer_cmd;
-
-        vkQueueSubmit(device.Get_graphics_queue(), 1, &submit_info, VK_NULL_HANDLE);
-        vkQueueWaitIdle(device.Get_graphics_queue());
+        Submit_and_wait_transfer(transfer_cmd);
 
         // GPU has consumed the staging data — safe to free.
         meshes.back().Release_staging_buffers();
@@ -198,15 +200,7 @@ namespace Renderer_System
         // call Release_staging_buffers() below.
         textures.emplace_back(device, transfer_cmd, _image_data, _format);
 
-        vkEndCommandBuffer(transfer_cmd);
-
-        VkSubmitInfo submit_info{};
-        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submit_info.commandBufferCount = 1;
-        submit_info.pCommandBuffers = &transfer_cmd;
-
-        vkQueueSubmit(device.Get_graphics_queue(), 1, &submit_info, VK_NULL_HANDLE);
-        vkQueueWaitIdle(device.Get_graphics_queue());
+        Submit_and_wait_transfer(transfer_cmd);
 
         // GPU has consumed the staging data — safe to free.
         textures.back().Release_staging_buffers();
@@ -486,6 +480,43 @@ namespace Renderer_System
         framebuffers.Recreate(render_pass, swapchain, depth_resources);
 
         std::cout << "[Renderer] Swapchain recreated.\n";
+    }
+    // =========================================================
+    // Submit_and_wait_transfer
+    // =========================================================
+    // The CPU must not free the staging buffers until the GPU has consumed
+    // them, so this blocks — and a CPU wait means a fence. vkQueueWaitIdle
+    // would also work, but it waits for the WHOLE graphics queue, stalling
+    // any frame already in flight. The fence waits only for this submit.
+
+    void Renderer::Submit_and_wait_transfer(VkCommandBuffer _transfer_cmd)
+    {
+        assert(_transfer_cmd != VK_NULL_HANDLE && "Submit_and_wait_transfer: null command buffer");
+          
+        VkDevice dev = device.Get_logical_device_handle();
+
+        VkResult result = vkEndCommandBuffer(_transfer_cmd);
+        if (result != VK_SUCCESS) 
+        {
+            throw std::runtime_error( "Submit_and_wait_transfer: failed to end command buffer: " + Vulkan_Utils::Vk_result_to_string(result));
+        }
+
+        // The fence is shared across uploads — unsignal it before reuse.
+        vkResetFences(dev, 1, &transfer_fence);
+
+        VkSubmitInfo submit_info{};
+        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit_info.commandBufferCount = 1;
+        submit_info.pCommandBuffers = &_transfer_cmd;
+
+        result = vkQueueSubmit(device.Get_graphics_queue(), 1, &submit_info, transfer_fence);
+
+        if (result != VK_SUCCESS) 
+        {
+            throw std::runtime_error( "Submit_and_wait_transfer: failed to submit: " + Vulkan_Utils::Vk_result_to_string(result) );   
+        }
+
+        vkWaitForFences(dev, 1, &transfer_fence, VK_TRUE, UINT64_MAX);
     }
 
     // =========================================================
