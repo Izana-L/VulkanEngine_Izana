@@ -27,7 +27,37 @@ namespace Platform { class Window; }
 
 namespace Renderer_System
 {
+    // One texture in an upload batch. The format travels per-texture
+    // because only the caller knows a texture's role: *_SRGB for color
+    // data (albedo, emissive), *_UNORM for data maps (normal,
+    // metallic-roughness, AO). ImageData itself doesn't know its own
+    // color space.
+    struct Texture_Upload
+    {
+        const CoreTypes::ImageData* data = nullptr;
+        VkFormat                    format = VK_FORMAT_R8G8B8A8_SRGB;
+    };
 
+    // A set of assets to upload together in one command buffer and one
+    // submit. Holds NON-OWNING pointers: the caller (ResourceManager) owns
+    // the data and only has to keep it alive across the Upload_batch call.
+    struct Upload_Batch
+    {
+        std::vector<const CoreTypes::MeshData*> meshes;
+        std::vector<Texture_Upload>             textures;
+    };
+
+    // Result of Upload_batch. Each vector is parallel to its input list.
+    struct Upload_Batch_Result
+    {
+        // Index into the Renderer's internal mesh registry — the value
+        // ResourceManager stores through Register_gpu_id().
+        std::vector<uint32_t> mesh_gpu_ids;
+
+        // Index into the global bindless sampler array (set 1, binding 0)
+        // — what shaders use, NOT the internal texture registry index.
+        std::vector<uint32_t> texture_bindless_indices;
+    };
     // Renderer: the only Vulkan-facing class that EngineCore knows about.
     //
     // Owns the entire Vulkan stack (instance → device → swapchain → pipeline)
@@ -43,56 +73,6 @@ namespace Renderer_System
     // Not copyable or movable: owns the entire Vulkan lifetime.
     class Renderer
     {
-    public:
-
-        Renderer(const Platform::Window& _window, bool _enable_validation);
-        ~Renderer();
-
-        Renderer(const Renderer&) = delete;
-        Renderer& operator=(const Renderer&) = delete;
-        Renderer(Renderer&&) = delete;
-        Renderer& operator=(Renderer&&) = delete;
-
-        // =========================================================
-        // Asset upload
-        // =========================================================
-
-        // Uploads a mesh to the GPU and returns its gpu_id.
-        // The gpu_id is an index into the internal mesh registry and
-        // must be stored by the ResourceManager as the resolution of
-        // the corresponding Asset_Handle.
-        // Thread-safety: not thread-safe — call from the main thread
-        // during loading, not during rendering.
-        uint32_t Upload_mesh(const CoreTypes::MeshData& _mesh_data);
-
-        // Uploads a texture (with a full mip chain) to the GPU, registers
-        // it in the global bindless descriptor array, and returns its
-        // BINDLESS INDEX — the value shaders use to index into the
-        // sampler array (set 1, binding 0), e.g.:
-        //   texture(textures[nonuniformEXT(material.albedo_index)], uv)
-        //
-        // This is distinct from the internal Texture_GPU registry index
-        // (used only to keep the Texture_GPU object alive) — callers
-        // (ResourceManager, Material loading) should only ever store and
-        // use the bindless index returned here.
-        //
-        // _format: VK_FORMAT_R8G8B8A8_SRGB for color textures (albedo,
-        //   emissive), VK_FORMAT_R8G8B8A8_UNORM for data textures (normal,
-        //   metallic-roughness, AO). Caller decides based on texture role.
-        // Thread-safety: not thread-safe — call from the main thread
-        // during loading, not during rendering.
-        uint32_t Upload_texture(const CoreTypes::ImageData& _image_data, VkFormat _format);
-
-        // =========================================================
-        // Render
-        // =========================================================
-
-        // Draws one frame from the given RenderPacket.
-        // Handles frame-in-flight synchronization, command recording,
-        // submission, and presentation internally.
-        // On swapchain out-of-date (resize), recreates it and retries.
-        void Render(const CoreTypes::RenderPacket& _packet);
-
     private:
 
         // Vulkan core — construction order matters for destruction
@@ -112,6 +92,9 @@ namespace Renderer_System
 
         Vulkan_Pipeline        pipeline;
 
+        // A single value for now — there's one pipeline and one opaque batch.
+        // Becomes per-batch once draws are sorted by pipeline.
+        Raster_State           raster_state;
         // Shared sampler configurations, deduplicated.
         Sampler_Cache sampler_cache;
 
@@ -122,7 +105,7 @@ namespace Renderer_System
         static constexpr uint32_t FRAMES_IN_FLIGHT = 2;
 
         std::array<Frame_Data, FRAMES_IN_FLIGHT> frames;
-        uint32_t                                 current_frame = 0;
+        uint32_t current_frame = 0;
 
         // =========================================================
         // Descriptors
@@ -170,6 +153,77 @@ namespace Renderer_System
         // after a resize or OUT_OF_DATE error. Pipeline is unaffected
         // (viewport/scissor are dynamic).
         void Recreate_swapchain();
+    public:
+
+        Renderer(const Platform::Window& _window, bool _enable_validation);
+        ~Renderer();
+
+        Renderer(const Renderer&) = delete;
+        Renderer& operator=(const Renderer&) = delete;
+        Renderer(Renderer&&) = delete;
+        Renderer& operator=(Renderer&&) = delete;
+
+        // =========================================================
+        // Asset upload
+        // =========================================================
+
+        // Uploads a mesh to the GPU and returns its gpu_id.
+        // The gpu_id is an index into the internal mesh registry and
+        // must be stored by the ResourceManager as the resolution of
+        // the corresponding Asset_Handle.
+        // Thread-safety: not thread-safe — call from the main thread
+        // during loading, not during rendering.
+        uint32_t Upload_mesh(const CoreTypes::MeshData& _mesh_data);
+
+        // Uploads a texture (with a full mip chain) to the GPU, registers
+        // it in the global bindless descriptor array, and returns its
+        // BINDLESS INDEX — the value shaders use to index into the
+        // sampler array (set 1, binding 0), e.g.:
+        //   texture(textures[nonuniformEXT(material.albedo_index)], uv)
+        //
+        // This is distinct from the internal Texture_GPU registry index
+        // (used only to keep the Texture_GPU object alive) — callers
+        // (ResourceManager, Material loading) should only ever store and
+        // use the bindless index returned here.
+        //
+        // _format: VK_FORMAT_R8G8B8A8_SRGB for color textures (albedo,
+        //   emissive), VK_FORMAT_R8G8B8A8_UNORM for data textures (normal,
+        //   metallic-roughness, AO). Caller decides based on texture role.
+        // Thread-safety: not thread-safe — call from the main thread
+        // during loading, not during rendering.
+        uint32_t Upload_texture(const CoreTypes::ImageData& _image_data, VkFormat _format);
+
+        // Uploads every mesh and texture in _batch using ONE command buffer
+        // and ONE queue submission, instead of one of each per asset.
+        // Mesh_GPU and Texture_GPU only record into the command buffer they
+        // are handed — they never submit — which is what makes this possible.
+        //
+        // Ids come back in the same order as the input lists:
+        //   result.mesh_gpu_ids[i]             <- _batch.meshes[i]
+        //   result.texture_bindless_indices[i] <- _batch.textures[i]
+        //
+        // Upload_mesh and Upload_texture above are thin wrappers over this
+        // function with a single-element batch: there is one upload path.
+        //
+        // Cost to be aware of: every staging buffer in the batch stays alive
+        // until the submit completes, so peak host-visible memory is the SUM
+        // of the batch, not the largest item. Split very large scenes into
+        // several batches if that ever matters.
+        //
+        // Thread-safety: not thread-safe — call from the main thread during
+        // loading, not during rendering.
+        Upload_Batch_Result Upload_batch(const Upload_Batch& _batch);
+        // =========================================================
+        // Render
+        // =========================================================
+
+        // Draws one frame from the given RenderPacket.
+        // Handles frame-in-flight synchronization, command recording,
+        // submission, and presentation internally.
+        // On swapchain out-of-date (resize), recreates it and retries.
+        void Render(const CoreTypes::RenderPacket& _packet);
+
+   
     };
 
 } // namespace Renderer

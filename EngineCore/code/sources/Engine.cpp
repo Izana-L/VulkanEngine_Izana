@@ -102,8 +102,8 @@ namespace EngineCore
             resources.Create_primitive(sphere_desc);
 
         // Upload to GPU and register the gpu_id.
-        const uint32_t sphere_gpu_id =
-            renderer.Upload_mesh(resources.Get_mesh_data(sphere_handle));
+        const uint32_t sphere_gpu_id = renderer.Upload_mesh(resources.Get_mesh_data(sphere_handle));
+           
         resources.Register_gpu_id(sphere_handle, sphere_gpu_id);
 
         // Create the sphere entity.

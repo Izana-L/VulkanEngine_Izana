@@ -16,6 +16,15 @@ namespace Renderer_System
     // stable as new fields are added (e.g. blend mode, cull mode, push
     // constant ranges, extra descriptor set layouts for PBR textures).
     // Fields that don't change between pipelines use sensible defaults.
+    struct Raster_State
+    {
+        VkCullModeFlags cull_mode = VK_CULL_MODE_BACK_BIT;
+        VkFrontFace     front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+
+        bool            depth_test_enable = true;
+        bool            depth_write_enable = true;
+        VkCompareOp     depth_compare_op = VK_COMPARE_OP_LESS;
+    };
     struct Pipeline_Config
     {
         // ── Shaders (required) ────────────────────────────────────────
@@ -31,14 +40,9 @@ namespace Renderer_System
         VkDescriptorSetLayout bindless_set_layout = VK_NULL_HANDLE;
 
         // ── Rasterization ─────────────────────────────────────────────
+        // polygon_mode stays baked in: making it dynamic needs
+        // VK_EXT_extended_dynamic_state3, which is NOT core in 1.3.
         VkPolygonMode   polygon_mode = VK_POLYGON_MODE_FILL;
-        VkCullModeFlags cull_mode = VK_CULL_MODE_BACK_BIT;
-        VkFrontFace     front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-
-        // ── Depth ─────────────────────────────────────────────────────
-        bool          depth_test_enable = true;
-        bool          depth_write_enable = true;
-        VkCompareOp   depth_compare_op = VK_COMPARE_OP_LESS;
 
         // ── Blending ──────────────────────────────────────────────────
         // false = fully opaque (standard for solid geometry).

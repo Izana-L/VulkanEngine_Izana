@@ -4,7 +4,7 @@
 #include <Filesystem.hpp>
 
 #include <glm/glm.hpp>
-
+#include <iterator>
 #include <stdexcept>
 #include <iostream>
 #include <cassert>
@@ -72,15 +72,25 @@ namespace Renderer_System
         input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
         input_assembly.primitiveRestartEnable = VK_FALSE;
 
-        // ---------- Dynamic state (viewport + scissor) ----------
-        VkDynamicState dynamic_states[] = {
+        // ---------- Dynamic state ----------
+        // Viewport/scissor were already dynamic. Cull, front face and the
+        // depth test/write/compare trio join them: all core in Vulkan 1.3,
+        // so they no longer force a separate pipeline per combination.
+        VkDynamicState dynamic_states[] = 
+        {
             VK_DYNAMIC_STATE_VIEWPORT,
-            VK_DYNAMIC_STATE_SCISSOR
+            VK_DYNAMIC_STATE_SCISSOR,
+            VK_DYNAMIC_STATE_CULL_MODE,
+            VK_DYNAMIC_STATE_FRONT_FACE,
+            VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE,
+            VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE,
+            VK_DYNAMIC_STATE_DEPTH_COMPARE_OP
         };
 
         VkPipelineDynamicStateCreateInfo dynamic_state_info{};
         dynamic_state_info.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-        dynamic_state_info.dynamicStateCount = 2;
+        dynamic_state_info.dynamicStateCount = static_cast<uint32_t>(std::size(dynamic_states));
+            
         dynamic_state_info.pDynamicStates = dynamic_states;
 
         VkPipelineViewportStateCreateInfo viewport_state{};
@@ -95,8 +105,8 @@ namespace Renderer_System
         rasterizer.rasterizerDiscardEnable = VK_FALSE;
         rasterizer.polygonMode = _config.polygon_mode;
         rasterizer.lineWidth = 1.0f;
-        rasterizer.cullMode = _config.cull_mode;
-        rasterizer.frontFace = _config.front_face;
+        rasterizer.cullMode = VK_CULL_MODE_NONE;
+        rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
         rasterizer.depthBiasEnable = VK_FALSE;
 
         // ---------- Multisampling ----------
@@ -108,17 +118,17 @@ namespace Renderer_System
         // ---------- Depth/stencil — driven by Pipeline_Config ----------
         VkPipelineDepthStencilStateCreateInfo depth_stencil{};
         depth_stencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-        depth_stencil.depthTestEnable = _config.depth_test_enable ? VK_TRUE : VK_FALSE;
-        depth_stencil.depthWriteEnable = _config.depth_write_enable ? VK_TRUE : VK_FALSE;
-        depth_stencil.depthCompareOp = _config.depth_compare_op;
+        depth_stencil.depthTestEnable = VK_FALSE;
+        depth_stencil.depthWriteEnable = VK_FALSE;
+        depth_stencil.depthCompareOp = VK_COMPARE_OP_NEVER;
         depth_stencil.depthBoundsTestEnable = VK_FALSE;
         depth_stencil.stencilTestEnable = VK_FALSE;
 
         // ---------- Color blending — driven by Pipeline_Config ----------
         VkPipelineColorBlendAttachmentState color_blend_attachment{};
-        color_blend_attachment.colorWriteMask =
-            VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        color_blend_attachment.colorWriteMask =VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                               VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            
         color_blend_attachment.blendEnable = _config.blend_enable ? VK_TRUE : VK_FALSE;
         color_blend_attachment.srcColorBlendFactor = _config.src_color_blend_factor;
         color_blend_attachment.dstColorBlendFactor = _config.dst_color_blend_factor;

@@ -94,13 +94,13 @@ namespace Renderer_System {
 
         // ── Feature structs ───────────────────────────────────────
         VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT swapchain_maintenance1_features{};
-        swapchain_maintenance1_features.sType =
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT;
+        swapchain_maintenance1_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT;
+            
         swapchain_maintenance1_features.swapchainMaintenance1 = VK_TRUE;
 
         VkPhysicalDeviceDescriptorIndexingFeatures descriptor_indexing_features{};
-        descriptor_indexing_features.sType =
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+        descriptor_indexing_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+            
 
         if (bindless_supported)
         {
@@ -380,6 +380,15 @@ namespace Renderer_System {
         assert(_device != VK_NULL_HANDLE);
         assert(_surface != VK_NULL_HANDLE);
 
+        // Extended dynamic state (vkCmdSetCullMode, vkCmdSetDepthTestEnable, …)
+        // is core AND required in Vulkan 1.3 — no feature bit, no extension.
+        // Vulkan_Instance::Determine_api_version caps the *instance* version;
+        // this is the *device* version, which is what actually gates those
+        // entry points.
+        VkPhysicalDeviceProperties device_properties{};
+        vkGetPhysicalDeviceProperties(_device, &device_properties);
+        bool api_1_3_supported = device_properties.apiVersion >= VK_API_VERSION_1_3;
+
         Queue_Family_Indices indices = Find_queue_families(_device, _surface);
         bool extensions_supported = Check_device_extension_support(_device);
 
@@ -396,7 +405,8 @@ namespace Renderer_System {
             swapchain_adequate = (format_count > 0) && (present_mode_count > 0);
         }
 
-        return indices.Is_complete() && extensions_supported && swapchain_adequate;
+        return api_1_3_supported && indices.Is_complete() && extensions_supported && swapchain_adequate;
+      
     }
 
     // ---------- Check_device_extension_support ----------

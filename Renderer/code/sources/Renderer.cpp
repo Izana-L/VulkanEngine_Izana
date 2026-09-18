@@ -1,5 +1,4 @@
 #include <Renderer.hpp>
-#include <Vulkan_Buffer_Utils.hpp>
 #include <Vulkan_Utils.hpp>
 
 #include <glm/glm.hpp>
@@ -111,18 +110,35 @@ namespace Renderer_System
         std::cout << "[Renderer] Destroyed.\n";
     }
 
-    // =========================================================
-    // Upload_mesh
-    // =========================================================
-
-    uint32_t Renderer::Upload_mesh(const CoreTypes::MeshData& _mesh_data)
+    Upload_Batch_Result Renderer::Upload_batch(const Upload_Batch& _batch)
     {
-        assert(!_mesh_data.vertices.empty() && "Upload_mesh: MeshData has no vertices");
-        assert(!_mesh_data.indices.empty() && "Upload_mesh: MeshData has no indices");
+        Upload_Batch_Result result;
+
+        const size_t mesh_count = _batch.meshes.size();
+        const size_t texture_count = _batch.textures.size();
+
+        // Nothing to do — don't allocate a command buffer for an empty batch.
+        if (mesh_count == 0 && texture_count == 0)
+            return result;
 
         VkDevice device_handle = device.Get_logical_device_handle();
 
-        // Allocate a one-off transfer command buffer.
+        // Reserve before recording. Otherwise emplace_back can reallocate
+        // mid-batch and move every Mesh_GPU / Texture_GPU already recorded.
+        // Those moves are safe (both null out the source), but reserving
+        // avoids the churn and keeps the registries stable while we build.
+        meshes.reserve(meshes.size() + mesh_count);
+        textures.reserve(textures.size() + texture_count);
+
+        result.mesh_gpu_ids.reserve(mesh_count);
+        result.texture_bindless_indices.reserve(texture_count);
+
+        // Where this batch starts, so the post-submit pass below only
+        // touches what this call added.
+        const size_t first_mesh = meshes.size();
+        const size_t first_texture = textures.size();
+
+        // ── One command buffer for the whole batch ────────────────
         VkCommandBufferAllocateInfo alloc_info{};
         alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         alloc_info.commandPool = transfer_command_pool;
@@ -130,99 +146,126 @@ namespace Renderer_System
         alloc_info.commandBufferCount = 1;
 
         VkCommandBuffer transfer_cmd = VK_NULL_HANDLE;
-        VkResult result = vkAllocateCommandBuffers(device_handle, &alloc_info, &transfer_cmd);
-        if (result != VK_SUCCESS) {
+
+        // Named result_code, not result — `result` is the return value.
+        VkResult result_code = vkAllocateCommandBuffers(device_handle, &alloc_info, &transfer_cmd);
+            
+
+        if (result_code != VK_SUCCESS) {
             throw std::runtime_error(
-                "Upload_mesh: failed to allocate transfer command buffer: " +
-                Vulkan_Utils::Vk_result_to_string(result)
+                "Upload_batch: failed to allocate transfer command buffer: " +
+                Vulkan_Utils::Vk_result_to_string(result_code)
             );
         }
 
-        // Begin recording.
         VkCommandBufferBeginInfo begin_info{};
         begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         vkBeginCommandBuffer(transfer_cmd, &begin_info);
 
-        // Mesh_GPU records vkCmdCopyBuffer into transfer_cmd.
-        // Staging buffers stay alive inside the Mesh_GPU until we
-        // call Release_staging_buffers() below.
-        meshes.emplace_back(device, transfer_cmd, _mesh_data);
+        // ── Record every asset into that one command buffer ───────
+        // No barriers are needed BETWEEN assets: each Mesh_GPU writes its
+        // own buffers and each Texture_GPU barriers its own image, so the
+        // recordings touch disjoint resources. The barriers that do exist
+        // (layout transitions, mip generation) are internal to each
+        // Texture_GPU and already correct.
 
+        for (const CoreTypes::MeshData* mesh_data : _batch.meshes)
+        {
+            assert(mesh_data != nullptr &&
+                "Upload_batch: null MeshData pointer");
+            assert(!mesh_data->vertices.empty() &&
+                "Upload_batch: MeshData has no vertices");
+            assert(!mesh_data->indices.empty() &&
+                "Upload_batch: MeshData has no indices");
+
+            meshes.emplace_back(device, transfer_cmd, *mesh_data);
+            result.mesh_gpu_ids.push_back(
+                static_cast<uint32_t>(meshes.size() - 1));
+        }
+
+        for (const Texture_Upload& upload : _batch.textures)
+        {
+            assert(upload.data != nullptr &&
+                "Upload_batch: null ImageData pointer");
+            assert(!upload.data->pixels.empty() &&
+                "Upload_batch: ImageData has no pixel data");
+            assert(upload.data->width > 0 && upload.data->height > 0 &&
+                "Upload_batch: ImageData has zero dimensions");
+
+            textures.emplace_back(device, transfer_cmd, *upload.data, upload.format);
+        }
+
+        // ── End, submit, wait — ONCE for the whole batch ──────────
         Submit_and_wait_transfer(transfer_cmd);
-
-        // GPU has consumed the staging data — safe to free.
-        meshes.back().Release_staging_buffers();
 
         vkFreeCommandBuffers(device_handle, transfer_command_pool, 1, &transfer_cmd);
 
-        const uint32_t gpu_id = static_cast<uint32_t>(meshes.size() - 1);
-        std::cout << "[Renderer] Mesh uploaded, gpu_id = " << gpu_id << "\n";
-        return gpu_id;
+        // ── Post-upload ───────────────────────────────────────────
+        // The fence is signaled, so the GPU has consumed every staging
+        // buffer in the batch and they can all be freed now.
+
+        for (size_t i = first_mesh; i < meshes.size(); ++i)
+            meshes[i].Release_staging_buffers();
+
+        for (size_t i = first_texture; i < textures.size(); ++i)
+        {
+            textures[i].Release_staging_buffers();
+
+            // Register in the global bindless array with the cache's default
+            // sampler. The bindless index — not the registry index i — is
+            // what callers store and what shaders use.
+            result.texture_bindless_indices.push_back(
+                bindless_registry.Register_texture(
+                    textures[i].Get_image_view(),
+                    sampler_cache.Get_default_sampler()
+                )
+            );
+        }
+
+        std::cout << "[Renderer] Batch uploaded: "
+            << mesh_count << " mesh(es), "
+            << texture_count << " texture(s) — 1 command buffer, 1 submit.\n";
+
+        return result;
+    }
+
+    // =========================================================
+    // Upload_mesh
+    // =========================================================
+    // Convenience wrapper: a batch of exactly one mesh.
+
+    uint32_t Renderer::Upload_mesh(const CoreTypes::MeshData& _mesh_data)
+    {
+        Upload_Batch batch;
+        batch.meshes.push_back(&_mesh_data);
+
+        const Upload_Batch_Result result = Upload_batch(batch);
+
+        assert(result.mesh_gpu_ids.size() == 1 && "Upload_mesh: single-mesh batch returned the wrong number of ids");
+
+        return result.mesh_gpu_ids[0];
     }
 
     // =========================================================
     // Upload_texture
     // =========================================================
+    // Convenience wrapper: a batch of exactly one texture.
 
-    uint32_t Renderer::Upload_texture(const CoreTypes::ImageData& _image_data, VkFormat _format)
+    uint32_t Renderer::Upload_texture(
+        const CoreTypes::ImageData& _image_data,
+        VkFormat                    _format)
     {
-        assert(!_image_data.pixels.empty() && "Upload_texture: ImageData has no pixel data");
-        assert(_image_data.width > 0 && _image_data.height > 0 &&
-            "Upload_texture: ImageData has zero dimensions");
+        Upload_Batch batch;
+        batch.textures.push_back({ &_image_data, _format });
 
-        VkDevice device_handle = device.Get_logical_device_handle();
+        const Upload_Batch_Result result = Upload_batch(batch);
 
-        // Same one-off transfer command buffer pattern as Upload_mesh —
-        // shares the same transfer_command_pool.
-        VkCommandBufferAllocateInfo alloc_info{};
-        alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        alloc_info.commandPool = transfer_command_pool;
-        alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        alloc_info.commandBufferCount = 1;
+        assert(result.texture_bindless_indices.size() == 1 && "Upload_texture: single-texture batch returned the wrong number of indices");
 
-        VkCommandBuffer transfer_cmd = VK_NULL_HANDLE;
-        VkResult result = vkAllocateCommandBuffers(device_handle, &alloc_info, &transfer_cmd);
-        if (result != VK_SUCCESS) {
-            throw std::runtime_error(
-                "Upload_texture: failed to allocate transfer command buffer: " +
-                Vulkan_Utils::Vk_result_to_string(result)
-            );
-        }
-
-        VkCommandBufferBeginInfo begin_info{};
-        begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(transfer_cmd, &begin_info);
-
-        // Texture_GPU records the upload + mipmap generation into
-        // transfer_cmd. Staging buffer stays alive inside it until we
-        // call Release_staging_buffers() below.
-        textures.emplace_back(device, transfer_cmd, _image_data, _format);
-
-        Submit_and_wait_transfer(transfer_cmd);
-
-        // GPU has consumed the staging data — safe to free.
-        textures.back().Release_staging_buffers();
-
-        vkFreeCommandBuffers(device_handle, transfer_command_pool, 1, &transfer_cmd);
-
-        // Register this texture in the global bindless array using the
-        // cache's default sampler (linear filtering, repeat wrap — correct
-        // for the overwhelming majority of PBR textures). The returned
-        // bindless_index, NOT the textures.size()-1 registry index, is
-        // what callers should store and what shaders will use.
-        const uint32_t bindless_index = bindless_registry.Register_texture(
-            textures.back().Get_image_view(),
-            sampler_cache.Get_default_sampler()
-        );
-
-        std::cout << "[Renderer] Texture uploaded, bindless_index = " << bindless_index
-            << " (" << _image_data.width << "x" << _image_data.height
-            << ", " << textures.back().Get_mip_levels() << " mips)\n";
-        return bindless_index;
+        return result.texture_bindless_indices[0];
     }
-
+    
     // =========================================================
     // Render
     // =========================================================
@@ -350,9 +393,7 @@ namespace Renderer_System
     // Record_command_buffer
     // =========================================================
 
-    void Renderer::Record_command_buffer(
-        const CoreTypes::RenderPacket& _packet,
-        uint32_t                       _image_index)
+    void Renderer::Record_command_buffer(const CoreTypes::RenderPacket& _packet, uint32_t _image_index)   
     {
         Frame_Data& frame = frames[current_frame];
 
@@ -400,6 +441,16 @@ namespace Renderer_System
         scissor.offset = { 0, 0 };
         scissor.extent = extent;
         vkCmdSetScissor(frame.command_buffer, 0, 1, &scissor);
+
+        // ── Dynamic raster + depth state ──────────────────────────
+        // Core in Vulkan 1.3. Every state declared dynamic in the pipeline
+        // MUST be set before any draw in this command buffer, or the draw is
+        // undefined behaviour — the validation layers will flag it.
+        vkCmdSetCullMode(frame.command_buffer, raster_state.cull_mode);
+        vkCmdSetFrontFace(frame.command_buffer, raster_state.front_face);
+        vkCmdSetDepthTestEnable(frame.command_buffer,raster_state.depth_test_enable ? VK_TRUE : VK_FALSE); 
+        vkCmdSetDepthWriteEnable(frame.command_buffer,raster_state.depth_write_enable ? VK_TRUE : VK_FALSE);
+        vkCmdSetDepthCompareOp(frame.command_buffer, raster_state.depth_compare_op);
 
         // ── Bind descriptor sets ─────────────────────────────────
         // Set 0: per-frame view/projection UBO.
