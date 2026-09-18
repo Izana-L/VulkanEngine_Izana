@@ -7,7 +7,7 @@
 
 #include <vector>
 
-namespace Renderer {
+namespace Renderer_System {
 
     // Vulkan_Command_Pool: owns the VkCommandPool and a set of
     // VkCommandBuffer allocated from it, one per frame-in-flight.

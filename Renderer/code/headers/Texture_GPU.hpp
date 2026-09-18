@@ -8,7 +8,7 @@
 
 #include <cstdint>
 
-namespace Renderer
+namespace Renderer_System
 {
 
     // Texture_GPU: owns the GPU-side resources for a single texture —

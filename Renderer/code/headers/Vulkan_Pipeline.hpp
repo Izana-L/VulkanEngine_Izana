@@ -8,7 +8,7 @@
 
 #include <string>
 
-namespace Renderer
+namespace Renderer_System
 {
 
     // Pipeline_Config: all parameters needed to create a Vulkan_Pipeline.

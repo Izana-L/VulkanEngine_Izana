@@ -10,7 +10,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace Input
+namespace Input_System
 {
 
     // Input: manages keyboard and mouse state for one frame, and resolves

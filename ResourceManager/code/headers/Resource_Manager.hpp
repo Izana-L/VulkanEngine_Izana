@@ -54,8 +54,7 @@ namespace ResourceManager
         // Loads all primitives from a glTF/GLB file, or returns the
         // cached handles if this file was already loaded. One handle
         // per primitive. gpu_id must still be registered after upload.
-        std::vector<CoreTypes::Asset_Handle>
-            Load_mesh(const std::string& _path);
+        std::vector<CoreTypes::Asset_Handle> Load_mesh(const std::string& _path);
 
         // =========================================================
         // Mesh — primitive
@@ -64,8 +63,7 @@ namespace ResourceManager
         // Generates a procedural primitive, or returns the cached handle
         // if an identical primitive (same type + topology params) already
         // exists. Returns a single handle (primitives are one mesh each).
-        CoreTypes::Asset_Handle
-            Create_primitive(const Primitive_Desc& _desc);
+        CoreTypes::Asset_Handle Create_primitive(const Primitive_Desc& _desc);
 
         // =========================================================
         // Mesh — shared queries
@@ -83,12 +81,10 @@ namespace ResourceManager
         // Loads an image, or returns the cached handle if the same path
         // was already loaded with the same format. Format is part of the
         // key: the same file as SRGB vs UNORM are distinct GPU resources.
-        CoreTypes::Asset_Handle Load_image(const std::string& _path,
-                                            CoreTypes::Pixel_Format  _format =
-                                            CoreTypes::Pixel_Format::RGBA8_SRGB);
-
-        const CoreTypes::ImageData&
-            Get_image_data(CoreTypes::Asset_Handle _handle) const;
+        CoreTypes::Asset_Handle Load_image(const std::string& _path,CoreTypes::Pixel_Format  _format = CoreTypes::Pixel_Format::RGBA8_SRGB);
+                                           
+                                            
+        const CoreTypes::ImageData& Get_image_data(CoreTypes::Asset_Handle _handle) const;
 
     private:
 
@@ -125,14 +121,14 @@ namespace ResourceManager
         const Image_Entry& Get_image_entry(CoreTypes::Asset_Handle _handle) const;
 
         // Creates a new mesh entry from ready MeshData, returns its handle.
-        CoreTypes::Asset_Handle
-            Register_mesh(CoreTypes::MeshData&& _data, const std::string& _source);
+        CoreTypes::Asset_Handle Register_mesh(CoreTypes::MeshData&& _data, const std::string& _source);
+            
 
         // Builds a file-asset cache key: FNV64(path) folded with format,
         // bit 63 forced to 0 to stay in the file key space.
         static uint64_t Make_file_key(const std::string& _path);
-        static uint64_t Make_image_key(const std::string& _path,
-            CoreTypes::Pixel_Format  _format);
+        static uint64_t Make_image_key(const std::string& _path,CoreTypes::Pixel_Format  _format);
+            
 
         // =========================================================
         // Data

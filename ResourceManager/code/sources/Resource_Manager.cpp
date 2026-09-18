@@ -35,9 +35,7 @@ namespace ResourceManager
     // Register_mesh — shared entry creation
     // =========================================================
 
-    CoreTypes::Asset_Handle
-        Resource_Manager::Register_mesh(CoreTypes::MeshData&& _data,
-            const std::string& _source)
+    CoreTypes::Asset_Handle Resource_Manager::Register_mesh(CoreTypes::MeshData&& _data, const std::string& _source)
     {
         CoreTypes::Id id = mesh_id_provider.Allocate_id();
 
@@ -61,8 +59,7 @@ namespace ResourceManager
     // Load_mesh — file, deduplicated
     // =========================================================
 
-    std::vector<CoreTypes::Asset_Handle>
-        Resource_Manager::Load_mesh(const std::string& _path)
+    std::vector<CoreTypes::Asset_Handle>Resource_Manager::Load_mesh(const std::string& _path)   
     {
         const uint64_t key = Make_file_key(_path);
 
@@ -101,8 +98,7 @@ namespace ResourceManager
     // Create_primitive — generated, deduplicated
     // =========================================================
 
-    CoreTypes::Asset_Handle
-        Resource_Manager::Create_primitive(const Primitive_Desc& _desc)
+    CoreTypes::Asset_Handle Resource_Manager::Create_primitive(const Primitive_Desc& _desc)  
     {
         const uint64_t key = _desc.To_key();
 
@@ -177,9 +173,7 @@ namespace ResourceManager
     // Image
     // =========================================================
 
-    CoreTypes::Asset_Handle
-        Resource_Manager::Load_image(const std::string& _path,
-            CoreTypes::Pixel_Format  _format)
+    CoreTypes::Asset_Handle Resource_Manager::Load_image(const std::string& _path, CoreTypes::Pixel_Format  _format)   
     {
         const uint64_t key = Make_image_key(_path, _format);
 
@@ -214,8 +208,7 @@ namespace ResourceManager
         return handle;
     }
 
-    const CoreTypes::ImageData&
-        Resource_Manager::Get_image_data(CoreTypes::Asset_Handle _handle) const
+    const CoreTypes::ImageData& Resource_Manager::Get_image_data(CoreTypes::Asset_Handle _handle) const     
     {
         return Get_image_entry(_handle).data;
     }
@@ -224,8 +217,7 @@ namespace ResourceManager
     // Internal helpers
     // =========================================================
 
-    const Resource_Manager::Mesh_Entry&
-        Resource_Manager::Get_mesh_entry(CoreTypes::Asset_Handle _handle) const
+    const Resource_Manager::Mesh_Entry& Resource_Manager::Get_mesh_entry(CoreTypes::Asset_Handle _handle) const    
     {
         assert(CoreTypes::Is_valid(_handle.id) &&
             "Get_mesh_entry: invalid handle");
@@ -240,8 +232,7 @@ namespace ResourceManager
         return entry;
     }
 
-    const Resource_Manager::Image_Entry&
-        Resource_Manager::Get_image_entry(CoreTypes::Asset_Handle _handle) const
+    const Resource_Manager::Image_Entry& Resource_Manager::Get_image_entry(CoreTypes::Asset_Handle _handle) const   
     {
         assert(CoreTypes::Is_valid(_handle.id) &&
             "Get_image_entry: invalid handle");

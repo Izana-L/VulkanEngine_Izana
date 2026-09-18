@@ -5,7 +5,7 @@
 
 #include <Vulkan_Device.hpp>
 
-namespace Renderer 
+namespace Renderer_System 
 {
 
     // Vulkan_Depth_Resources: owns the depth buffer used for depth testing

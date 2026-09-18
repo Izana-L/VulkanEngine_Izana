@@ -14,7 +14,7 @@ namespace EngineCore
 {
 
     void Camera_Controller::Update(CoreTypes::Id _camera_entity,
-        Input::Input& _input,
+        Input_System::Input& _input,
         ECS::World& _world,
         float         _dt)
     {
@@ -30,10 +30,10 @@ namespace EngineCore
         // cursor. Rotation is only applied while captured.
         if (_input.Was_action_pressed("ToggleCamera"))
         {
-            const Input::Cursor_Mode new_mode =
-                (_input.Get_cursor_mode() == Input::Cursor_Mode::Camera)
-                ? Input::Cursor_Mode::Window
-                : Input::Cursor_Mode::Camera;
+            const Input_System::Cursor_Mode new_mode =
+                (_input.Get_cursor_mode() == Input_System::Cursor_Mode::Camera)
+                ? Input_System::Cursor_Mode::Window
+                : Input_System::Cursor_Mode::Camera;
             _input.Set_cursor_mode(new_mode);
         }
 
@@ -56,7 +56,7 @@ namespace EngineCore
         // Rotation from mouse (only in Camera cursor mode)
         // =========================================================
 
-        if (_input.Get_cursor_mode() == Input::Cursor_Mode::Camera)
+        if (_input.Get_cursor_mode() == Input_System::Cursor_Mode::Camera)
         {
             const float dx = _input.Get_mouse_delta_x();
             const float dy = _input.Get_mouse_delta_y();

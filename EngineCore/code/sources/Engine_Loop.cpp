@@ -14,8 +14,8 @@ namespace EngineCore
 {
 
     void Engine_Loop::Run(Platform::Window& _window,
-        Input::Input& _input,
-        Renderer::Renderer& _renderer,
+        Input_System::Input& _input,
+        Renderer_System::Renderer& _renderer,
         ResourceManager::Resource_Manager& _resources,
         ECS::World& _world,
         Transform_System& _transform_system,

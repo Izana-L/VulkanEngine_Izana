@@ -6,7 +6,7 @@
 #include <array>
 #include <cassert>
 
-namespace Renderer {
+namespace Renderer_System {
 
     // ---------- Constructor ----------
     Vulkan_Render_Pass::Vulkan_Render_Pass(

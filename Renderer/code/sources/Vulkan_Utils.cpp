@@ -1,10 +1,11 @@
 #include <Vulkan_Utils.hpp>
 
-namespace Renderer ::Vulkan_Utils
+namespace Renderer_System ::Vulkan_Utils
 {
    
 
-        std::string Vk_result_to_string(int32_t _result) {
+        std::string Vk_result_to_string(int32_t _result) 
+        {
             switch (_result) {
             case VK_ERROR_OUT_OF_HOST_MEMORY:        return "VK_ERROR_OUT_OF_HOST_MEMORY (ran out of system RAM)";
             case VK_ERROR_OUT_OF_DEVICE_MEMORY:      return "VK_ERROR_OUT_OF_DEVICE_MEMORY (ran out of GPU memory)";
@@ -22,6 +23,28 @@ namespace Renderer ::Vulkan_Utils
             default:                                  return "Unknown error code: " + std::to_string(_result);
             }
         }
+        std::string Vk_format_to_string(int32_t _format) 
+        {
+            switch (_format) {
+            case VK_FORMAT_B8G8R8A8_SRGB:            return "VK_FORMAT_B8G8R8A8_SRGB";
+            case VK_FORMAT_R8G8B8A8_SRGB:            return "VK_FORMAT_R8G8B8A8_SRGB";
+            case VK_FORMAT_A8B8G8R8_SRGB_PACK32:     return "VK_FORMAT_A8B8G8R8_SRGB_PACK32";
+            case VK_FORMAT_B8G8R8A8_UNORM:           return "VK_FORMAT_B8G8R8A8_UNORM";
+            case VK_FORMAT_R8G8B8A8_UNORM:           return "VK_FORMAT_R8G8B8A8_UNORM";
+            case VK_FORMAT_A2B10G10R10_UNORM_PACK32: return "VK_FORMAT_A2B10G10R10_UNORM_PACK32";
+            case VK_FORMAT_R16G16B16A16_SFLOAT:      return "VK_FORMAT_R16G16B16A16_SFLOAT";
+            default:                                 return "VkFormat(" + std::to_string(_format) + ")";
+            }
+        }
 
+        bool Is_srgb_format(int32_t _format) 
+        {
+            switch (_format) {
+            case VK_FORMAT_B8G8R8A8_SRGB:
+            case VK_FORMAT_R8G8B8A8_SRGB:
+            case VK_FORMAT_A8B8G8R8_SRGB_PACK32: return true;
+            default:                             return false;
+            }
+        }
     
 }

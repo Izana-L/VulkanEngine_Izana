@@ -5,7 +5,7 @@
 #include <iostream>
 #include <cassert>
 
-namespace Renderer {
+namespace Renderer_System {
 
     // ---------- Constructor ----------
     Vulkan_Depth_Resources::Vulkan_Depth_Resources(

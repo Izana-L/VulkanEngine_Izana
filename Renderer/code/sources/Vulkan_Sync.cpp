@@ -5,7 +5,7 @@
 #include <iostream>
 #include <cassert>
 
-namespace Renderer {
+namespace Renderer_System {
 
     // ---------- Constructor ----------
     Vulkan_Sync::Vulkan_Sync(const Vulkan_Device& _device,uint32_t _max_frames_in_flight,

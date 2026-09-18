@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace Input
+namespace Input_System
 {
 
     // Action_Binding: a single input source that can trigger an action.
@@ -25,12 +25,12 @@ namespace Input
 
         union
         {
-            Input::Key          key = Input::Key::Unknown;
-            Input::Mouse_Button mouse_button;
+            Key          key = Key::Unknown;
+            Mouse_Button mouse_button;
         };
 
         // Convenience constructors.
-        static Action_Binding From_key(Input::Key _key)
+        static Action_Binding From_key(Key _key)
         {
             Action_Binding b;
             b.type = Type::Key;
@@ -38,7 +38,7 @@ namespace Input
             return b;
         }
 
-        static Action_Binding From_mouse_button(Input::Mouse_Button _button)
+        static Action_Binding From_mouse_button(Mouse_Button _button)
         {
             Action_Binding b;
             b.type = Type::Mouse_Button;

@@ -58,11 +58,11 @@ namespace EngineCore
         Platform::Window                    window;
 
         // Layer 1 — Services
-        Input::Input                        input;
+        Input_System::Input                        input;
         ResourceManager::Resource_Manager   resources;
 
         // Layer 2 — GPU
-        Renderer::Renderer                  renderer;
+        Renderer_System::Renderer                  renderer;
 
         // Layer 3 — Simulation
         ECS::World                          world;

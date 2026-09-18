@@ -4,7 +4,7 @@
 #include <cstring>
 #include <cassert>
 
-namespace Renderer 
+namespace Renderer_System 
 {
 
     namespace 

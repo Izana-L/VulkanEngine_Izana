@@ -5,7 +5,7 @@
 
 #include <Vulkan_Device.hpp>
 
-namespace Renderer
+namespace Renderer_System
 {
     namespace Vulkan_Image_Utils
     {

@@ -4,7 +4,7 @@
 #include <stdexcept>
 #include <cassert>
 
-namespace Renderer 
+namespace Renderer_System 
 {
     namespace Vulkan_Buffer_Utils 
     {

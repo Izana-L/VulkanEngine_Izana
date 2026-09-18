@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-namespace Input
+namespace Input_System
 {
 
     // Key: keyboard key identifiers, independent of GLFW.

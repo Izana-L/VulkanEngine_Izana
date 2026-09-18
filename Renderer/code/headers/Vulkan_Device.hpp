@@ -10,7 +10,7 @@
 #include <optional>
 #include <string>
 
-namespace Renderer {
+namespace Renderer_System {
 
     // Queue_Family_Indices: holds the indices of the queue families this
     // device will use. A GPU exposes several queue "families", each
@@ -22,11 +22,13 @@ namespace Renderer {
     // given GPU (e.g. some GPUs don't have a dedicated present-capable
     // family at all) - this lets us distinguish "not found yet" from "found
     // at index 0", which a plain uint32_t with a sentinel value wouldn't.
-    struct Queue_Family_Indices {
+    struct Queue_Family_Indices 
+    {
         std::optional<uint32_t> graphics_family;
         std::optional<uint32_t> present_family;
 
-        bool Is_complete() const {
+        bool Is_complete() const 
+        {
             return graphics_family.has_value() && present_family.has_value();
         }
     };

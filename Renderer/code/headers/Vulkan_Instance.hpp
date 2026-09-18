@@ -6,7 +6,7 @@
 #include <vector>
 #include <string>
 
-namespace Renderer 
+namespace Renderer_System 
 {
     // Vulkan_instance: owns the VkInstance, the root object of Vulkan.
     // Also manages validation layers and the debug messenger, which report
@@ -93,12 +93,8 @@ namespace Renderer
         // console after a successful vkCreateInstance call. Purely for
         // debugging - helps confirm exactly what got activated without
         // having to guess or attach a debugger.
-        void Log_activated_extensions_and_layers(
-            const std::vector<const char*>& _extensions,
-            const std::vector<const char*>& _layers
-        ) const;
-
-        
+        void Log_activated_extensions_and_layers(const std::vector<const char*>& _extensions,const std::vector<const char*>& _layers ) const;
+      
 
         // Creates the "real" debug messenger that stays active for the
         // entire lifetime of this Vulkan_instance (as opposed to the

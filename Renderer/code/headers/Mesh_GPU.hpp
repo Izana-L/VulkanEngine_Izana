@@ -8,7 +8,7 @@
 
 #include <cstdint>
 
-namespace Renderer
+namespace Renderer_System
 {
 
     // Mesh_GPU: GPU-resident geometry for a single mesh.

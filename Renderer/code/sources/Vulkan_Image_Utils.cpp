@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Renderer
+namespace Renderer_System
 {
     namespace Vulkan_Image_Utils
     {

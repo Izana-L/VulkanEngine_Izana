@@ -56,7 +56,7 @@ namespace MathLib::Constants {
     // Rendering limits
     // =========================================================
 
-    constexpr float NEAR_PLANE_DEFAULT = 0.1f;          // plano cercano por defecto
+    constexpr float NEAR_PLANE_DEFAULT = 1.f;          // plano cercano por defecto
     constexpr float FAR_PLANE_DEFAULT = 1000.0f;       // plano lejano por defecto
     constexpr float FOV_DEFAULT = 60.0f;         // campo de vision por defecto (grados)
     constexpr float FOV_MIN = 10.0f;         // fov minimo razonable

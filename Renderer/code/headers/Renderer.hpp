@@ -25,7 +25,7 @@
 
 namespace Platform { class Window; }
 
-namespace Renderer
+namespace Renderer_System
 {
 
     // Renderer: the only Vulkan-facing class that EngineCore knows about.

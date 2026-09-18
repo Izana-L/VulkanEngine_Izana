@@ -7,7 +7,7 @@
 #include <cassert>
 #include <limits>
 
-namespace Renderer
+namespace Renderer_System
 {
 
     // ---------- Constructor ----------
@@ -329,6 +329,19 @@ namespace Renderer
             << extent.width << "x" << extent.height
             << ", " << actual_image_count << " images, present mode: "
             << (present_mode == VK_PRESENT_MODE_MAILBOX_KHR ? "MAILBOX" : "FIFO") << "\n";
+
+       // Negotiated color format: decides WHO applies the gamma curve.
+       // An *_SRGB format means the hardware encodes linear -> sRGB when
+       // writing the attachment, so the fragment shader must output LINEAR.
+        std::cout << "[Vulkan_Swapchain] Surface format: "
+            << Vulkan_Utils::Vk_format_to_string(image_format)
+            << (Vulkan_Utils::Is_srgb_format(image_format)
+                ? "  (hardware encodes linear -> sRGB: shader must output LINEAR)"
+                : "  (no hardware encode: shader must apply gamma)")
+            << ", color space: "
+            << (surface_format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR
+                ? "SRGB_NONLINEAR" : "non-standard")
+            << "\n";
     }
 
     // ---------- Create_image_views ----------
@@ -395,11 +408,29 @@ namespace Renderer
     {
         assert(!_available_formats.empty() && "Choose_surface_format() called with an empty format list");
 
-        for (const auto& format : _available_formats) {
+        for (const auto& format : _available_formats) 
+        {
             if (format.format == VK_FORMAT_B8G8R8A8_SRGB &&
                 format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
                 return format;
         }
+
+        // 2nd choice: any other sRGB format. The shaders output linear color
+         // and depend on the hardware encode, so what matters is keeping an
+         // *_SRGB format, not the exact channel order.
+        for (const auto& format : _available_formats) 
+        {
+            if (Vulkan_Utils::Is_srgb_format(format.format) &&
+                format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+                return format;
+        }
+
+        // Fallback: no sRGB format at all. Nothing will apply the gamma curve
+        // and the image will look washed out - warn instead of failing silently.
+        std::cout << "[Vulkan_Swapchain] WARNING: no sRGB surface format available, "
+            << "falling back to "
+            << Vulkan_Utils::Vk_format_to_string(_available_formats[0].format)
+            << ". Shader output would need manual gamma correction.\n";
 
         return _available_formats[0];
     }

@@ -10,7 +10,7 @@
 
 #include <vector>
 
-namespace Renderer 
+namespace Renderer_System 
 {
 
     // Vulkan_Framebuffer: owns one VkFramebuffer per swapchain image,

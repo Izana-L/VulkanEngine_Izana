@@ -7,7 +7,7 @@
 
 #include <vector>
 
-namespace Renderer {
+namespace Renderer_System {
 
     // Vulkan_Sync: owns the synchronization primitives needed to
     // coordinate CPU and GPU work across frames-in-flight.

@@ -24,8 +24,5 @@ void main()
     vec3 base_color = frag_color.rgb;
     vec3 color = base_color * (AMBIENT + LIGHT_COLOR * LIGHT_INTENSITY * n_dot_l);
 
-    // Gamma correction (linear -> sRGB approximation).
-    color = pow(clamp(color, 0.0, 1.0), vec3(1.0 / 2.2));
-
     out_color = vec4(color, 1.0);
 }

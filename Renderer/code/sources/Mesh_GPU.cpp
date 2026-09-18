@@ -6,7 +6,7 @@
 #include <cstring>
 #include <stdexcept>
 
-namespace Renderer
+namespace Renderer_System
 {
 
     // ---------- Constructor ----------

@@ -5,7 +5,7 @@
 
 #include <Vulkan_Device.hpp>
 
-namespace Renderer {
+namespace Renderer_System {
 
     // Vulkan_Render_Pass: owns the VkRenderPass, which describes the
     // STRUCTURE of a rendering operation - what attachments (color,

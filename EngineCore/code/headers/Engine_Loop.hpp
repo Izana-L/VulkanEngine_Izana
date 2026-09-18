@@ -4,8 +4,8 @@
 #include <Id.hpp>
 
 namespace Platform { class Window; }
-namespace Input { class Input; }
-namespace Renderer { class Renderer; }
+namespace Input_System { class Input; }
+namespace Renderer_System { class Renderer; }
 namespace ResourceManager { class Resource_Manager; }
 namespace ECS { class World; }
 
@@ -45,8 +45,8 @@ namespace EngineCore
         // _camera_entity: the ECS entity with Transform + Camera_Component
         //   that Camera_Controller and Extractor will use.
         void Run(Platform::Window& _window,
-            Input::Input& _input,
-            Renderer::Renderer& _renderer,
+            Input_System::Input& _input,
+            Renderer_System::Renderer& _renderer,
             ResourceManager::Resource_Manager& _resources,
             ECS::World& _world,
             Transform_System& _transform_system,

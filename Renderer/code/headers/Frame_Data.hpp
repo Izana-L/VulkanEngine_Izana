@@ -12,7 +12,7 @@
 #include <cstdint>
 #include <stdexcept>
 
-namespace Renderer
+namespace Renderer_System
 {
 
     // Frame_UBO: per-frame uniform data uploaded to the GPU each frame.

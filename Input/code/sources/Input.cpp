@@ -10,15 +10,14 @@
 #include <iostream>
 #include <stdexcept>
 
-namespace Input
+namespace Input_System
 {
 
     // =========================================================
     // Constructor
     // =========================================================
 
-    Input::Input(Platform::Window& _window)
-        : window(_window)
+    Input::Input(Platform::Window& _window): window(_window)  
     {
         // Subscribe to Window's input callbacks.
         _window.Set_key_callback([this](int key, int action)

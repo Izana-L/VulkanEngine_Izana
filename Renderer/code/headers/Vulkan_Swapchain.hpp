@@ -10,7 +10,7 @@
 #include <vector>
 #include <cstdint>
 
-namespace Renderer 
+namespace Renderer_System 
 {
 
     // Swap_chain_support_details: groups together everything we need to
@@ -153,9 +153,11 @@ namespace Renderer
 
         // Picks the best color format/color space from the available
         // options. Prefers VK_FORMAT_B8G8R8A8_SRGB with
-        // VK_COLOR_SPACE_SRGB_NONLINEAR_KHR (standard choice for correct
-        // gamma-corrected color output), falling back to the first
-        // available format if that exact combination isn't found.
+        // VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, then any other sRGB format,
+        // and only as a last resort the first available format (logging a
+        // warning). An sRGB format is a contract with the shaders: the
+        // hardware does the linear -> sRGB encode on write, so fragment
+        // shaders must output LINEAR color and never apply gamma by hand.
         VkSurfaceFormatKHR Choose_surface_format(const std::vector<VkSurfaceFormatKHR>& _available_formats) const;
 
         // Picks the present mode: MAILBOX if available and preferred,

@@ -7,7 +7,7 @@
 
 #include <cstdint>
 
-namespace Renderer
+namespace Renderer_System
 {
 
     // Bindless_Registry: owns the single global descriptor set that holds

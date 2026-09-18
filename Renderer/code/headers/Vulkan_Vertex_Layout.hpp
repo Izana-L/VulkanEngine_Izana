@@ -8,7 +8,7 @@
 #include <array>
 #include <cstddef>
 
-namespace Renderer::Vulkan_Vertex_Layout
+namespace Renderer_System::Vulkan_Vertex_Layout
 {
 
     // Vulkan_Vertex_Layout: translates CoreTypes vertex types into the

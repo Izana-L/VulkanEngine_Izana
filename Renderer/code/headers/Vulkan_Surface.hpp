@@ -6,7 +6,7 @@
 #include <Vulkan_Instance.hpp>
 #include <Window.hpp>
 
-namespace Renderer {
+namespace Renderer_System {
 
     // Vulkan_surface: owns the VkSurfaceKHR, which represents the actual
     // platform-specific window surface Vulkan can render into and present to.
@@ -15,7 +15,21 @@ namespace Renderer {
     // window via GLFW) and Vulkan (which needs a VkSurfaceKHR to know
     // "where" to draw). Platform::Window deliberately knows nothing about
     // Vulkan - this class is where that connection is made.
-    class Vulkan_Surface {
+    class Vulkan_Surface 
+    {
+    private:
+        // Destroys the VkSurfaceKHR. Shared by the destructor and move
+        // assignment, same pattern as Vulkan_instance::Destroy().
+        void Destroy();
+
+        // The instance this surface was created from - needed to destroy
+        // the surface correctly later (vkDestroySurfaceKHR requires the
+        // VkInstance it belongs to). Stored as a raw handle, not a
+        // reference, since Vulkan_surface doesn't own the instance's
+        // lifetime, it just needs the handle for cleanup.
+        VkInstance instance_handle;
+
+        VkSurfaceKHR surface;
     public:
         // Creates a VkSurfaceKHR for the given window, using the given
         // Vulkan instance. The window must stay alive for at least as long
@@ -38,19 +52,7 @@ namespace Renderer {
         // (to create the swapchain itself).
         VkSurfaceKHR Get_handle() const;
 
-    private:
-        // Destroys the VkSurfaceKHR. Shared by the destructor and move
-        // assignment, same pattern as Vulkan_instance::Destroy().
-        void Destroy();
-
-        // The instance this surface was created from - needed to destroy
-        // the surface correctly later (vkDestroySurfaceKHR requires the
-        // VkInstance it belongs to). Stored as a raw handle, not a
-        // reference, since Vulkan_surface doesn't own the instance's
-        // lifetime, it just needs the handle for cleanup.
-        VkInstance instance_handle;
-
-        VkSurfaceKHR surface;
+    
     };
 
 }

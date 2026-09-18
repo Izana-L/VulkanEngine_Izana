@@ -5,7 +5,7 @@
 #include <cassert>
 #include <algorithm>
 
-namespace Renderer
+namespace Renderer_System
 {
 
     // ---------- Constructor ----------

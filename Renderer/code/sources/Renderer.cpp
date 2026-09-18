@@ -10,7 +10,7 @@
 #include <cstring>
 #include <array>
 
-namespace Renderer
+namespace Renderer_System
 {
 
     // =========================================================

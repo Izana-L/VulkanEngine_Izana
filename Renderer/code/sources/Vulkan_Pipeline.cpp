@@ -10,7 +10,7 @@
 #include <cassert>
 #include <vector>
 
-namespace Renderer
+namespace Renderer_System
 {
 
     // ---------- Constructor ----------

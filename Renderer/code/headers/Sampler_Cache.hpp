@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <unordered_map>
 
-namespace Renderer
+namespace Renderer_System
 {
 
     // Sampler_Desc: the subset of VkSamplerCreateInfo parameters that

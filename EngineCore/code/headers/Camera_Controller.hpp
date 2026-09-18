@@ -3,7 +3,7 @@
 #include <Id.hpp>
 
 namespace ECS { class World; }
-namespace Input { class Input; }
+namespace Input_System { class Input; }
 
 namespace EngineCore
 {
@@ -43,7 +43,7 @@ namespace EngineCore
         // _camera_entity must have a Transform_Component.
         // _dt is the frame delta time in seconds.
         void Update(CoreTypes::Id _camera_entity,
-            Input::Input& _input,
+            Input_System::Input& _input,
             ECS::World& _world,
             float         _dt);
 

@@ -7,30 +7,31 @@
 #include <cstring>
 #include <cassert>
 
-namespace Renderer {
+namespace Renderer_System {
 
-    namespace {
-        const std::vector<const char*> required_device_extensions = {
+    namespace 
+    {
+        const std::vector<const char*> required_device_extensions = 
+        {
             VK_KHR_SWAPCHAIN_EXTENSION_NAME
         };
     }
 
     // ---------- Constructor ----------
     Vulkan_Device::Vulkan_Device(const Vulkan_Instance& _instance, const Vulkan_Surface& _surface)
-        : physical_device(VK_NULL_HANDLE),
-        logical_device(VK_NULL_HANDLE),
-        graphics_queue(VK_NULL_HANDLE),
-        present_queue(VK_NULL_HANDLE),
-        swapchain_maintenance1_enabled(false),
-        device_name(),
-        bindless_supported(false)
+                                : physical_device(VK_NULL_HANDLE),
+                                  logical_device(VK_NULL_HANDLE),
+                                  graphics_queue(VK_NULL_HANDLE),
+                                  present_queue(VK_NULL_HANDLE),
+                                  swapchain_maintenance1_enabled(false),
+                                  device_name(),
+                                  bindless_supported(false)
     {
         VkInstance instance_handle = _instance.Get_handle();
         VkSurfaceKHR surface_handle = _surface.Get_handle();
 
-        std::vector<VkPhysicalDevice> available_devices =
-            Enumerate_physical_devices(instance_handle);
-
+        std::vector<VkPhysicalDevice> available_devices = Enumerate_physical_devices(instance_handle);
+            
         if (available_devices.empty())
             throw std::runtime_error("No GPUs with Vulkan support found on this system");
 
@@ -46,9 +47,8 @@ namespace Renderer {
         }
 
         if (best_device == VK_NULL_HANDLE)
-            throw std::runtime_error(
-                "No suitable GPU found (missing required extensions or queue families)");
-
+            throw std::runtime_error("No suitable GPU found (missing required extensions or queue families)");
+                
         physical_device = best_device;
         queue_family_indices = Find_queue_families(physical_device, surface_handle);
 
