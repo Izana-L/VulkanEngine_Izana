@@ -14,25 +14,17 @@ namespace Renderer_System
 {
 
     // ---------- Constructor ----------
-    Vulkan_Pipeline::Vulkan_Pipeline(
-        const Vulkan_Device& _device,
-        const Vulkan_Render_Pass& _render_pass,
-        Pipeline_Config           _config)
-
-        : device_handle(_device.Get_logical_device_handle()),
-        descriptor_set_layout(VK_NULL_HANDLE),
-        pipeline_layout(VK_NULL_HANDLE),
-        pipeline(VK_NULL_HANDLE)
+    Vulkan_Pipeline::Vulkan_Pipeline(const Vulkan_Device& _device, const Vulkan_Render_Pass& _render_pass, VkPipelineCache _pipeline_cache,
+        VkPipelineLayout _pipeline_layout, Pipeline_Config  _config) : device_handle(_device.Get_logical_device_handle()),pipeline(VK_NULL_HANDLE)
     {
         assert(device_handle != VK_NULL_HANDLE &&
             "Vulkan_Device must be fully constructed before creating a pipeline");
+        assert(_pipeline_layout != VK_NULL_HANDLE &&
+            "Vulkan_Pipeline: shared pipeline layout must be created first");
         assert(!_config.vertex_shader_path.empty() &&
             "Pipeline_Config: vertex_shader_path must not be empty");
         assert(!_config.fragment_shader_path.empty() &&
             "Pipeline_Config: fragment_shader_path must not be empty");
-
-        Create_descriptor_set_layout();
-        Create_pipeline_layout(_config.bindless_set_layout);
 
         // ---------- Shader modules ----------
         VkShaderModule vertex_shader_module = Create_shader_module(_config.vertex_shader_path);
@@ -143,9 +135,23 @@ namespace Renderer_System
         color_blending.attachmentCount = 1;
         color_blending.pAttachments = &color_blend_attachment;
 
+        // ---------- Creation feedback (core in Vulkan 1.3) ----------
+        // The only way to know whether the cache is actually being hit
+        // instead of assuming it. Must be chained BEFORE creation.
+        VkPipelineCreationFeedback pipeline_feedback{};
+        VkPipelineCreationFeedback stage_feedbacks[2]{};
+
+        VkPipelineCreationFeedbackCreateInfo feedback_info{};
+        feedback_info.sType = VK_STRUCTURE_TYPE_PIPELINE_CREATION_FEEDBACK_CREATE_INFO;
+        feedback_info.pPipelineCreationFeedback = &pipeline_feedback;
+        feedback_info.pipelineStageCreationFeedbackCount = 2;
+        feedback_info.pPipelineStageCreationFeedbacks = stage_feedbacks;
+
         // ---------- Pipeline creation ----------
         VkGraphicsPipelineCreateInfo pipeline_info{};
         pipeline_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipeline_info.pNext = &feedback_info;
+
         pipeline_info.stageCount = 2;
         pipeline_info.pStages = shader_stages;
         pipeline_info.pVertexInputState = &vertex_input_info;
@@ -156,18 +162,11 @@ namespace Renderer_System
         pipeline_info.pDepthStencilState = &depth_stencil;
         pipeline_info.pColorBlendState = &color_blending;
         pipeline_info.pDynamicState = &dynamic_state_info;
-        pipeline_info.layout = pipeline_layout;
+        pipeline_info.layout = _pipeline_layout;
         pipeline_info.renderPass = _render_pass.Get_handle();
         pipeline_info.subpass = 0;
 
-        VkResult result = vkCreateGraphicsPipelines(
-            device_handle,
-            VK_NULL_HANDLE,
-            1,
-            &pipeline_info,
-            nullptr,
-            &pipeline
-        );
+        VkResult result = vkCreateGraphicsPipelines(device_handle, _pipeline_cache, 1, &pipeline_info, nullptr, &pipeline );
 
         vkDestroyShaderModule(device_handle, fragment_shader_module, nullptr);
         vkDestroyShaderModule(device_handle, vertex_shader_module, nullptr);
@@ -178,7 +177,23 @@ namespace Renderer_System
             );
         }
 
-        std::cout << "[Vulkan_Pipeline] Graphics pipeline created successfully.\n";
+        // VALID_BIT first: if the driver didn't fill the feedback in, every
+        // other bit in it is meaningless.
+        if (pipeline_feedback.flags & VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT)
+        {
+            const bool cache_hit = (pipeline_feedback.flags &
+                VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT) != 0;
+
+            std::cout << "[Vulkan_Pipeline] Graphics pipeline created — "
+                << (cache_hit ? "CACHE HIT" : "cache miss (compiled)")
+                << ", " << (pipeline_feedback.duration / 1000000.0)
+                << " ms.\n";
+        }
+        else
+        {
+            std::cout << "[Vulkan_Pipeline] Graphics pipeline created "
+                "(driver reported no creation feedback).\n";
+        }
     }
 
     // ---------- Destructor ----------
@@ -194,25 +209,15 @@ namespace Renderer_System
             vkDestroyPipeline(device_handle, pipeline, nullptr);
             pipeline = VK_NULL_HANDLE;
         }
-        if (pipeline_layout != VK_NULL_HANDLE) {
-            vkDestroyPipelineLayout(device_handle, pipeline_layout, nullptr);
-            pipeline_layout = VK_NULL_HANDLE;
-        }
-        if (descriptor_set_layout != VK_NULL_HANDLE) {
-            vkDestroyDescriptorSetLayout(device_handle, descriptor_set_layout, nullptr);
-            descriptor_set_layout = VK_NULL_HANDLE;
-        }
+        
     }
 
     // ---------- Move constructor ----------
     Vulkan_Pipeline::Vulkan_Pipeline(Vulkan_Pipeline&& _other) noexcept
         : device_handle(_other.device_handle),
-        descriptor_set_layout(_other.descriptor_set_layout),
-        pipeline_layout(_other.pipeline_layout),
         pipeline(_other.pipeline)
     {
-        _other.descriptor_set_layout = VK_NULL_HANDLE;
-        _other.pipeline_layout = VK_NULL_HANDLE;
+        
         _other.pipeline = VK_NULL_HANDLE;
     }
 
@@ -223,12 +228,10 @@ namespace Renderer_System
             Destroy();
 
             device_handle = _other.device_handle;
-            descriptor_set_layout = _other.descriptor_set_layout;
-            pipeline_layout = _other.pipeline_layout;
+            
             pipeline = _other.pipeline;
 
-            _other.descriptor_set_layout = VK_NULL_HANDLE;
-            _other.pipeline_layout = VK_NULL_HANDLE;
+
             _other.pipeline = VK_NULL_HANDLE;
         }
         return *this;
@@ -242,84 +245,8 @@ namespace Renderer_System
         return pipeline;
     }
 
-    VkPipelineLayout Vulkan_Pipeline::Get_layout_handle() const
-    {
-        assert(pipeline_layout != VK_NULL_HANDLE &&
-            "Get_layout_handle() called on a moved-from or destroyed Vulkan_Pipeline");
-        return pipeline_layout;
-    }
-
-    VkDescriptorSetLayout Vulkan_Pipeline::Get_descriptor_set_layout() const
-    {
-        assert(descriptor_set_layout != VK_NULL_HANDLE &&
-            "Get_descriptor_set_layout() called on a moved-from or destroyed Vulkan_Pipeline");
-        return descriptor_set_layout;
-    }
-
-    // ---------- Create_descriptor_set_layout ----------
-    void Vulkan_Pipeline::Create_descriptor_set_layout()
-    {
-        VkDescriptorSetLayoutBinding mvp_layout_binding{};
-        mvp_layout_binding.binding = 0;
-        mvp_layout_binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        mvp_layout_binding.descriptorCount = 1;
-        mvp_layout_binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-        mvp_layout_binding.pImmutableSamplers = nullptr;
-
-        VkDescriptorSetLayoutCreateInfo layout_info{};
-        layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        layout_info.bindingCount = 1;
-        layout_info.pBindings = &mvp_layout_binding;
-
-        VkResult result = vkCreateDescriptorSetLayout(
-            device_handle, &layout_info, nullptr, &descriptor_set_layout);
-
-        if (result != VK_SUCCESS) {
-            throw std::runtime_error(
-                "Failed to create descriptor set layout: " + Vulkan_Utils::Vk_result_to_string(result)
-            );
-        }
-    }
-
-    // ---------- Create_pipeline_layout ----------
-    void Vulkan_Pipeline::Create_pipeline_layout(VkDescriptorSetLayout _bindless_set_layout)
-    {
-        // Push constant range for the per-draw model matrix.
-        // The vertex shader declares:
-        //   layout(push_constant) uniform Push_Constants { mat4 model; } push;
-        // 64 bytes (one mat4) is well within the guaranteed 128-byte minimum
-        // push constant size, so this is portable across all Vulkan devices.
-        VkPushConstantRange push_range{};
-        push_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-        push_range.offset = 0;
-        push_range.size = sizeof(glm::mat4);   // 64 bytes
-
-        // Set 0 is always the per-frame view/projection UBO. Set 1, when
-        // _bindless_set_layout is non-null, is the global bindless texture
-        // array (Bindless_Registry::Get_layout()) — the same layout is
-        // shared across every pipeline that samples bindless textures.
-        std::vector<VkDescriptorSetLayout> set_layouts;
-        set_layouts.push_back(descriptor_set_layout);
-
-        if (_bindless_set_layout != VK_NULL_HANDLE)
-            set_layouts.push_back(_bindless_set_layout);
-
-        VkPipelineLayoutCreateInfo layout_info{};
-        layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        layout_info.setLayoutCount = static_cast<uint32_t>(set_layouts.size());
-        layout_info.pSetLayouts = set_layouts.data();
-        layout_info.pushConstantRangeCount = 1;
-        layout_info.pPushConstantRanges = &push_range;
-
-        VkResult result = vkCreatePipelineLayout(
-            device_handle, &layout_info, nullptr, &pipeline_layout);
-
-        if (result != VK_SUCCESS) {
-            throw std::runtime_error(
-                "Failed to create pipeline layout: " + Vulkan_Utils::Vk_result_to_string(result)
-            );
-        }
-    }
+    
+    
 
     // ---------- Create_shader_module ----------
     VkShaderModule Vulkan_Pipeline::Create_shader_module(const std::string& _spv_file_path) const

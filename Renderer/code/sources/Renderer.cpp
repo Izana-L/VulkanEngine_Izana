@@ -25,12 +25,16 @@ namespace Renderer_System
                         depth_resources(device, device.Find_supported_depth_format(), swapchain.Get_extent()),
                         framebuffers(device, render_pass, swapchain, depth_resources),
                         bindless_registry(device, 1024),
-                        pipeline(device, render_pass, [this]
+                        pipeline_cache(device),
+                        pipeline_layout(device, bindless_registry.Get_layout()),
+                        pipeline_registry(device, render_pass,
+                            pipeline_cache.Get_handle(),
+                            pipeline_layout.Get_handle()),
+                        opaque_config([]
                             {
                                 Pipeline_Config config;
                                 config.vertex_shader_path = "..\\..\\Renderer\\shaders\\compiled\\mesh.vert.spv";
                                 config.fragment_shader_path = "..\\..\\Renderer\\shaders\\compiled\\mesh.frag.spv";
-                                config.bindless_set_layout = bindless_registry.Get_layout();
                                 return config;
                             }()),
                         sampler_cache(device),
@@ -38,6 +42,12 @@ namespace Renderer_System
                         transfer_command_pool(VK_NULL_HANDLE),
                         transfer_fence(VK_NULL_HANDLE)
     {
+        pipeline_registry.Warm_up(Build_pipeline_manifest());
+
+        // Resolve the id the frame path uses. This is now a pure lookup:
+        // the pipeline already exists, so nothing is built here.
+        opaque_pipeline_id = pipeline_registry.Get_id(opaque_config);
+
         // ── Frame resources ────────────────────────────────────────
         for (auto& frame : frames)
             frame.Init(device);
@@ -420,10 +430,7 @@ namespace Renderer_System
             &render_pass_info,
             VK_SUBPASS_CONTENTS_INLINE);
 
-        // ── Bind pipeline ─────────────────────────────────────────
-        vkCmdBindPipeline(frame.command_buffer,
-            VK_PIPELINE_BIND_POINT_GRAPHICS,
-            pipeline.Get_handle());
+        
 
         // ── Dynamic viewport + scissor ────────────────────────────
         VkExtent2D extent = swapchain.Get_extent();
@@ -465,36 +472,48 @@ namespace Renderer_System
         vkCmdBindDescriptorSets(
             frame.command_buffer,
             VK_PIPELINE_BIND_POINT_GRAPHICS,
-            pipeline.Get_layout_handle(),
+            pipeline_layout.Get_handle(),
             0, 2,
             sets,
             0, nullptr
         );
 
-        // ── Draw opaque items ─────────────────────────────────────
+        uint8_t  bound_pipeline_id = 0xFF;
+        uint32_t bind_count = 0;
+
         for (const CoreTypes::Draw_Item& item : _packet.opaque_items)
         {
             if (item.mesh_gpu_id >= meshes.size()) continue;
 
+            const uint8_t item_pipeline_id = CoreTypes::Get_pipeline_id(item.sort_key);
+
+            if (item_pipeline_id != bound_pipeline_id)
+            {
+                vkCmdBindPipeline(frame.command_buffer,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline_registry.Get_by_id(item_pipeline_id));
+
+                bound_pipeline_id = item_pipeline_id;
+                ++bind_count;
+            }
+
             // Push this item's model matrix to the vertex shader.
             // transform_idx indexes into the packet's transform array,
             // which the Extractor filled with world matrices.
-            assert(item.transform_idx < _packet.transform_count &&
-                "Record_command_buffer: transform_idx out of range");
+            assert(item.transform_idx < _packet.transform_count && "Record_command_buffer: transform_idx out of range");
 
             const glm::mat4& model = _packet.transforms[item.transform_idx];
-            vkCmdPushConstants(
-                frame.command_buffer,
-                pipeline.Get_layout_handle(),
-                VK_SHADER_STAGE_VERTEX_BIT,
-                0,
-                sizeof(glm::mat4),
-                &model
-            );
+            vkCmdPushConstants(frame.command_buffer,pipeline_layout.Get_handle(),VK_SHADER_STAGE_VERTEX_BIT,0,sizeof(glm::mat4),&model);
 
             Mesh_GPU& mesh = meshes[item.mesh_gpu_id];
             mesh.Bind(frame.command_buffer);
             mesh.Draw(frame.command_buffer);
+        }
+
+        static uint32_t last_reported_binds = 0xFFFFFFFF;
+        if (bind_count != last_reported_binds)
+        {
+            std::cout << "[Renderer] " << bind_count << " pipeline bind(s) for "
+                << _packet.opaque_items.size() << " opaque item(s).\n";
+            last_reported_binds = bind_count;
         }
 
         vkCmdEndRenderPass(frame.command_buffer);
@@ -606,7 +625,7 @@ namespace Renderer_System
     {
         // Allocate one descriptor set per frame from the same layout.
         std::array<VkDescriptorSetLayout, FRAMES_IN_FLIGHT> layouts;
-        layouts.fill(pipeline.Get_descriptor_set_layout());
+        layouts.fill(pipeline_layout.Get_descriptor_set_layout());
 
         VkDescriptorSetAllocateInfo alloc_info{};
         alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -645,5 +664,16 @@ namespace Renderer_System
                 device.Get_logical_device_handle(), 1, &write, 0, nullptr);
         }
     }
+    // =========================================================
+    // Build_pipeline_manifest
+    // =========================================================
 
+    std::vector<Pipeline_Config> Renderer::Build_pipeline_manifest() const
+    {
+        std::vector<Pipeline_Config> manifest;
+
+        manifest.push_back(opaque_config);
+
+        return manifest;
+    }
 } // namespace Renderer

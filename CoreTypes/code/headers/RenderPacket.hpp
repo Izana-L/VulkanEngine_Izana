@@ -30,28 +30,25 @@ namespace CoreTypes
     // Draw_Item
     // =========================================================
 
-    // A single renderable object, fully resolved and ready for the
-    // Renderer to consume without touching the ECS or ResourceManager.
-    //
     // sort_key: 64-bit packed key computed in the extract.
-    // Layout (low → high bits):
-    //   [0  - 7 ] material_id  (8  bits, 256  materials max)
-    //   [8  - 15] pipeline_id  (8  bits, 256  pipelines max)
-    //   [16 - 31] mesh_gpu_id  (16 bits, 65 k meshes max)
-    //   [32 - 63] depth_bits   (32 bits, float reinterpreted as uint)
-    //             For opacos:      raw float bits (near → far, front-to-back)
-    //             For transparents: ~float bits  (inverted = back-to-front)
     //
-    // Sorting the opaque/transparent arrays by sort_key ascending
-    // naturally groups by pipeline → material → mesh → depth.
-    // The Renderer calls std::sort once per array and iterates linearly.
+    // Layout (HIGH → low bits). The order matters: an ascending sort of a
+    // uint64 is dominated by the most significant bits, so whatever sits
+    // highest is the primary grouping.
+    //   [56 - 63] pipeline_id  (8  bits, 256  pipelines max)  ← primary
+    //   [48 - 55] material_id  (8  bits, 256  materials max)
+    //   [32 - 47] mesh_gpu_id  (16 bits, 65 k meshes max)
+    //   [0  - 31] depth_bits   (32 bits, float reinterpreted as uint)
+    //             For opaques:      raw float bits (near → far)
+    //             For transparents: ~float bits   (inverted = far → near)
     //
-    // pass_mask: bitmask of render passes this item participates in.
-    //   Bit 0 = shadow pass
-    //   Bit 1 = gbuffer / forward pass
-    //   Bit 2 = (reserved)
-    //   ...
-    // transform_idx: index into RenderPacket::transforms[].
+    // Sorting ascending therefore groups by pipeline → material → mesh, and
+    // sorts by depth WITHIN each group.
+    //
+    // The trade-off, stated plainly: depth is no longer the primary sort, so
+    // front-to-back ordering is per-batch instead of global and some overdraw
+    // comes back. That is the standard choice — a pipeline bind costs far
+    // more than the overdraw it saves — but it IS a choice.
     struct Draw_Item
     {
         uint32_t mesh_gpu_id;
@@ -129,10 +126,20 @@ namespace CoreTypes
         uint16_t _mesh_gpu_id,
         uint32_t _depth_bits)
     {
-        return  static_cast<uint64_t>(_material_id)
-            | (static_cast<uint64_t>(_pipeline_id) << 8)
-            | (static_cast<uint64_t>(_mesh_gpu_id) << 16)
-            | (static_cast<uint64_t>(_depth_bits) << 32);
+        return  static_cast<uint64_t>(_depth_bits)
+            | (static_cast<uint64_t>(_mesh_gpu_id) << 32)
+            | (static_cast<uint64_t>(_material_id) << 48)
+            | (static_cast<uint64_t>(_pipeline_id) << 56);
+    }
+
+    // Unpacks the pipeline id back out of a sort key.
+    //
+    // Lives next to Make_sort_key on purpose: packing and unpacking must
+    // move together. If the bit layout above ever changes again, this is the
+    // other half that has to change in the same edit.
+    inline uint8_t Get_pipeline_id(uint64_t _sort_key)
+    {
+        return static_cast<uint8_t>(_sort_key >> 56);
     }
 
 } // namespace CoreTypes

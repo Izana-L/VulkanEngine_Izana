@@ -12,6 +12,9 @@
 #include <Vulkan_Framebuffer.hpp>
 #include <Vulkan_Pipeline.hpp>
 #include <Frame_Data.hpp>
+#include <Pipeline_Cache.hpp>
+#include <Pipeline_Registry.hpp>
+#include <Pipeline_Layout.hpp>
 #include <Mesh_GPU.hpp>
 #include <Texture_GPU.hpp>
 #include <Sampler_Cache.hpp>
@@ -89,9 +92,23 @@ namespace Renderer_System
         // its set 1. Declared here (before pipeline) so construction
         // order is correct — C++ builds members in declaration order.
         Bindless_Registry      bindless_registry;
+        // Must be declared BEFORE the pipeline: the pipeline constructor
+        // takes its handle. Destruction runs in reverse, so the pipeline is
+        // gone before the cache is serialized — which is what we want.
+        Pipeline_Cache         pipeline_cache;
+        // The layout every pipeline shares. Before the registry, because
+        // pipelines are built against it and must be destroyed before it.
+        Pipeline_Layout        pipeline_layout;
 
-        Vulkan_Pipeline        pipeline;
+        // All pipelines, keyed by config. Replaces the single `pipeline`
+        // member: a by-value member can only ever hold one.
+        Pipeline_Registry      pipeline_registry;
 
+        // The config for the one pipeline that exists today. Held as a
+        // member so the per-frame lookup doesn't rebuild two std::strings
+        // and hash them on every frame.
+        Pipeline_Config        opaque_config;
+        uint8_t                opaque_pipeline_id = 0;
         // A single value for now — there's one pipeline and one opaque batch.
         // Becomes per-batch once draws are sorted by pipeline.
         Raster_State           raster_state;
@@ -138,6 +155,7 @@ namespace Renderer_System
 
         void Init_descriptor_pool();
         void Init_descriptor_sets();
+        std::vector<Pipeline_Config> Build_pipeline_manifest() const;
         // Ends recording of _transfer_cmd, submits it signaling
         // transfer_fence, and blocks the CPU until that fence is signaled.
         // The CPU waits, so the primitive is a fence — not vkQueueWaitIdle,

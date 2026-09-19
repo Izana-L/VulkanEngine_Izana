@@ -106,6 +106,9 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
   <ItemGroup>
     <ClCompile Include="..\code\headers\Bindless_Registry.cpp" />
     <ClCompile Include="..\code\sources\Mesh_GPU.cpp" />
+    <ClCompile Include="..\code\sources\Pipeline_Cache.cpp" />
+    <ClCompile Include="..\code\sources\Pipeline_Layout.cpp" />
+    <ClCompile Include="..\code\sources\Pipeline_Registry.cpp" />
     <ClCompile Include="..\code\sources\Renderer.cpp" />
     <ClCompile Include="..\code\sources\Sampler_Cache.cpp" />
     <ClCompile Include="..\code\sources\Texture_GPU.cpp" />
@@ -126,6 +129,9 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
     <ClInclude Include="..\code\headers\Bindless_Registry.hpp" />
     <ClInclude Include="..\code\headers\Frame_Data.hpp" />
     <ClInclude Include="..\code\headers\Mesh_GPU.hpp" />
+    <ClInclude Include="..\code\headers\Pipeline_Cache.hpp" />
+    <ClInclude Include="..\code\headers\Pipeline_Layout.hpp" />
+    <ClInclude Include="..\code\headers\Pipeline_Registry.hpp" />
     <ClInclude Include="..\code\headers\Renderer.hpp" />
     <ClInclude Include="..\code\headers\Sampler_Cache.hpp" />
     <ClInclude Include="..\code\headers\Texture_GPU.hpp" />

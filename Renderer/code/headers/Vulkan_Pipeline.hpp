@@ -31,13 +31,27 @@ namespace Renderer_System
         std::string vertex_shader_path;
         std::string fragment_shader_path;
 
-        // ── Bindless textures (optional) ─────────────────────────────
-        // Set 1 in the pipeline layout. VK_NULL_HANDLE means this pipeline
-        // doesn't sample bindless textures (e.g. a future skybox pipeline
-        // might use its own dedicated cubemap descriptor instead).
-        // When set, the pipeline layout gains a second descriptor set
-        // alongside set 0 (the per-frame view/projection UBO).
-        VkDescriptorSetLayout bindless_set_layout = VK_NULL_HANDLE;
+        // Pipeline_Config IS the registry key — these two must agree with
+        // Pipeline_Config_Hash, field for field.
+        //
+        // A field added to one but not the other fails silently, and in the
+        // worst direction: two different pipelines collapse into one entry
+        // (you render with the wrong state) or the same pipeline gets built
+        // twice (you leak a VkPipeline). Nothing crashes. Add fields to both
+        // in the same edit, always.
+        bool operator==(const Pipeline_Config& _other) const
+        {
+            return vertex_shader_path == _other.vertex_shader_path
+                && fragment_shader_path == _other.fragment_shader_path
+                && polygon_mode == _other.polygon_mode
+                && blend_enable == _other.blend_enable
+                && src_color_blend_factor == _other.src_color_blend_factor
+                && dst_color_blend_factor == _other.dst_color_blend_factor
+                && color_blend_op == _other.color_blend_op
+                && src_alpha_blend_factor == _other.src_alpha_blend_factor
+                && dst_alpha_blend_factor == _other.dst_alpha_blend_factor
+                && alpha_blend_op == _other.alpha_blend_op;
+        }
 
         // ── Rasterization ─────────────────────────────────────────────
         // polygon_mode stays baked in: making it dynamic needs
@@ -74,8 +88,6 @@ namespace Renderer_System
     class Vulkan_Pipeline
     {
         VkDevice              device_handle;
-        VkDescriptorSetLayout descriptor_set_layout;
-        VkPipelineLayout      pipeline_layout;
         VkPipeline            pipeline;
 
     public:
@@ -83,11 +95,8 @@ namespace Renderer_System
         // Creates the pipeline from a Pipeline_Config built against
         // the given render pass. Shader modules are created internally
         // and destroyed immediately after pipeline creation.
-        Vulkan_Pipeline(
-            const Vulkan_Device& _device,
-            const Vulkan_Render_Pass& _render_pass,
-            Pipeline_Config           _config
-        );
+        Vulkan_Pipeline(const Vulkan_Device& _device,const Vulkan_Render_Pass& _render_pass, VkPipelineCache _pipeline_cache,
+                              VkPipelineLayout _pipeline_layout, Pipeline_Config  _config);
 
         ~Vulkan_Pipeline();
 
@@ -101,21 +110,11 @@ namespace Renderer_System
         // issuing draw calls.
         VkPipeline Get_handle() const;
 
-        // The pipeline layout — needed when binding descriptor sets
-        // (vkCmdBindDescriptorSets) and for any push constants.
-        VkPipelineLayout Get_layout_handle() const;
 
-        // The descriptor set layout describing the MVP uniform buffer's
-        // shape — needed by whoever creates the actual descriptor sets
-        // (allocated from a descriptor pool, holding the real uniform
-        // buffers, one per frame-in-flight) later in Renderer.
-        VkDescriptorSetLayout Get_descriptor_set_layout() const;
 
     private:
 
         void Destroy();
-        void Create_descriptor_set_layout();
-        void Create_pipeline_layout(VkDescriptorSetLayout _bindless_set_layout);
         VkShaderModule Create_shader_module(const std::string& _spv_file_path) const;
     };
 
