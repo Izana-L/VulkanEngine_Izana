@@ -54,12 +54,13 @@ namespace EngineCore
             Extractor& _extractor,
             CoreTypes::Id                            _camera_entity);
 
-        // Read-only access to timing data (for debug overlays, etc.)
-        const Timer& Get_time() const { return time; }
+        const Platform::Time& Get_time() const { return time; }
 
     private:
 
-        Timer time;
+        // The engine's single clock. Also hosts the named profiler timers
+        // (Start_timer / Scoped_timer) for instrumenting the running loop.
+        Platform::Time time;
     };
 
 } // namespace EngineCore

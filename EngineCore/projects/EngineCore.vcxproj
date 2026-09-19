@@ -15,7 +15,6 @@
     <ClInclude Include="..\code\headers\Engine.hpp" />
     <ClInclude Include="..\code\headers\Engine_Loop.hpp" />
     <ClInclude Include="..\code\headers\Extractor.hpp" />
-    <ClInclude Include="..\code\headers\Time.hpp" />
     <ClInclude Include="..\code\headers\Transform_System.hpp" />
   </ItemGroup>
   <ItemGroup>

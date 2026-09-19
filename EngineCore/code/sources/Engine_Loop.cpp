@@ -29,7 +29,7 @@ namespace EngineCore
         {
             // ── 1. Timing ─────────────────────────────────────────
             time.Update();
-            const float dt = time.delta_seconds;
+            const float dt = time.Get_delta_time();
 
             // ── 2. OS events → GLFW callbacks ─────────────────────
             _window.Poll_events();

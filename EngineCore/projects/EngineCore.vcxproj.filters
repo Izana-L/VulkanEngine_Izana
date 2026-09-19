@@ -24,9 +24,6 @@
     <ClInclude Include="..\code\headers\Extractor.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\code\headers\Time.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="..\code\headers\Engine_Loop.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
