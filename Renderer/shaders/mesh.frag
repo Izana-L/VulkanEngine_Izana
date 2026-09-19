@@ -14,7 +14,8 @@ struct Light
     float inner_angle;
     float outer_angle;
     int   type;                    // 0 = directional, 1 = point, 2 = spot
-    float _padding[2];
+    float _padding0;
+    float _padding1;
 };
 
 // set 0, binding 0. Espejo de Frame_UBO en Frame_Data.hpp.

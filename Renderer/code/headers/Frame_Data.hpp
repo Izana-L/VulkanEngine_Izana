@@ -42,7 +42,8 @@ namespace Renderer_System
         float            inner_angle;
         float            outer_angle;
         int32_t          type;            // 0=directional, 1=point, 2=spot
-        float            _padding[2];     // hasta 64 = multiplo de 16 (std140)
+        float            _padding0;      
+        float            _padding1;      
     };
 
     // Frame_UBO: per-frame uniform data uploaded to the GPU each frame.
