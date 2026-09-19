@@ -47,6 +47,8 @@ namespace ResourceManager
         Resource_Manager(Resource_Manager&&) = default;
         Resource_Manager& operator=(Resource_Manager&&) = default;
 
+
+        static constexpr uint32_t INVALID_GPU_ID = std::numeric_limits<uint32_t>::max();
         // =========================================================
         // Mesh — file
         // =========================================================
@@ -91,10 +93,6 @@ namespace ResourceManager
         // =========================================================
         // Internal types
         // =========================================================
-
-        static constexpr uint32_t INVALID_GPU_ID =
-            std::numeric_limits<uint32_t>::max();
-
         struct Mesh_Entry
         {
             CoreTypes::MeshData data;

@@ -327,8 +327,30 @@ namespace Renderer_System
         Frame_UBO ubo{};
         ubo.view = _packet.view.view;
         ubo.projection = _packet.view.projection;
-        std::memcpy(frame.uniform_mapped_ptr, &ubo, sizeof(ubo));
+        ubo.camera_position = _packet.view.camera_position;
 
+        const uint32_t packet_lights = static_cast<uint32_t>(_packet.lights.size());
+        const uint32_t light_count = (packet_lights > MAX_LIGHTS) ? MAX_LIGHTS : packet_lights;
+
+        ubo.light_count = static_cast<int32_t>(light_count);
+
+       
+        for (uint32_t i = 0; i < light_count; ++i)
+        {
+            const CoreTypes::GPU_Light& src = _packet.lights[i];
+            Light_UBO& dst = ubo.lights[i];
+
+            dst.position_or_direction = src.position_or_direction;
+            dst.intensity = src.intensity;
+            dst.color = src.color;
+            dst.range = src.range;
+            dst.spot_direction = src.spot_direction;
+            dst.inner_angle = src.inner_angle;
+            dst.outer_angle = src.outer_angle;
+            dst.type = static_cast<int32_t>(src.type);
+        }
+
+        std::memcpy(frame.uniform_mapped_ptr, &ubo, sizeof(ubo));
         // ── Reset fence just before submit (not before acquire) ───
         vkResetFences(dev, 1, &frame.in_flight_fence);
 

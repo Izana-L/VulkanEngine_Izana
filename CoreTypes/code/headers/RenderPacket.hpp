@@ -71,6 +71,7 @@ namespace CoreTypes
         MathLib::Vector3 position_or_direction;
         float            intensity = 1.0f;
         MathLib::Vector3 color;
+        MathLib::Vector3 spot_direction = { 0.0f, 0.0f, -1.0f };
         uint8_t          type = 0;   // 0=directional, 1=point, 2=spot
         float            range = 0.0f;
         float            inner_angle = 0.0f;

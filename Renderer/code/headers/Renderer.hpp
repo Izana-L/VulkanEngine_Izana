@@ -231,6 +231,9 @@ namespace Renderer_System
         // Thread-safety: not thread-safe — call from the main thread during
         // loading, not during rendering.
         Upload_Batch_Result Upload_batch(const Upload_Batch& _batch);
+
+
+        uint8_t Get_opaque_pipeline_id() const { return opaque_pipeline_id; }
         // =========================================================
         // Render
         // =========================================================

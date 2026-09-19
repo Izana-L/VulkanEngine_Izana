@@ -32,44 +32,48 @@ namespace EngineCore
 
     void Transform_System::Unregister(CoreTypes::Id _entity, ECS::World& _world)
     {
-        assert(CoreTypes::Is_valid(_entity) &&
-            "Transform_System::Unregister: invalid entity id");
+        assert(CoreTypes::Is_valid(_entity) && "Transform_System::Unregister: invalid entity id");
+            
+        assert(children.find(_entity) != children.end() && "Transform_System::Unregister: entity was never registered ");
 
-        ECS::Transform_Component* transform =
-            _world.Try_get_component<ECS::Transform_Component>(_entity);
+        ECS::Transform_Component* transform = _world.Try_get_component<ECS::Transform_Component>(_entity);
 
-        // Remove from parent's children list or from roots.
         if (transform && CoreTypes::Is_valid(transform->parent))
         {
-            auto& siblings = children[transform->parent];
-            siblings.erase(
-                std::remove(siblings.begin(), siblings.end(), _entity),
-                siblings.end());
+            auto parent_it = children.find(transform->parent);
+            if (parent_it != children.end())
+            {
+                auto& siblings = parent_it->second;
+                siblings.erase(std::remove(siblings.begin(), siblings.end(), _entity),siblings.end());
+            }
         }
         else
         {
-            roots.erase(
-                std::remove(roots.begin(), roots.end(), _entity),
-                roots.end());
+            roots.erase(std::remove(roots.begin(), roots.end(), _entity),roots.end());
         }
 
-        // Promote this entity's children to roots.
+        // ── Sus hijos pasan a ser raices ─────────────────────────
         auto it = children.find(_entity);
         if (it != children.end())
         {
             for (CoreTypes::Id child : it->second)
             {
-                ECS::Transform_Component* child_transform =
-                    _world.Try_get_component<ECS::Transform_Component>(child);
+                ECS::Transform_Component* child_transform = _world.Try_get_component<ECS::Transform_Component>(child);
+
                 if (child_transform)
+                {
                     child_transform->parent = CoreTypes::INVALID_ID;
+                    child_transform->dirty = true;
+                }
 
                 roots.push_back(child);
             }
             children.erase(it);
         }
 
-       
+        _world.Remove_component<ECS::Transform_Component>(_entity);
+
+        Rebuild_and_apply_order(_world);
     }
 
     // =========================================================
@@ -145,41 +149,29 @@ namespace EngineCore
 
     void Transform_System::Update(ECS::World& _world)
     {
-        // The storage is already in parent-before-child order.
-        // One forward pass is enough: when we reach a child, its parent
-        // has already been processed and its world_matrix is up to date.
+       
+        moved_this_frame.clear();
+
         _world.Each<ECS::Transform_Component>([&](ECS::Entity entity, ECS::Transform_Component& transform)
         {
-            // Propagate dirty from parent.
-            if (CoreTypes::Is_valid(transform.parent))
-            {
-                ECS::Transform_Component* parent_t =
-                    _world.Try_get_component<ECS::Transform_Component>(
-                        transform.parent);
-                if (parent_t && parent_t->dirty)
-                    transform.dirty = true;
-            }
+                const bool has_parent = CoreTypes::Is_valid(transform.parent);
 
-            if (!transform.dirty) return;
+                
+                const ECS::Transform_Component* parent_t = has_parent ? _world.Try_get_component<ECS::Transform_Component>(transform.parent) : nullptr;
 
-            Compute_local_matrix(transform);
+               
+                const bool parent_moved = has_parent && moved_this_frame.count(transform.parent) != 0;
 
-            if (CoreTypes::Is_valid(transform.parent))
-            {
-                ECS::Transform_Component* parent_t =
-                    _world.Try_get_component<ECS::Transform_Component>(
-                        transform.parent);
+                if (!transform.dirty && !parent_moved) return;
 
-                transform.world_matrix = parent_t
-                    ? parent_t->world_matrix * transform.local_matrix
-                    : transform.local_matrix;
-            }
-            else
-            {
-                transform.world_matrix = transform.local_matrix;
-            }
+                Compute_local_matrix(transform);
 
-            transform.dirty = false;
+                transform.world_matrix = parent_t ? parent_t->world_matrix * transform.local_matrix : transform.local_matrix;
+                    
+                    
+
+                transform.dirty = false;
+                moved_this_frame.insert(entity);
         });
     }
 

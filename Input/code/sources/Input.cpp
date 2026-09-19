@@ -41,16 +41,21 @@ namespace Input_System
             });
     }
 
+    
+
+    void Input::Begin_frame()
+    {
+       
+        previous_keys = current_keys;
+        previous_buttons = current_buttons;
+    }
+
     // =========================================================
     // Update — call once per frame after Poll_events()
     // =========================================================
 
     void Input::Update()
     {
-        // Snapshot: current becomes previous.
-        previous_keys = current_keys;
-        previous_buttons = current_buttons;
-
         // Transfer accumulated mouse delta to the readable fields,
         // then reset the accumulators for the next frame.
         // This mirrors the scroll pattern: accumulate during Poll_events(),
@@ -239,7 +244,9 @@ namespace Input_System
         if (key == Key::Unknown) return;
 
         const size_t idx = static_cast<size_t>(key);
-        current_keys.keys[idx] = (_glfw_action == GLFW_PRESS);
+
+      
+        current_keys.keys[idx] = (_glfw_action != GLFW_RELEASE);
     }
 
     void Input::Handle_mouse_button(int _glfw_button, int _glfw_action)
@@ -248,7 +255,7 @@ namespace Input_System
         if (static_cast<size_t>(btn) >= BTN_COUNT) return;
 
         current_buttons.buttons[static_cast<size_t>(btn)] =
-            (_glfw_action == GLFW_PRESS);
+            (_glfw_action != GLFW_RELEASE);
     }
 
     void Input::Handle_mouse_move(double _xpos, double _ypos)

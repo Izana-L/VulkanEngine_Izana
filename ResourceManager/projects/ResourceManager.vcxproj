@@ -93,7 +93,6 @@
     <ClCompile Include="..\code\sources\Image_Loader.cpp" />
     <ClCompile Include="..\code\sources\Mesh_Loader.cpp" />
     <ClCompile Include="..\code\sources\Primitive_Builder.cpp" />
-    <ClCompile Include="..\code\sources\ResourceManager_lib.cpp" />
     <ClCompile Include="..\code\sources\Resource_Manager.cpp" />
   </ItemGroup>
   <ItemGroup>

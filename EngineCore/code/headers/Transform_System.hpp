@@ -4,6 +4,7 @@
 #include <Id.hpp>
 
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace ECS { class World; }
@@ -103,11 +104,14 @@ namespace EngineCore
         // Data
         // =========================================================
 
-        // Adjacency list: entity → direct children.
+        // Adjacency list: entity  direct children.
         std::unordered_map<CoreTypes::Id, std::vector<CoreTypes::Id>> children;
 
         // Root entities (parent == INVALID_ID).
         std::vector<CoreTypes::Id> roots;
+
+       
+        std::unordered_set<CoreTypes::Id> moved_this_frame;
     };
 
 } // namespace EngineCore

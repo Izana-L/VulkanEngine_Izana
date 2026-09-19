@@ -15,9 +15,6 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\code\sources\ResourceManager_lib.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="..\code\sources\Image_Loader.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

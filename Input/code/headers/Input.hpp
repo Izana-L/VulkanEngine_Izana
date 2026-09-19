@@ -38,7 +38,7 @@ namespace Input_System
         // =========================================================
         // Frame update
         // =========================================================
-
+        void Begin_frame();
         // Must be called once per frame AFTER Poll_events() and BEFORE
         // any game code queries input state.
         // Swaps current/previous snapshots and resets per-frame data

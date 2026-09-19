@@ -6,7 +6,7 @@
 #include <Light_Component.hpp>
 #include <Camera_Component.hpp>
 #include <Resource_Manager.hpp>
-
+#include <iostream>
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
@@ -24,7 +24,7 @@ namespace EngineCore
         // =========================================================
         // Reset packet
         // =========================================================
-
+       
         _out_packet.opaque_items.clear();
         _out_packet.transparent_items.clear();
         _out_packet.lights.clear();
@@ -122,16 +122,12 @@ namespace EngineCore
                 // Skip entities with no mesh assigned.
                 if (!mesh_comp.mesh.Is_valid()) return;
 
-                // Resolve Asset_Handle → gpu_id.
-                // Skip silently if not registered yet (asset not uploaded).
-                uint32_t gpu_id = 0;
-                try
+               
+                const uint32_t gpu_id = _resources.Get_gpu_id(mesh_comp.mesh);
+
+                if (gpu_id == ResourceManager::Resource_Manager::INVALID_GPU_ID)
                 {
-                    gpu_id = _resources.Get_gpu_id(mesh_comp.mesh);
-                }
-                catch (...)
-                {
-                    return;
+                    return;   
                 }
 
                 // Store the world matrix and record its index.
@@ -193,7 +189,7 @@ namespace EngineCore
                 switch (light_comp.type)
                 {
                 case ECS::Light_Component::Type::Directional:
-                    // Direction = forward vector of the light's transform.
+                    // Hacia donde APUNTA la luz. El shader la niega para su L.
                     gpu_light.position_or_direction = transform.Forward();
                     gpu_light.type = 0;
                     break;
@@ -205,6 +201,7 @@ namespace EngineCore
 
                 case ECS::Light_Component::Type::Spot:
                     gpu_light.position_or_direction = transform.position;
+                    gpu_light.spot_direction = transform.Forward();
                     gpu_light.type = 2;
                     break;
                 }
@@ -212,6 +209,7 @@ namespace EngineCore
                 _out_packet.lights.push_back(gpu_light);
             });
 
+        
         return true;
     }
 

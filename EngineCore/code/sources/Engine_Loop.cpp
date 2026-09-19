@@ -31,6 +31,8 @@ namespace EngineCore
             time.Update();
             const float dt = time.Get_delta_time();
 
+            _input.Begin_frame();
+
             // ── 2. OS events → GLFW callbacks ─────────────────────
             _window.Poll_events();
 
