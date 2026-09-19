@@ -68,6 +68,8 @@ namespace Renderer_System
         assert(_id < by_id.size() &&
             "Pipeline_Registry::Get_by_id: id was never handed out by Get_id");
 
+        if (_id >= by_id.size()) return VK_NULL_HANDLE;
+
         return by_id[_id];
     }
     // ---------- Warm_up ----------

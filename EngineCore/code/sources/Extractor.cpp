@@ -19,6 +19,7 @@ namespace EngineCore
     bool Extractor::Extract(const ECS::World& _world,
         const ResourceManager::Resource_Manager& _resources,
         float                                     _aspect_ratio,
+        uint8_t                                   _opaque_pipeline_id,
         CoreTypes::RenderPacket& _out_packet)
     {
         // =========================================================

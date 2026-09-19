@@ -61,6 +61,11 @@ namespace Renderer_System
         Light_UBO        lights[MAX_LIGHTS];
     };
 
+
+    static_assert(sizeof(Light_UBO) == 64, "Light_UBO rompe el layout std140");
+    static_assert(offsetof(Light_UBO, color) == 16, "Light_UBO rompe el layout std140");
+    static_assert(offsetof(Light_UBO, spot_direction) == 32, "Light_UBO rompe el layout std140");
+    static_assert(offsetof(Frame_UBO, lights) == 144, "Frame_UBO rompe el layout std140");
     // Frame_Data: all Vulkan resources that must exist independently for
     // each frame-in-flight slot.
     //

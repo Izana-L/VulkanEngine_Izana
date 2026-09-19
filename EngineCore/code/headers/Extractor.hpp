@@ -44,9 +44,9 @@ namespace EngineCore
         //   from the swapchain extent. The Camera_Component's aspect_ratio
         //   field overrides this if non-zero.
         // Returns false if no active camera exists (caller skips Render).
-        bool Extract(const ECS::World& _world,const ResourceManager::Resource_Manager& _resources,
-                     float _aspect_ratio, CoreTypes::RenderPacket& _out_packet);
-
+        bool Extract(const ECS::World& _world, const ResourceManager::Resource_Manager& _resources,
+            float _aspect_ratio, uint8_t _opaque_pipeline_id,
+            CoreTypes::RenderPacket& _out_packet);
     private:
 
         // Per-frame transform buffer. Cleared and refilled each Extract().

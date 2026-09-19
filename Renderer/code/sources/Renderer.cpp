@@ -511,7 +511,14 @@ namespace Renderer_System
 
             if (item_pipeline_id != bound_pipeline_id)
             {
-                vkCmdBindPipeline(frame.command_buffer,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline_registry.Get_by_id(item_pipeline_id));
+                const VkPipeline pipeline = pipeline_registry.Get_by_id(item_pipeline_id);
+
+               
+                if (pipeline == VK_NULL_HANDLE) continue;
+
+                vkCmdBindPipeline(frame.command_buffer,
+                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    pipeline);
 
                 bound_pipeline_id = item_pipeline_id;
                 ++bind_count;
