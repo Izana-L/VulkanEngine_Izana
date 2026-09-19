@@ -55,11 +55,11 @@ namespace EngineCore
             CoreTypes::Id                            _camera_entity);
 
         // Read-only access to timing data (for debug overlays, etc.)
-        const Time& Get_time() const { return time; }
+        const Timer& Get_time() const { return time; }
 
     private:
 
-        Time time;
+        Timer time;
     };
 
 } // namespace EngineCore

@@ -17,7 +17,7 @@ namespace EngineCore
     //   float dt      = time.delta_seconds;   // frame delta
     //   double elapsed = time.total_seconds;  // time since engine start
     //   float fps      = time.fps;            // smoothed FPS
-    struct Time
+    struct Timer
     {
         // =========================================================
         // Per-frame data (updated every frame)
@@ -52,7 +52,7 @@ namespace EngineCore
         // Constructor
         // =========================================================
 
-        Time()
+        Timer()
             : delta_seconds(0.0f)
             , total_seconds(0.0)
             , fps(0.0f)
