@@ -1,9 +1,9 @@
 #pragma once
 
 #include <Id.hpp>
-
+#include <Input.hpp>
 namespace ECS { class World; }
-namespace Input_System { class Input; }
+
 
 namespace EngineCore
 {

@@ -93,13 +93,14 @@ namespace EngineCore
 
         // ── Sphere primitive ───────────────────────────────────
         // Generate and upload a unit sphere (16 segments, 8 rings).
-        ResourceManager::Primitive_Desc sphere_desc;
-        sphere_desc.type = ResourceManager::Primitive_Type::Sphere;
-        sphere_desc.param1 = 16;   // segments
-        sphere_desc.param2 = 8;    // rings
+        // ── Sphere primitive ───────────────────────────────────
+        // Generate and upload a unit sphere (16 segments, 8 rings).
+        // Built through the named constructor: it takes exactly the two
+        // parameters a sphere reads, so no value can end up in a field
+        // the generator ignores (which would cache the same mesh twice).
+        const ResourceManager::Primitive_Desc sphere_desc = ResourceManager::Primitive_Desc::Make_sphere(16, 8);   // segments, rings
 
-        CoreTypes::Asset_Handle sphere_handle =
-            resources.Create_primitive(sphere_desc);
+        CoreTypes::Asset_Handle sphere_handle = resources.Create_primitive(sphere_desc);
 
         // Upload to GPU and register the gpu_id.
         const uint32_t sphere_gpu_id = renderer.Upload_mesh(resources.Get_mesh_data(sphere_handle));

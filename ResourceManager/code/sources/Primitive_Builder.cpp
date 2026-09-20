@@ -1,5 +1,6 @@
 #include <Primitive_Builder.hpp>
 #include <MathConstants.hpp>
+#include <cassert> 
 #include <Vector.hpp>
 #include <glm/glm.hpp>
 #include <cmath>
@@ -13,6 +14,15 @@ namespace ResourceManager::Primitive_Builder
     {
         using Vertex = CoreTypes::Vertex_Static_Mesh;
         using Mesh = CoreTypes::MeshData;
+        uint32_t Clamp_param(Primitive_Type _type, uint8_t _index, uint16_t _value)
+        {
+            const Param_Range range = Spec_of(_type).range[_index];
+
+            if (_value < range.min) return range.min;
+            if (_value > range.max) return range.max;
+
+            return _value;
+        }
 
         // =========================================================
         // Tangent computation
@@ -279,7 +289,7 @@ namespace ResourceManager::Primitive_Builder
     {
         Mesh mesh;
 
-        const uint32_t divs = (_subdivisions == 0) ? 1u : _subdivisions;
+        const uint32_t divs = Clamp_param(Primitive_Type::Plane, 0, _subdivisions);
         const uint32_t verts_per_side = divs + 1;
         const MathLib::Vector3 n{ 0, 1, 0 };
 
@@ -330,9 +340,8 @@ namespace ResourceManager::Primitive_Builder
     {
         Mesh mesh;
 
-        const uint32_t segments = (_segments < 3) ? 3u : _segments;
-        const uint32_t rings = (_rings < 2) ? 2u : _rings;
-
+        const uint32_t segments = Clamp_param(Primitive_Type::Sphere, 0, _segments);
+        const uint32_t rings = Clamp_param(Primitive_Type::Sphere, 1, _rings);
         // Vertices: (rings+1) latitude bands × (segments+1) longitude.
         for (uint32_t r = 0; r <= rings; ++r)
         {
@@ -387,8 +396,7 @@ namespace ResourceManager::Primitive_Builder
     {
         Mesh mesh;
 
-        const uint32_t segments = (_segments < 3) ? 3u : _segments;
-
+        const uint32_t segments = Clamp_param(Primitive_Type::Cone, 0, _segments);
         // Side: apex duplicated per segment for correct normals.
         for (uint32_t s = 0; s < segments; ++s)
         {
@@ -451,7 +459,7 @@ namespace ResourceManager::Primitive_Builder
     {
         Mesh mesh;
 
-        const uint32_t segments = (_segments < 3) ? 3u : _segments;
+        const uint32_t segments = Clamp_param(Primitive_Type::Cylinder, 0, _segments);
 
         // Side wall.
         for (uint32_t s = 0; s <= segments; ++s)
@@ -527,8 +535,8 @@ namespace ResourceManager::Primitive_Builder
     {
         Mesh mesh;
 
-        const uint32_t segments = (_segments < 3) ? 3u : _segments;  // around the main ring
-        const uint32_t rings = (_rings < 3) ? 3u : _rings;     // around the tube
+        const uint32_t segments = Clamp_param(Primitive_Type::Torus, 0, _segments);  // around the main ring
+        const uint32_t rings = Clamp_param(Primitive_Type::Torus, 1, _rings);
 
         const float main_radius = 0.75f;   // so outer radius = 1.0
         const float tube_radius = 0.25f;
@@ -588,8 +596,8 @@ namespace ResourceManager::Primitive_Builder
     {
         Mesh mesh;
 
-        const uint32_t segments = (_segments < 3) ? 3u : _segments;
-        const uint32_t rings = (_rings < 2) ? 2u : _rings;   // per hemisphere
+        const uint32_t segments = Clamp_param(Primitive_Type::Capsule, 0, _segments);
+        const uint32_t rings = Clamp_param(Primitive_Type::Capsule, 1, _rings);
 
         const float radius = 1.0f;
         const float half_cylinder = 0.5f;   // cylinder spans -0.5..0.5 in Y
@@ -678,6 +686,12 @@ namespace ResourceManager::Primitive_Builder
 
     CoreTypes::MeshData Build(const Primitive_Desc& _desc)
     {
+        assert(_desc.Is_canonical() &&
+            "Primitive_Builder::Build: non-canonical Primitive_Desc — a parameter is out "
+            "of range, or set on a type that ignores it (e.g. Cube with param1 != 0). "
+            "Build it with Primitive_Desc::Make_cube() / Make_sphere(s, r) / ..., or call "
+            "Canonical() first.");
+        const Primitive_Desc desc = _desc.Canonical();
         switch (_desc.type)
         {
         case Primitive_Type::Cube:        return Build_cube();

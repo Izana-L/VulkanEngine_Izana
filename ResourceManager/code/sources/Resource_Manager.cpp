@@ -118,29 +118,63 @@ namespace ResourceManager
     // =========================================================
     // Create_primitive — generated, deduplicated
     // =========================================================
-
-    CoreTypes::Asset_Handle Resource_Manager::Create_primitive(const Primitive_Desc& _desc)  
+    namespace
     {
-        const uint64_t key = _desc.To_key();
+        // Readable source string for a primitive entry, e.g.
+        // "primitive:sphere(16,8)". Stored on the Mesh_Entry and printed
+        // in the cache logs: when two entries look like duplicates, the
+        // descriptor is what tells you why.
+        std::string Describe(const Primitive_Desc& _desc)
+        {
+            std::string source = "primitive:";
+            source += Type_name(_desc.type);
+
+            const uint8_t used = Spec_of(_desc.type).used_count;
+            if (used == 0)
+                return source;
+
+            source += "(" + std::to_string(_desc.param1);
+            if (used > 1) source += "," + std::to_string(_desc.param2);
+            if (used > 2) source += "," + std::to_string(_desc.param3);
+            source += ")";
+
+            return source;
+        }
+    }
+    CoreTypes::Asset_Handle Resource_Manager::Create_primitive(const Primitive_Desc& _desc)
+    {
+        // Descriptors that build the same mesh must reach the cache as the
+        // same descriptor, or the same geometry gets stored twice under two
+        // keys ({Cube, 1, 999} and {Cube, 23, 214} are both just a cube).
+        // The assert reports the mistake to the caller in a debug build;
+        // canonicalizing keeps the cache correct in every build.
+        assert(_desc.Is_canonical() &&
+            "Create_primitive: non-canonical Primitive_Desc — a parameter is out of range, "
+            "or set on a type that ignores it (e.g. Cube with param1 != 0). Build it with "
+            "Primitive_Desc::Make_cube() / Make_sphere(s, r) / ..., or call Canonical() "
+            "first; Validate() reports which rule was broken.");
+
+        const Primitive_Desc desc = _desc.Canonical();
+        const uint64_t       key = desc.To_key();
 
         // Primitive keys are collision-free by construction, but we still
         // store them in the same cache map keyed by the structured key.
         auto it = mesh_cache.find(key);
         if (it != mesh_cache.end() && !it->second.empty())
         {
-            std::cout << "[Resource_Manager] Primitive cache hit (key " << key << ")\n";
+            std::cout << "[Resource_Manager] Primitive cache hit (" << Describe(desc) << ")\n";
             return it->second.front();
         }
 
         // Cache miss — generate.
-        CoreTypes::MeshData mesh_data = Primitive_Builder::Build(_desc);
+        CoreTypes::MeshData mesh_data = Primitive_Builder::Build(desc);
 
-        const std::string source = "primitive:" + std::to_string(key);
-        CoreTypes::Asset_Handle handle = Register_mesh(std::move(mesh_data), source);
+        CoreTypes::Asset_Handle handle = Register_mesh(std::move(mesh_data), Describe(desc));
 
         mesh_cache[key] = { handle };
 
-        std::cout << "[Resource_Manager] Generated and cached primitive (key " << key << ")\n";
+        std::cout << "[Resource_Manager] Generated and cached primitive ("
+            << Describe(desc) << ")\n";
 
         return handle;
     }

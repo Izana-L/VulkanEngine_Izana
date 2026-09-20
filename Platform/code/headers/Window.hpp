@@ -45,7 +45,9 @@ namespace Platform {
 
         bool Should_close() const;
         void Poll_events();
-
+        // Blocks until an OS event arrives. For idle states (minimized)
+        // where polling in a loop would just burn a core.
+        void Wait_events();
         // =========================================================
         // Size
         // =========================================================

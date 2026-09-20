@@ -74,8 +74,7 @@ namespace ECS
         // Constructor
         // =========================================================
 
-        World()
-            : entity_masks(std::make_unique< std::array< Entity_Mask, MAX_ENTITIES > >()),
+        World(): entity_masks(std::make_unique< std::array< Entity_Mask, MAX_ENTITIES > >()),
             alive_flags(std::make_unique< std::array< bool, MAX_ENTITIES > >()),alive_entity_count(0)
         {
             // entity_masks: bitsets default-initialize to all zeros
@@ -247,7 +246,7 @@ namespace ECS
         template< typename COMPONENT_TYPE, typename SELF >
         static auto& Get_component_impl(SELF& _self, Entity _entity)
         {
-            assert(_self.Is_valid_entity(_entity) && "Get_component() called with INVALID_ENTITY");
+            assert(Is_valid_entity(_entity) && "Get_component() called with INVALID_ENTITY");
             assert(_self.Is_alive(_entity) && "Get_component() called on a destroyed entity");
             assert(_self.template Has_component< COMPONENT_TYPE >(_entity) &&
                 "Get_component() called for an entity without this component");
@@ -273,10 +272,9 @@ namespace ECS
         template< typename COMPONENT_TYPE, typename SELF >
         static auto* Try_get_component_impl(SELF& _self, Entity _entity)
         {
-            assert(_self.Is_valid_entity(_entity) && "Try_get_component() called with INVALID_ENTITY");
+            assert(Is_valid_entity(_entity) && "Try_get_component() called with INVALID_ENTITY");
 
-            using Result = std::conditional_t< std::is_const_v< SELF >,
-                const COMPONENT_TYPE, COMPONENT_TYPE >;
+            using Result = std::conditional_t< std::is_const_v< SELF >, const COMPONENT_TYPE, COMPONENT_TYPE >;
 
             if (!_self.template Has_component< COMPONENT_TYPE >(_entity)) return (Result*)nullptr;
 
