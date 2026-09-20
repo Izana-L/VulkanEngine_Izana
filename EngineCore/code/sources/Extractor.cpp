@@ -140,15 +140,12 @@ namespace EngineCore
                 const MathLib::Vector3 delta =
                     transform.position - cam_pos;
                 const float depth = glm::dot(delta, cam_forward);
-                const uint32_t depth_bits =
-                    *reinterpret_cast<const uint32_t*>(&depth);
+                const uint32_t depth_bits = CoreTypes::Depth_to_sortable_bits(depth);
 
                 // Pack sort key: material=0, pipeline=0, mesh, depth.
-                const uint64_t sort_key =
-                    CoreTypes::Make_sort_key(0, 0,
-                        static_cast<uint16_t>(gpu_id & 0xFFFF),
-                        depth_bits);
-
+                const uint64_t sort_key = CoreTypes::Make_sort_key(_opaque_pipeline_id, 0, static_cast<uint16_t>(gpu_id & 0xFFFF),depth_bits);
+                        
+        
                 CoreTypes::Draw_Item item{};
                 item.mesh_gpu_id = gpu_id;
                 item.material_id = 0;       // default material — Fase 2

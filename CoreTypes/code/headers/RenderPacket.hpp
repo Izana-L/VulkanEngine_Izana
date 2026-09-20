@@ -2,7 +2,7 @@
 
 #include <Vector.hpp>
 #include <Matrix.hpp>
-
+#include <bit>
 #include <cstdint>
 #include <vector>
 
@@ -122,8 +122,8 @@ namespace CoreTypes
     // Call this from the extract when building each Draw_Item.
     // depth_bits: reinterpret_cast<uint32_t>(depth) for opaques,
     //             ~reinterpret_cast<uint32_t>(depth) for transparents.
-    inline uint64_t Make_sort_key(uint8_t  _material_id,
-        uint8_t  _pipeline_id,
+    inline uint64_t Make_sort_key(uint8_t  _pipeline_id,
+        uint8_t  _material_id,
         uint16_t _mesh_gpu_id,
         uint32_t _depth_bits)
     {
@@ -142,5 +142,15 @@ namespace CoreTypes
     {
         return static_cast<uint8_t>(_sort_key >> 56);
     }
+    inline constexpr uint32_t Depth_to_sortable_bits(float _depth)
+    {
+        const uint32_t bits = std::bit_cast<uint32_t>(_depth);
+
+        return (bits & 0x80000000u) ? ~bits : (bits | 0x80000000u);
+    }
+    static_assert(Depth_to_sortable_bits(-100.0f) < Depth_to_sortable_bits(-2.0f));
+    static_assert(Depth_to_sortable_bits(-2.0f) < Depth_to_sortable_bits(0.0f));
+    static_assert(Depth_to_sortable_bits(0.0f) < Depth_to_sortable_bits(2.0f));
+    static_assert(Depth_to_sortable_bits(2.0f) < Depth_to_sortable_bits(100.0f));
 
 } // namespace CoreTypes
