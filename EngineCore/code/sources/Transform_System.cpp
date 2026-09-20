@@ -99,10 +99,15 @@ namespace EngineCore
         // ── Remove from old parent or roots ───────────────────────
         if (CoreTypes::Is_valid(old_parent))
         {
-            auto& siblings = children[old_parent];
-            siblings.erase(
-                std::remove(siblings.begin(), siblings.end(), _child),
-                siblings.end());
+            
+            auto parent_it = children.find(old_parent);
+            if (parent_it != children.end())
+            {
+                auto& siblings = parent_it->second;
+                siblings.erase(
+                    std::remove(siblings.begin(), siblings.end(), _child),
+                    siblings.end());
+            }
         }
         else
         {
@@ -111,19 +116,23 @@ namespace EngineCore
                 roots.end());
         }
 
-        // ── Attach to new parent or roots ─────────────────────────
-        child_transform->parent = _parent;
+        
 
         if (CoreTypes::Is_valid(_parent))
         {
-            assert(children.find(_parent) != children.end() && "Transform_System::Set_parent: parent not registered");
-            children[_parent].push_back(_child);
+            auto parent_it = children.find(_parent);
+            assert(parent_it != children.end() && "Transform_System::Set_parent: parent not registered");
+
+            if (parent_it == children.end()) return;  
+
+            parent_it->second.push_back(_child);
         }
         else
         {
             roots.push_back(_child);
         }
-
+        // ── Attach to new parent or roots ─────────────────────────
+        child_transform->parent = _parent;
         child_transform->dirty = true;
 
         // Hierarchy changed → reorder the storage so the parent-before-child

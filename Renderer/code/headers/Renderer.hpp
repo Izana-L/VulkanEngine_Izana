@@ -109,6 +109,10 @@ namespace Renderer_System
         // and hash them on every frame.
         Pipeline_Config        opaque_config;
         uint8_t                opaque_pipeline_id = 0;
+        // Last bind count printed, so the log only speaks when it changes.
+        // A member, not a function-level static: a static would be shared
+        // by every Renderer in the process and is not reentrant.
+        uint32_t               last_reported_binds = 0xFFFFFFFF;
         // A single value for now — there's one pipeline and one opaque batch.
         // Becomes per-batch once draws are sorted by pipeline.
         Raster_State           raster_state;

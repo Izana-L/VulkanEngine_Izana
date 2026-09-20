@@ -35,7 +35,12 @@ namespace EngineCore
 
             // ── 2. OS events → GLFW callbacks ─────────────────────
             _window.Poll_events();
-
+            if (_window.Is_minimized())
+            {
+                _window.Wait_events();
+                time.Update();     // swallow the paused interval so dt does not spike
+                continue;
+            }
             // ── 3. Input snapshots + named actions ────────────────
             _input.Update();
 

@@ -62,6 +62,7 @@ namespace ResourceManager
         // Because every distinct parameter combination maps to a distinct
         // integer, primitive keys are collision-free by construction —
         // no hashing involved.
+
         uint64_t To_key() const
         {
             constexpr uint64_t PRIMITIVE_DISCRIMINATOR = (uint64_t(1) << 63);

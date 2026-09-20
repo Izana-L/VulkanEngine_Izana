@@ -18,8 +18,19 @@ namespace EngineCore
         ECS::World& _world,
         float         _dt)
     {
-        ECS::Transform_Component* transform =
-            _world.Try_get_component<ECS::Transform_Component>(_camera_entity);
+        if (!ids_resolved)
+        {
+            ids.move_forward = _input.Get_action_id("MoveForward");
+            ids.move_back = _input.Get_action_id("MoveBack");
+            ids.move_right = _input.Get_action_id("MoveRight");
+            ids.move_left = _input.Get_action_id("MoveLeft");
+            ids.move_up = _input.Get_action_id("MoveUp");
+            ids.move_down = _input.Get_action_id("MoveDown");
+            ids.sprint = _input.Get_action_id("Sprint");
+            ids_resolved = true;
+        }
+        ECS::Transform_Component* transform =_world.Try_get_component<ECS::Transform_Component>(_camera_entity);
+            
         if (!transform) return;
 
         // =========================================================
@@ -98,13 +109,12 @@ namespace EngineCore
 
         MathLib::Vector3 movement(0.0f, 0.0f, 0.0f);
 
-        movement += forward * _input.Get_action_value("MoveForward");
-        movement -= forward * _input.Get_action_value("MoveBack");
-        movement += right * _input.Get_action_value("MoveRight");
-        movement -= right * _input.Get_action_value("MoveLeft");
-        movement += world_up * _input.Get_action_value("MoveUp");
-        movement -= world_up * _input.Get_action_value("MoveDown");
-
+        movement += forward * _input.Get_action_value(ids.move_forward);
+        movement -= forward * _input.Get_action_value(ids.move_back);
+        movement += right * _input.Get_action_value(ids.move_right);
+        movement -= right * _input.Get_action_value(ids.move_left);
+        movement += world_up * _input.Get_action_value(ids.move_up);
+        movement -= world_up * _input.Get_action_value(ids.move_down);
         // Normalize so diagonal movement isn't faster than axis-aligned.
         const float length_sq = glm::dot(movement, movement);
         if (length_sq > 1e-6f)
@@ -112,7 +122,7 @@ namespace EngineCore
             movement = glm::normalize(movement);
 
             float speed = move_speed;
-            if (_input.Is_action_down("Sprint"))
+            if (_input.Is_action_down(ids.sprint))
                 speed *= sprint_multiplier;
 
             const MathLib::Vector3 new_position =

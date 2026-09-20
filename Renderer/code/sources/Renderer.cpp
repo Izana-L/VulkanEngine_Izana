@@ -537,7 +537,7 @@ namespace Renderer_System
             mesh.Draw(frame.command_buffer);
         }
 
-        static uint32_t last_reported_binds = 0xFFFFFFFF;
+        
         if (bind_count != last_reported_binds)
         {
             std::cout << "[Renderer] " << bind_count << " pipeline bind(s) for "

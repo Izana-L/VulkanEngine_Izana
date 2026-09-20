@@ -37,7 +37,7 @@ namespace EngineCore
 
         // Search for the Camera_Component with is_active=true and the
         // lowest render_order. Store the winning entity and component.
-        ECS::Entity                     camera_entity = CoreTypes::INVALID_ID;
+       
         const ECS::Camera_Component* camera_comp = nullptr;
         const ECS::Transform_Component* camera_transform = nullptr;
         int                             best_order = std::numeric_limits<int>::max();
@@ -53,7 +53,6 @@ namespace EngineCore
                 if (!t) return;
 
                 best_order = cam.render_order;
-                camera_entity = entity;
                 camera_comp = &cam;
                 camera_transform = t;
             });

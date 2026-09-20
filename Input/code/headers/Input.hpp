@@ -28,7 +28,7 @@ namespace Input_System
     public:
 
         explicit Input(Platform::Window& _window);
-        ~Input() = default;
+        ~Input() ;
 
         Input(const Input&) = delete;
         Input& operator=(const Input&) = delete;
@@ -99,7 +99,17 @@ namespace Input_System
         // 0.0 (inactive) or 1.0 (active) for keyboard/mouse bindings.
         // Returns 0.0 if the action name is not found.
         float Get_action_value(const std::string& _action) const;
+        // Resolves an action name to a stable index, once. Per-frame code
+        // should cache the result and use the overloads below instead of
+        // hashing a string every frame.
+        //
+        // NOTE: Load_actions() rebuilds the table, so any cached index is
+        // invalid afterwards. Today it is only called at startup.
+        static constexpr size_t INVALID_ACTION = ~size_t(0);
 
+        size_t Get_action_id(const std::string& _action) const;
+        float  Get_action_value(size_t _action_id) const;
+        bool   Is_action_down(size_t _action_id) const;
         // Convenience wrappers built on Get_action_value.
         bool  Is_action_down(const std::string& _action) const;
         bool  Was_action_pressed(const std::string& _action) const;

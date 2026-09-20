@@ -8,6 +8,7 @@ namespace Input_System { class Input; }
 namespace EngineCore
 {
 
+
     // Camera_Controller: FPS-style free-flight camera controller.
     //
     // Operates on the Transform_Component of a camera entity (an entity
@@ -65,7 +66,18 @@ namespace EngineCore
         float pitch_limit = 1.553343f;   // 89 degrees in radians
 
     private:
-
+        struct Action_Ids
+        {
+            size_t move_forward = Input_System::Input::INVALID_ACTION;
+            size_t move_back = Input_System::Input::INVALID_ACTION;
+            size_t move_right = Input_System::Input::INVALID_ACTION;
+            size_t move_left = Input_System::Input::INVALID_ACTION;
+            size_t move_up = Input_System::Input::INVALID_ACTION;
+            size_t move_down = Input_System::Input::INVALID_ACTION;
+            size_t sprint = Input_System::Input::INVALID_ACTION;
+        };
+        Action_Ids ids;
+        bool       ids_resolved = false;
         // =========================================================
         // Internal state
         // =========================================================

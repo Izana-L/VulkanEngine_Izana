@@ -75,9 +75,8 @@ namespace ECS
         // =========================================================
 
         World()
-            : alive_entity_count(0),
-            entity_masks(std::make_unique< std::array< Entity_Mask, MAX_ENTITIES > >()),
-            alive_flags(std::make_unique< std::array< bool, MAX_ENTITIES > >())
+            : entity_masks(std::make_unique< std::array< Entity_Mask, MAX_ENTITIES > >()),
+            alive_flags(std::make_unique< std::array< bool, MAX_ENTITIES > >()),alive_entity_count(0)
         {
             // entity_masks: bitsets default-initialize to all zeros
             // alive_flags:  must be explicitly zeroed

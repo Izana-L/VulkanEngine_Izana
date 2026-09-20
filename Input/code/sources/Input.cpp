@@ -41,7 +41,13 @@ namespace Input_System
             });
     }
 
-    
+    Input::~Input()
+    {
+        window.Set_key_callback(nullptr);
+        window.Set_mouse_button_callback(nullptr);
+        window.Set_mouse_move_callback(nullptr);
+        window.Set_scroll_callback(nullptr);
+    }
 
     void Input::Begin_frame()
     {
@@ -213,6 +219,23 @@ namespace Input_System
         auto it = action_index.find(_action);
         if (it == action_index.end()) return 0.0f;
         return actions[it->second].value;
+    }
+    size_t Input::Get_action_id(const std::string& _action) const
+    {
+        auto it = action_index.find(_action);
+        return (it == action_index.end()) ? INVALID_ACTION : it->second;
+    }
+
+    float Input::Get_action_value(size_t _action_id) const
+    {
+        // INVALID_ACTION is ~0, so it fails this test and returns 0 —
+        // same behaviour as the string version with an unknown name.
+        return (_action_id < actions.size()) ? actions[_action_id].value : 0.0f;
+    }
+
+    bool Input::Is_action_down(size_t _action_id) const
+    {
+        return Get_action_value(_action_id) > 0.5f;
     }
 
     bool Input::Is_action_down(const std::string& _action) const
