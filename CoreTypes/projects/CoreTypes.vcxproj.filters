@@ -20,7 +20,7 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\code\headers\fnv.hpp">
+    <ClInclude Include="..\code\headers\Fnv.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\code\headers\Id_Provider.hpp">
@@ -32,10 +32,10 @@
     <ClInclude Include="..\code\headers\Vertex.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\code\headers\Imagedata.hpp">
+    <ClInclude Include="..\code\headers\ImageData.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\code\headers\Meshdata.hpp">
+    <ClInclude Include="..\code\headers\MeshData.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\code\headers\Asset_Handle.hpp">

@@ -1,8 +1,6 @@
-﻿
+﻿#pragma once
 
-#pragma once
-
-#include <fnv.hpp>
+#include <Fnv.hpp>
 
 #define ID(X) FNV(X)
 

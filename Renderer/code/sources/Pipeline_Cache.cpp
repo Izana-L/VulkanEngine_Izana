@@ -1,4 +1,4 @@
-#pragma once
+
 #include <Pipeline_Cache.hpp>
 #include <Vulkan_Utils.hpp>
 #include <Filesystem.hpp>

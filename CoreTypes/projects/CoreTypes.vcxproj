@@ -65,9 +65,11 @@
   </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+    <Import Project="..\..\Game\projects\GlmConfig.props" />
   </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+    <Import Project="..\..\Game\projects\GlmConfig.props" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -150,14 +152,12 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\code\headers\RenderPacket.hpp" />
-  </ItemGroup>
-  <ItemGroup>
     <ClInclude Include="..\code\headers\Asset_Handle.hpp" />
-    <ClInclude Include="..\code\headers\fnv.hpp" />
+    <ClInclude Include="..\code\headers\Fnv.hpp" />
     <ClInclude Include="..\code\headers\Id.hpp" />
     <ClInclude Include="..\code\headers\Id_Provider.hpp" />
-    <ClInclude Include="..\code\headers\Imagedata.hpp" />
-    <ClInclude Include="..\code\headers\Meshdata.hpp" />
+    <ClInclude Include="..\code\headers\ImageData.hpp" />
+    <ClInclude Include="..\code\headers\MeshData.hpp" />
     <ClInclude Include="..\code\headers\Vertex.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

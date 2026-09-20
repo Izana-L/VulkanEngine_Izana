@@ -54,7 +54,28 @@ namespace ResourceManager
 
         return handle;
     }
+    // =========================================================
+    // Register_image — shared entry creation
+    // =========================================================
 
+    CoreTypes::Asset_Handle Resource_Manager::Register_image(CoreTypes::ImageData&& _data, const std::string& _source)
+    {
+        CoreTypes::Id id = image_id_provider.Allocate_id();
+
+        if (id >= static_cast<CoreTypes::Id>(images.size()))
+            images.resize(static_cast<size_t>(id) + 1);
+
+        Image_Entry& entry = images[id];
+        entry.data = std::move(_data);
+        entry.generation++;
+        entry.source = _source;
+
+        CoreTypes::Asset_Handle handle;
+        handle.id = id;
+        handle.generation = entry.generation;
+
+        return handle;
+    }
     // =========================================================
     // Load_mesh — file, deduplicated
     // =========================================================
@@ -177,19 +198,7 @@ namespace ResourceManager
 
         CoreTypes::ImageData image_data = Image_Loader::Load(_path, _format);
 
-        CoreTypes::Id id = image_id_provider.Allocate_id();
-
-        if (id >= static_cast<CoreTypes::Id>(images.size()))
-            images.resize(static_cast<size_t>(id) + 1);
-
-        Image_Entry& entry = images[id];
-        entry.data = std::move(image_data);
-        entry.generation++;
-        entry.source = _path;
-
-        CoreTypes::Asset_Handle handle;
-        handle.id = id;
-        handle.generation = entry.generation;
+        CoreTypes::Asset_Handle handle = Register_image(std::move(image_data), _path);
 
         image_cache[key] = handle;
 

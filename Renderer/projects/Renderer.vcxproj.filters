@@ -63,9 +63,6 @@
     <ClCompile Include="..\code\sources\Sampler_Cache.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\code\headers\Bindless_Registry.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="..\code\sources\Pipeline_Cache.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -73,6 +70,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\code\sources\Pipeline_Registry.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code\sources\Bindless_Registry.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

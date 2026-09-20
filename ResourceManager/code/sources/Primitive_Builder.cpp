@@ -1,5 +1,7 @@
 #include <Primitive_Builder.hpp>
 #include <MathConstants.hpp>
+#include <Vector.hpp>
+#include <glm/glm.hpp>
 #include <cmath>
 #include <cstdint>
 #include <stdexcept>
@@ -9,8 +11,6 @@ namespace ResourceManager::Primitive_Builder
 
     namespace
     {
-        
-
         using Vertex = CoreTypes::Vertex_Static_Mesh;
         using Mesh = CoreTypes::MeshData;
 
@@ -32,6 +32,12 @@ namespace ResourceManager::Primitive_Builder
             std::vector<MathLib::Vector3> bitan_accum(vertex_count, { 0.0f, 0.0f, 0.0f });
 
             // Accumulate tangent/bitangent contributions per triangle.
+                        // Accumulate tangent/bitangent contributions per triangle.
+            //
+            // Solves the 2x2 system that relates the triangle's 3D edges to
+            // its UV deltas:   e1 = T*du1 + B*dv1
+            //                  e2 = T*du2 + B*dv2
+            // whose inverse is the 1/denom factor below.
             for (size_t i = 0; i + 2 < _mesh.indices.size(); i += 3)
             {
                 const uint32_t i0 = _mesh.indices[i + 0];
@@ -42,42 +48,25 @@ namespace ResourceManager::Primitive_Builder
                 const Vertex& v1 = _mesh.vertices[i1];
                 const Vertex& v2 = _mesh.vertices[i2];
 
-                const float e1x = v1.position.x - v0.position.x;
-                const float e1y = v1.position.y - v0.position.y;
-                const float e1z = v1.position.z - v0.position.z;
+                const MathLib::Vector3 e1 = v1.position - v0.position;
+                const MathLib::Vector3 e2 = v2.position - v0.position;
 
-                const float e2x = v2.position.x - v0.position.x;
-                const float e2y = v2.position.y - v0.position.y;
-                const float e2z = v2.position.z - v0.position.z;
+                const MathLib::Vector2 d1 = v1.uv - v0.uv;   // d1.x = du1, d1.y = dv1
+                const MathLib::Vector2 d2 = v2.uv - v0.uv;   // d2.x = du2, d2.y = dv2
 
-                const float du1 = v1.uv.x - v0.uv.x;
-                const float dv1 = v1.uv.y - v0.uv.y;
-                const float du2 = v2.uv.x - v0.uv.x;
-                const float dv2 = v2.uv.y - v0.uv.y;
-
-                const float denom = du1 * dv2 - du2 * dv1;
+                // denom is twice the triangle's area in UV space. Near zero
+                // means the three UVs are collinear: the system has no
+                // solution, so f = 0 and this triangle contributes nothing.
+                const float denom = d1.x * d2.y - d2.x * d1.y;
                 const float f = (std::fabs(denom) < 1e-8f) ? 0.0f : (1.0f / denom);
 
-                const MathLib::Vector3 tangent{
-                    f * (dv2 * e1x - dv1 * e2x),
-                    f * (dv2 * e1y - dv1 * e2y),
-                    f * (dv2 * e1z - dv1 * e2z)
-                };
-
-                const MathLib::Vector3 bitangent{
-                    f * (du1 * e2x - du2 * e1x),
-                    f * (du1 * e2y - du2 * e1y),
-                    f * (du1 * e2z - du2 * e1z)
-                };
+                const MathLib::Vector3 tangent = f * (d2.y * e1 - d1.y * e2);
+                const MathLib::Vector3 bitangent = f * (d1.x * e2 - d2.x * e1);
 
                 for (uint32_t idx : { i0, i1, i2 })
                 {
-                    tan_accum[idx].x += tangent.x;
-                    tan_accum[idx].y += tangent.y;
-                    tan_accum[idx].z += tangent.z;
-                    bitan_accum[idx].x += bitangent.x;
-                    bitan_accum[idx].y += bitangent.y;
-                    bitan_accum[idx].z += bitangent.z;
+                    tan_accum[idx] += tangent;
+                    bitan_accum[idx] += bitangent;
                 }
             }
 
@@ -86,40 +75,25 @@ namespace ResourceManager::Primitive_Builder
             for (size_t i = 0; i < vertex_count; ++i)
             {
                 const MathLib::Vector3& n = _mesh.vertices[i].normal;
-                const MathLib::Vector3& t = tan_accum[i];
 
-                // t_proj = t - n * dot(n, t)
-                const float n_dot_t = n.x * t.x + n.y * t.y + n.z * t.z;
-                MathLib::Vector3 tangent{
-                    t.x - n.x * n_dot_t,
-                    t.y - n.y * n_dot_t,
-                    t.z - n.z * n_dot_t
-                };
+                // Strip the component along the normal: averaging across
+                // triangles leaves the accumulated tangent non-perpendicular.
+                MathLib::Vector3 tangent = tan_accum[i] - n * glm::dot(n, tan_accum[i]);
 
-                const float len = std::sqrt(tangent.x * tangent.x +
-                    tangent.y * tangent.y +
-                    tangent.z * tangent.z);
-                if (len > 1e-8f) {
-                    tangent.x /= len;
-                    tangent.y /= len;
-                    tangent.z /= len;
-                }
-                else {
-                    tangent = { 1.0f, 0.0f, 0.0f };
-                }
+                // NOT glm::normalize: a zero-length tangent (a vertex whose
+                // triangles are all degenerate in UV) would normalize to NaN,
+                // and a NaN here reaches the vertex buffer and lights the
+                // surface with garbage. The arbitrary fallback stays finite.
+                const float len = glm::length(tangent);
+                tangent = (len > 1e-8f) ? tangent / len
+                    : MathLib::Vector3(1.0f, 0.0f, 0.0f);
 
-                // Handedness: sign of dot(cross(n, t), bitangent)
-                const MathLib::Vector3& b = bitan_accum[i];
-                const MathLib::Vector3 n_cross_t{
-                    n.y * tangent.z - n.z * tangent.y,
-                    n.z * tangent.x - n.x * tangent.z,
-                    n.x * tangent.y - n.y * tangent.x
-                };
+                // The bitangent is not stored: the shader rebuilds it as
+                // cross(N, T) * w. w is that reconstruction's sign.
                 const float sign =
-                    (n_cross_t.x * b.x + n_cross_t.y * b.y + n_cross_t.z * b.z) < 0.0f
-                    ? -1.0f : 1.0f;
+                    (glm::dot(glm::cross(n, tangent), bitan_accum[i]) < 0.0f) ? -1.0f : 1.0f;
 
-                _mesh.vertices[i].tangent = { tangent.x, tangent.y, tangent.z, sign };
+                _mesh.vertices[i].tangent = MathLib::Vector4(tangent, sign);
             }
         }
 

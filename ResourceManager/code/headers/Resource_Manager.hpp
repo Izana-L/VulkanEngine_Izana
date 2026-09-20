@@ -121,7 +121,7 @@ namespace ResourceManager
         // Creates a new mesh entry from ready MeshData, returns its handle.
         CoreTypes::Asset_Handle Register_mesh(CoreTypes::MeshData&& _data, const std::string& _source);
             
-
+        CoreTypes::Asset_Handle Register_image(CoreTypes::ImageData&& _data, const std::string& _source);
         // Builds a file-asset cache key: FNV64(path) folded with format,
         // bit 63 forced to 0 to stay in the file key space.
         static uint64_t Make_file_key(const std::string& _path);

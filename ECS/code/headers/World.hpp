@@ -12,6 +12,7 @@
 #include <memory>
 #include <atomic>
 #include <algorithm>
+#include <type_traits>
 
 namespace ECS
 {
@@ -231,26 +232,28 @@ namespace ECS
         }
 
         // Returns a reference to the component of the given type.
-        // Precondition: Has_component<T>(entity) must be true.
+         // Precondition: Has_component<T>(entity) must be true.
         template< typename COMPONENT_TYPE >
         COMPONENT_TYPE& Get_component(Entity _entity)
         {
-            assert(Is_valid_entity(_entity) && "Get_component() called with INVALID_ENTITY");
-            assert(Is_alive(_entity) && "Get_component() called on a destroyed entity");
-            assert(Has_component< COMPONENT_TYPE >(_entity) &&
-                "Get_component() called for an entity without this component");
-
-            return Get_storage< COMPONENT_TYPE >().Get(_entity);
+            return Get_component_impl< COMPONENT_TYPE >(*this, _entity);
         }
 
         template< typename COMPONENT_TYPE >
         const COMPONENT_TYPE& Get_component(Entity _entity) const
         {
-            assert(Is_valid_entity(_entity) && "Get_component() const called with INVALID_ENTITY");
-            assert(Has_component< COMPONENT_TYPE >(_entity) &&
-                "Get_component() const called for an entity without this component");
+            return Get_component_impl< COMPONENT_TYPE >(*this, _entity);
+        }
 
-            return Get_storage< COMPONENT_TYPE >().Get(_entity);
+        template< typename COMPONENT_TYPE, typename SELF >
+        static auto& Get_component_impl(SELF& _self, Entity _entity)
+        {
+            assert(_self.Is_valid_entity(_entity) && "Get_component() called with INVALID_ENTITY");
+            assert(_self.Is_alive(_entity) && "Get_component() called on a destroyed entity");
+            assert(_self.template Has_component< COMPONENT_TYPE >(_entity) &&
+                "Get_component() called for an entity without this component");
+
+            return Get_storage_impl< COMPONENT_TYPE >(_self).Get(_entity);
         }
 
         // Returns a pointer to the component if the entity has it,
@@ -259,21 +262,26 @@ namespace ECS
         template< typename COMPONENT_TYPE >
         COMPONENT_TYPE* Try_get_component(Entity _entity)
         {
-            assert(Is_valid_entity(_entity) && "Try_get_component() called with INVALID_ENTITY");
-
-            if (!Has_component< COMPONENT_TYPE >(_entity)) return nullptr;
-
-            return &Get_storage< COMPONENT_TYPE >().Get(_entity);
+            return Try_get_component_impl< COMPONENT_TYPE >(*this, _entity);
         }
 
         template< typename COMPONENT_TYPE >
         const COMPONENT_TYPE* Try_get_component(Entity _entity) const
         {
-            assert(Is_valid_entity(_entity) && "Try_get_component() const called with INVALID_ENTITY");
+            return Try_get_component_impl< COMPONENT_TYPE >(*this, _entity);
+        }
 
-            if (!Has_component< COMPONENT_TYPE >(_entity)) return nullptr;
+        template< typename COMPONENT_TYPE, typename SELF >
+        static auto* Try_get_component_impl(SELF& _self, Entity _entity)
+        {
+            assert(_self.Is_valid_entity(_entity) && "Try_get_component() called with INVALID_ENTITY");
 
-            return &Get_storage< COMPONENT_TYPE >().Get(_entity);
+            using Result = std::conditional_t< std::is_const_v< SELF >,
+                const COMPONENT_TYPE, COMPONENT_TYPE >;
+
+            if (!_self.template Has_component< COMPONENT_TYPE >(_entity)) return (Result*)nullptr;
+
+            return &Get_storage_impl< COMPONENT_TYPE >(_self).Get(_entity);
         }
 
         // Returns true if the entity has a component of the given type.
@@ -327,9 +335,22 @@ namespace ECS
         template< typename FIRST_COMPONENT, typename... REST_COMPONENTS, typename FUNCTION >
         void Query(FUNCTION&& _function)
         {
+            Query_impl< FIRST_COMPONENT, REST_COMPONENTS... >(*this, std::forward< FUNCTION >(_function));
+        }
+
+        template< typename FIRST_COMPONENT, typename... REST_COMPONENTS, typename FUNCTION >
+        void Query(FUNCTION&& _function) const
+        {
+            Query_impl< FIRST_COMPONENT, REST_COMPONENTS... >(*this, std::forward< FUNCTION >(_function));
+        }
+
+        template< typename FIRST_COMPONENT, typename... REST_COMPONENTS,
+            typename SELF, typename FUNCTION >
+        static void Query_impl(SELF& _self, FUNCTION&& _function)
+        {
             size_t first_id = Component_Id< FIRST_COMPONENT >();
 
-            if (first_id >= MAX_COMPONENT_TYPES || !storages[first_id]) return;
+            if (first_id >= MAX_COMPONENT_TYPES || !_self.storages[first_id]) return;
 
             // Build required mask: one bit per component type in the query.
             // Any entity whose mask ANDed with required_mask equals
@@ -340,7 +361,7 @@ namespace ECS
 
             // Iterate the first type's dense arrays directly - maximally
             // cache-friendly, no indirection for the primary component.
-            auto& first_storage = Get_storage< FIRST_COMPONENT >();
+            auto& first_storage = Get_storage_impl< FIRST_COMPONENT >(_self);
             const std::vector< Entity >& entities = first_storage.Get_entities();
 
             for (size_t i = 0; i < entities.size(); ++i)
@@ -348,40 +369,12 @@ namespace ECS
                 Entity entity = entities[i];
 
                 // O(1) bitmask check before accessing any other storage
-                if ((Mask_of(entity) & required_mask) == required_mask)
+                if ((_self.Mask_of(entity) & required_mask) == required_mask)
                 {
                     _function(
                         entity,
                         first_storage.Get_components()[i],
-                        Get_storage< REST_COMPONENTS >().Get(entity)...
-                    );
-                }
-            }
-        }
-        template< typename FIRST_COMPONENT, typename... REST_COMPONENTS, typename FUNCTION >
-        void Query(FUNCTION&& _function) const
-        {
-            size_t first_id = Component_Id< FIRST_COMPONENT >();
-
-            if (first_id >= MAX_COMPONENT_TYPES || !storages[first_id]) return;
-
-            Entity_Mask required_mask;
-            required_mask.set(first_id);
-            (required_mask.set(Component_Id< REST_COMPONENTS >()), ...);
-
-            const auto& first_storage = Get_storage< FIRST_COMPONENT >();  // const version
-            const std::vector< Entity >& entities = first_storage.Get_entities();
-
-            for (size_t i = 0; i < entities.size(); ++i)
-            {
-                Entity entity = entities[i];
-
-                if ((Mask_of(entity) & required_mask) == required_mask)
-                {
-                    _function(
-                        entity,
-                        first_storage.Get_components()[i],
-                        Get_storage< REST_COMPONENTS >().Get(entity)...
+                        Get_storage_impl< REST_COMPONENTS >(_self).Get(entity)...
                     );
                 }
             }
@@ -392,21 +385,23 @@ namespace ECS
         template< typename COMPONENT_TYPE, typename FUNCTION >
         void Each(FUNCTION&& _function)
         {
-            size_t type_id = Component_Id< COMPONENT_TYPE >();
-
-            if (type_id >= MAX_COMPONENT_TYPES || !storages[type_id]) return;
-
-            Get_storage< COMPONENT_TYPE >().Each(std::forward< FUNCTION >(_function));
+            Each_impl< COMPONENT_TYPE >(*this, std::forward< FUNCTION >(_function));
         }
 
         template< typename COMPONENT_TYPE, typename FUNCTION >
         void Each(FUNCTION&& _function) const
         {
+            Each_impl< COMPONENT_TYPE >(*this, std::forward< FUNCTION >(_function));
+        }
+
+        template< typename COMPONENT_TYPE, typename SELF, typename FUNCTION >
+        static void Each_impl(SELF& _self, FUNCTION&& _function)
+        {
             size_t type_id = Component_Id< COMPONENT_TYPE >();
 
-            if (type_id >= MAX_COMPONENT_TYPES || !storages[type_id]) return;
+            if (type_id >= MAX_COMPONENT_TYPES || !_self.storages[type_id]) return;
 
-            Get_storage< COMPONENT_TYPE >().Each(std::forward< FUNCTION >(_function));
+            Get_storage_impl< COMPONENT_TYPE >(_self).Each(std::forward< FUNCTION >(_function));
         }
 
         // =========================================================
@@ -523,23 +518,35 @@ namespace ECS
         template< typename COMPONENT_TYPE >
         Component_Storage< COMPONENT_TYPE >& Get_storage()
         {
-            size_t type_id = Component_Id< COMPONENT_TYPE >();
-
-            assert(storages[type_id] &&
-                "Get_storage() called for a component type never registered via Add_component");
-
-            return static_cast<Component_Storage< COMPONENT_TYPE >&>(*storages[type_id]);
+            return Get_storage_impl< COMPONENT_TYPE >(*this);
         }
 
         template< typename COMPONENT_TYPE >
         const Component_Storage< COMPONENT_TYPE >& Get_storage() const
         {
+            return Get_storage_impl< COMPONENT_TYPE >(*this);
+        }
+
+        // One body for both overloads above. C++23 would write this as
+        // `auto&& self`; the project is on C++20, so the same job is done
+        // by a static template on SELF and the return type deduces the
+        // const-ness from whichever `this` came in.
+        //
+        // The explicit Result alias is not decoration: storages holds
+        // unique_ptr, and operator* on a const unique_ptr still hands back
+        // a NON-const referent. Without it, the const path would silently
+        // return a mutable storage.
+        template< typename COMPONENT_TYPE, typename SELF >
+        static auto& Get_storage_impl(SELF& _self)
+        {
             size_t type_id = Component_Id< COMPONENT_TYPE >();
 
-            assert(storages[type_id] &&
-                "Get_storage() const called for a component type never registered");
+            assert(_self.storages[type_id] &&"Get_storage() called for a component type never registered via Add_component");
 
-            return static_cast<const Component_Storage< COMPONENT_TYPE >&>(*storages[type_id]);
+            using Storage = Component_Storage< COMPONENT_TYPE >;
+            using Result = std::conditional_t< std::is_const_v< SELF >, const Storage, Storage >;
+
+            return static_cast<Result&>(*_self.storages[type_id]);
         }
 
     };

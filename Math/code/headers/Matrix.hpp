@@ -1,7 +1,6 @@
 #pragma once
 #include <glm/glm.hpp>
-#include <Math_Types.hpp>
-namespace MathLib 
+namespace MathLib
 {
     template< unsigned COLUMNS, unsigned ROWS, typename TYPE >
     using Matrix = glm::mat< static_cast<glm::length_t>(COLUMNS), static_cast<glm::length_t>(ROWS), TYPE >;
