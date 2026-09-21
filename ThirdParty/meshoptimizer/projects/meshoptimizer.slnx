@@ -1,0 +1,9 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="meshoptimizer.vcxproj" Id="0c40e2f0-6e3a-41c0-ad92-2f3c1624acfa">
+    <Build Solution="*|x86" Project="false" />
+  </Project>
+</Solution>
