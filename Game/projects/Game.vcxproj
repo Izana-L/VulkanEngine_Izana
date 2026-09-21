@@ -66,7 +66,7 @@
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(SolutionDir)..\output\$(Configuration)\lib\;$(SolutionDir)..\..\ThirdParty\glfw\lib-vc2022;$(VULKAN_SDK)\Lib;$(SolutionDir)..\..\ThirdParty\stb_image\lib\$(Configuration)\;$(SolutionDir)..\..\ThirdParty\tinygltf\lib\$(Configuration)\;$(SolutionDir)..\..\ThirdParty\vma\lib\$(Configuration)\</AdditionalLibraryDirectories>
-      <AdditionalDependencies>EngineCore.lib;ECS.lib;Renderer.lib;Physics.lib;Audio.lib;ResourceManager.lib;Platform.lib;Input.lib;ThreadDispatcher.lib;glfw3.lib;vulkan-1.lib;tinygltf.lib;stb_image.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>EngineCore.lib;ECS.lib;Renderer.lib;Physics.lib;Audio.lib;ResourceManager.lib;Platform.lib;Input.lib;ThreadDispatcher.lib;glfw3.lib;vulkan-1.lib;tinygltf.lib;stb_image.lib;vma.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>
@@ -87,7 +87,7 @@
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(SolutionDir)..\output\$(Configuration)\lib\;$(SolutionDir)..\..\ThirdParty\glfw\lib-vc2022;$(VULKAN_SDK)\Lib;$(SolutionDir)..\..\ThirdParty\stb_image\lib\$(Configuration)\;$(SolutionDir)..\..\ThirdParty\tinygltf\lib\$(Configuration)\;$(SolutionDir)..\..\ThirdParty\vma\lib\$(Configuration)\</AdditionalLibraryDirectories>
-      <AdditionalDependencies>EngineCore.lib;ECS.lib;Renderer.lib;Physics.lib;Audio.lib;ResourceManager.lib;Platform.lib;Input.lib;ThreadDispatcher.lib;glfw3.lib;vulkan-1.lib;tinygltf.lib;stb_image.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>EngineCore.lib;ECS.lib;Renderer.lib;Physics.lib;Audio.lib;ResourceManager.lib;Platform.lib;Input.lib;ThreadDispatcher.lib;glfw3.lib;vulkan-1.lib;tinygltf.lib;stb_image.lib;vma.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>
