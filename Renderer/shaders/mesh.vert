@@ -1,22 +1,16 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 
-#include "common/frame_set.glsl"
-// Uniform buffer  set 0, binding 0
-// Matches Frame_UBO in Frame_Data.hpp: { mat4 view; mat4 projection; }
-layout(set = 0, binding = 0) uniform Frame_UBO
-{
-    mat4 view;
-    mat4 projection;
-} ubo;
 
-// Model matrix as push constant  one per draw call.
+#include "common/frame_set.glsl"
+
+// Model matrix as push constant - one per draw call.
 layout(push_constant) uniform Push_Constants
 {
     mat4 model;
 } push;
 
-// Vertex inputs  matches CoreTypes::Vertex_Static_Mesh
+// Vertex inputs - matches CoreTypes::Vertex_Static_Mesh
 layout(location = 0) in vec3 in_position;
 layout(location = 1) in vec3 in_normal;
 layout(location = 2) in vec4 in_tangent;
