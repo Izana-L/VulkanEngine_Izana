@@ -1,5 +1,7 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 
+#include "common/frame_set.glsl"
 // Uniform buffer  set 0, binding 0
 // Matches Frame_UBO in Frame_Data.hpp: { mat4 view; mat4 projection; }
 layout(set = 0, binding = 0) uniform Frame_UBO
@@ -31,7 +33,7 @@ void main()
 {
     vec4 world_pos = push.model * vec4(in_position, 1.0);
 
-    gl_Position = ubo.projection * ubo.view * world_pos;
+    gl_Position = frame.view_projection * world_pos;
 
     // Transform normal to world space (handles non-uniform scale).
     mat3 normal_matrix = transpose(inverse(mat3(push.model)));

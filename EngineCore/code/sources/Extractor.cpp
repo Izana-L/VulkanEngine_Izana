@@ -103,6 +103,8 @@ namespace EngineCore
         _out_packet.view.view = view;
         _out_packet.view.projection = projection;
         _out_packet.view.view_projection = projection * view;
+        _out_packet.view.inv_view = glm::inverse(view);              
+        _out_packet.view.inv_projection = glm::inverse(projection);  
         _out_packet.view.camera_position = cam_pos;
         _out_packet.view.near_plane = camera_comp->near_plane;
         _out_packet.view.far_plane =(camera_comp->projection == ECS::Camera_Component::Projection::Perspective)

@@ -22,6 +22,8 @@ namespace CoreTypes
         MathLib::Matrix4 view;
         MathLib::Matrix4 projection;
         MathLib::Matrix4 view_projection;   // projection * view, precomputed
+        MathLib::Matrix4 inv_view;         
+        MathLib::Matrix4 inv_projection;
         MathLib::Vector3 camera_position;
 
         // Reverse-Z is in effect: the near plane maps to depth 1.0 and the
@@ -120,6 +122,8 @@ namespace CoreTypes
         // the buffer lives in the per-frame slot owned by EngineCore.
         MathLib::Matrix4* transforms = nullptr;
         uint32_t                    transform_count = 0;
+        float                       time = 0.0f;         
+        float                       delta_time = 0.0f;
     };
 
     // =========================================================

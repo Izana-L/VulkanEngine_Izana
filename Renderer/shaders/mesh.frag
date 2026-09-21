@@ -1,32 +1,8 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 
-// DEBE coincidir con Renderer_System::MAX_LIGHTS en Frame_Data.hpp.
-#define MAX_LIGHTS 16
+#include "common/frame_set.glsl"
 
-// Espejo exacto de Light_UBO (Frame_Data.hpp), layout std140.
-struct Light
-{
-    vec3  position_or_direction;   // dir a la que APUNTA (dir) / posicion (point, spot)
-    float intensity;
-    vec3  color;
-    float range;
-    vec3  spot_direction;
-    float inner_angle;
-    float outer_angle;
-    int   type;                    // 0 = directional, 1 = point, 2 = spot
-    float _padding0;
-    float _padding1;
-};
-
-// set 0, binding 0. Espejo de Frame_UBO en Frame_Data.hpp.
-layout(set = 0, binding = 0) uniform Frame_UBO
-{
-    mat4  view;
-    mat4  projection;
-    vec3  camera_position;
-    int   light_count;
-    Light lights[MAX_LIGHTS];
-} ubo;
 
 layout(location = 0) in vec3 frag_world_normal;
 layout(location = 1) in vec3 frag_world_pos;
@@ -44,9 +20,9 @@ void main()
 
     vec3 diffuse = vec3(0.0);
 
-    for (int i = 0; i < ubo.light_count; ++i)
+    for (int i = 0; i < frame.light_count; ++i)
     {
-        Light light = ubo.lights[i];
+        Light light = light_buffer.lights[i];
 
         vec3  L           = vec3(0.0);
         float attenuation = 1.0;

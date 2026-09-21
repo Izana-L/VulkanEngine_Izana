@@ -500,19 +500,13 @@ namespace Renderer_System
         // Set 1: global bindless texture array — bound once here, shared
         // by every draw item this frame via texture indices in the
         // material data, not via per-draw descriptor binding.
-        VkDescriptorSet sets[] = {
-            descriptor_sets[current_frame],
-            bindless_registry.Get_set()
-        };
+        VkDescriptorSet per_frame_set = descriptor_sets[current_frame];
+        vkCmdBindDescriptorSets(frame.command_buffer,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline_layout.Get_handle(),
+                                Descriptor_Set::Per_Frame, 1,&per_frame_set,0, nullptr);
 
-        vkCmdBindDescriptorSets(
-            frame.command_buffer,
-            VK_PIPELINE_BIND_POINT_GRAPHICS,
-            pipeline_layout.Get_handle(),
-            0, 2,
-            sets,
-            0, nullptr
-        );
+        VkDescriptorSet bindless_set = bindless_registry.Get_set();
+        vkCmdBindDescriptorSets(frame.command_buffer,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline_layout.Get_handle(),
+                                Descriptor_Set::Bindless, 1,&bindless_set, 0, nullptr);
 
         uint8_t  bound_pipeline_id = 0xFF;
         uint32_t bind_count = 0;
