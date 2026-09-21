@@ -2,31 +2,63 @@
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
+#include <vk_mem_alloc.h>
 
-#include <Vulkan_Device.hpp>
-
-namespace Renderer_System 
+namespace Renderer_System
 {
-    namespace Vulkan_Buffer_Utils 
+    namespace Vulkan_Buffer_Utils
     {
+        // How the CPU will touch this buffer. Replaces the raw
+        // VkMemoryPropertyFlags the old signature took: VMA picks the
+        // actual memory type from the intent, which is both harder to get
+        // wrong and adapts to the GPU (unified memory, ReBAR, etc.).
+        enum class Buffer_Access
+        {
+            // GPU-only. Vertex/index buffers after upload, render targets.
+            Gpu_Only,
 
-        // Creates a VkBuffer and allocates+binds its backing VkDeviceMemory in
-        // one call. This is the same "create resource, query memory
-        // requirements, allocate, bind" pattern used in Vulkan_Depth_Resources
-        // for images, applied here to buffers instead.
+            // CPU writes sequentially, GPU reads. Staging buffers and
+            // per-frame uniform buffers. Never read back from this memory:
+            // it is usually write-combined and CPU reads are ~100x slower.
+            Cpu_To_Gpu
+        };
+
+        struct Buffer_Allocation
+        {
+            VkBuffer      buffer = VK_NULL_HANDLE;
+            VmaAllocation allocation = VK_NULL_HANDLE;
+
+            // Non-null only when _keep_mapped was true. Points straight
+            // into the mapped block — no vmaMapMemory needed per write.
+            void* mapped_ptr = nullptr;
+        };
+
+        // Creates a VkBuffer and sub-allocates its memory from one of VMA's
+        // large blocks, in a single call. Replaces the old
+        // create → vkGetBufferMemoryRequirements → vkAllocateMemory → bind
+        // sequence: vmaCreateBuffer does all four internally.
         //
-        // _size: size in bytes of the buffer
-        // _usage: what the buffer will be used for (e.g.
-        //   VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-        //   VK_BUFFER_USAGE_TRANSFER_DST_BIT for staging-buffer destinations)
-        // _properties: required memory properties (e.g. DEVICE_LOCAL_BIT for
-        //   GPU-only fast memory, or HOST_VISIBLE_BIT | HOST_COHERENT_BIT for
-        //   memory the CPU can write to directly without manual flushing)
-        // _out_buffer / _out_buffer_memory: the created handles are written here
-        void Create_buffer(const Vulkan_Device& _device,VkDeviceSize _size,VkBufferUsageFlags _usage,
-                         VkMemoryPropertyFlags _properties,VkBuffer& _out_buffer,VkDeviceMemory& _out_buffer_memory );
-            
+        // _keep_mapped: keep a persistent CPU pointer for the lifetime of
+        //   the buffer (what Frame_Data's uniform buffer wants). Only valid
+        //   with Cpu_To_Gpu.
+        Buffer_Allocation Create_buffer(
+            VmaAllocator       _allocator,
+            VkDeviceSize       _size,
+            VkBufferUsageFlags _usage,
+            Buffer_Access      _access,
+            bool               _keep_mapped = false);
 
+        // Frees both the VkBuffer and its allocation. Replaces the
+        // vkDestroyBuffer + vkFreeMemory pair. Safe with null handles.
+        void Destroy_buffer(VmaAllocator _allocator, Buffer_Allocation& _buffer);
 
+        // Copies host data into a mapped (or mappable) allocation and
+        // flushes it. Use this instead of a bare memcpy: VMA's AUTO usage
+        // does not guarantee HOST_COHERENT memory, and an unflushed write
+        // may simply never reach the GPU on some drivers.
+        void Upload_to_buffer(VmaAllocator             _allocator,
+            const Buffer_Allocation& _buffer,
+            const void* _data,
+            VkDeviceSize             _size);
     }
 }

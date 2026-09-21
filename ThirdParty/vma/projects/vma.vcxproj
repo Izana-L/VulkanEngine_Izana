@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64">
@@ -10,25 +10,11 @@
       <Platform>x64</Platform>
     </ProjectConfiguration>
   </ItemGroup>
-  <ItemGroup>
-    <ClInclude Include="..\code\headers\Camera_Controller.hpp" />
-    <ClInclude Include="..\code\headers\Engine.hpp" />
-    <ClInclude Include="..\code\headers\Engine_Loop.hpp" />
-    <ClInclude Include="..\code\headers\Extractor.hpp" />
-    <ClInclude Include="..\code\headers\Transform_System.hpp" />
-  </ItemGroup>
-  <ItemGroup>
-    <ClCompile Include="..\code\sources\Camera_Controller.cpp" />
-    <ClCompile Include="..\code\sources\Engine.cpp" />
-    <ClCompile Include="..\code\sources\Engine_Loop.cpp" />
-    <ClCompile Include="..\code\sources\Extractor.cpp" />
-    <ClCompile Include="..\code\sources\Transform_System.cpp" />
-  </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>18.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
-    <ProjectGuid>{16ff3621-ff24-4b34-8421-f7a2fea7bb39}</ProjectGuid>
-    <RootNamespace>EngineCore</RootNamespace>
+    <ProjectGuid>{3970b06f-9a7f-403e-8b80-3215b41ba6d9}</ProjectGuid>
+    <RootNamespace>vma</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -52,22 +38,16 @@
   </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
-    <Import Project="..\..\Game\projects\GlmConfig.props" />
   </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
-    <Import Project="..\..\Game\projects\GlmConfig.props" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <OutDir>$(SolutionDir)..\output\$(Configuration)\lib\</OutDir>
-    <IntDir>$(SolutionDir)..\intermediate\$(Configuration)\lib\$(ProjectName)\</IntDir>
-    <IncludePath>$(VULKAN_SDK)\Include;$(SolutionDir)..\..\ThirdParty\glfw\include;$(IncludePath)</IncludePath>
-  </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <OutDir>$(SolutionDir)..\output\$(Configuration)\lib\</OutDir>
-    <IntDir>$(SolutionDir)..\intermediate\$(Configuration)\lib\$(ProjectName)\</IntDir>
-    <IncludePath>$(VULKAN_SDK)\Include;$(SolutionDir)..\..\ThirdParty\glfw\include;$(IncludePath)</IncludePath>
+    <OutDir>$(SolutionDir)..\lib\$(Configuration)\</OutDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <OutDir>$(SolutionDir)..\lib\$(Configuration)\</OutDir>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
@@ -76,7 +56,7 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>..\code\headers;$(SolutionDir)..\..\ECS\code\headers;$(SolutionDir)..\..\Renderer\code\headers;$(SolutionDir)..\..\Physics\code\headers;$(SolutionDir)..\..\Audio\code\headers;$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\ResourceManager\code\headers;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Input\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(SolutionDir)..\..\ThirdParty\glm;$(VULKAN_SDK)\Include;$(SolutionDir)..\..\ThreadDispatcher\code\headers;$(SolutionDir)..\..\CoreTypes\code\headers;$(SolutionDir)..\..\ThirdParty\stb_image\include;$(SolutionDir)..\..\ThirdParty\tinygltf\include;$(SolutionDir)..\..\ThirdParty\vma\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\include\;$(VULKAN_SDK)\Include</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -85,10 +65,6 @@
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>
     </Manifest>
-    <Lib>
-      <AdditionalLibraryDirectories>$(VULKAN_SDK)\Lib;$(SolutionDir)..\..\ThirdParty\glfw\lib-vc2022;$(SolutionDir)..\..\ThirdParty\glm</AdditionalLibraryDirectories>
-      <AdditionalDependencies>vulkan-1.lib;glfw3.lib</AdditionalDependencies>
-    </Lib>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -99,7 +75,7 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>..\code\headers;$(SolutionDir)..\..\ECS\code\headers;$(SolutionDir)..\..\Renderer\code\headers;$(SolutionDir)..\..\Physics\code\headers;$(SolutionDir)..\..\Audio\code\headers;$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\ResourceManager\code\headers;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Input\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(SolutionDir)..\..\ThirdParty\glm;$(VULKAN_SDK)\Include;$(SolutionDir)..\..\ThreadDispatcher\code\headers;$(SolutionDir)..\..\CoreTypes\code\headers;$(SolutionDir)..\..\ThirdParty\stb_image\include;$(SolutionDir)..\..\ThirdParty\tinygltf\include;$(SolutionDir)..\..\ThirdParty\vma\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\include\;$(VULKAN_SDK)\Include</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -108,11 +84,10 @@
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>
     </Manifest>
-    <Lib>
-      <AdditionalLibraryDirectories>$(VULKAN_SDK)\Lib;$(SolutionDir)..\..\ThirdParty\glfw\lib-vc2022;$(SolutionDir)..\..\ThirdParty\glm</AdditionalLibraryDirectories>
-      <AdditionalDependencies>vulkan-1.lib;glfw3.lib</AdditionalDependencies>
-    </Lib>
   </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="..\source\vma.cpp" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

@@ -3,7 +3,7 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
-#include <Vulkan_Device.hpp>
+#include <Vulkan_Buffer_Utils.hpp>
 #include <MeshData.hpp>
 
 #include <cstdint>
@@ -26,7 +26,7 @@ namespace Renderer_System
     // Typical usage:
     //
     //   vkBeginCommandBuffer(cmd, ...);
-    //   Mesh_GPU mesh(device, cmd, mesh_data);
+    //   Mesh_GPU mesh(allocator, cmd, mesh_data);
     //   vkEndCommandBuffer(cmd);
     //   vkQueueSubmit(...);
     //   vkQueueWaitIdle(queue);
@@ -43,22 +43,16 @@ namespace Renderer_System
         // Data
         // =========================================================
 
-        VkDevice device_handle;
+        VmaAllocator allocator;
 
         // Final GPU-local buffers — used every frame for rendering.
-        VkBuffer       vertex_buffer;
-        VkDeviceMemory vertex_buffer_memory;
-
-        VkBuffer       index_buffer;
-        VkDeviceMemory index_buffer_memory;
+        Vulkan_Buffer_Utils::Buffer_Allocation vertex_buffer;
+        Vulkan_Buffer_Utils::Buffer_Allocation index_buffer;
 
         // Staging buffers — CPU-visible, used only during upload.
         // Kept alive until Release_staging_buffers() is called.
-        VkBuffer       vertex_staging_buffer;
-        VkDeviceMemory vertex_staging_memory;
-
-        VkBuffer       index_staging_buffer;
-        VkDeviceMemory index_staging_memory;
+        Vulkan_Buffer_Utils::Buffer_Allocation vertex_staging;
+        Vulkan_Buffer_Utils::Buffer_Allocation index_staging;
 
         uint32_t    vertex_count;
         uint32_t    index_count;
@@ -67,7 +61,7 @@ namespace Renderer_System
     public:
 
         Mesh_GPU(
-            const Vulkan_Device& _device,
+            VmaAllocator               _allocator,
             VkCommandBuffer            _transfer_cmd,
             const CoreTypes::MeshData& _mesh_data
         );

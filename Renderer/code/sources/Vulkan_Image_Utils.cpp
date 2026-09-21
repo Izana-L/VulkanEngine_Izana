@@ -12,22 +12,18 @@ namespace Renderer_System
     {
 
         // ---------- Create_image ----------
-        void Create_image(
-            const Vulkan_Device& _device,
-            uint32_t              _width,
-            uint32_t              _height,
-            uint32_t              _mip_levels,
-            VkFormat              _format,
-            VkImageTiling         _tiling,
-            VkImageUsageFlags     _usage,
-            VkMemoryPropertyFlags _properties,
-            VkImage& _out_image,
-            VkDeviceMemory& _out_image_memory)
+        Image_Allocation Create_image(
+            VmaAllocator      _allocator,
+            uint32_t          _width,
+            uint32_t          _height,
+            uint32_t          _mip_levels,
+            VkFormat          _format,
+            VkImageTiling     _tiling,
+            VkImageUsageFlags _usage)
         {
+            assert(_allocator != VK_NULL_HANDLE && "Create_image() called with a null allocator");
             assert(_width > 0 && _height > 0 && "Create_image() called with zero dimensions");
             assert(_mip_levels > 0 && "Create_image() called with zero mip levels");
-
-            VkDevice device_handle = _device.Get_logical_device_handle();
 
             // ---------- Image creation ----------
             VkImageCreateInfo image_info{};
@@ -57,41 +53,50 @@ namespace Renderer_System
             // target attachments, not sampled textures).
             image_info.samples = VK_SAMPLE_COUNT_1_BIT;
 
-            VkResult result = vkCreateImage(device_handle, &image_info, nullptr, &_out_image);
+            // ---------- Memory allocation ----------
+            VmaAllocationCreateInfo alloc_info{};
+            alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
+
+            // Textures and depth buffers are large and long-lived, so each
+            // gets its own VkDeviceMemory instead of a slice of a shared
+            // block. Do NOT copy this flag onto small, numerous allocations.
+            alloc_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+
+            Image_Allocation out{};
+
+            // Creates the image, queries its requirements, allocates and
+            // binds. Nothing leaks if any of those steps fails.
+            VkResult result = vmaCreateImage(
+                _allocator,
+                &image_info,
+                &alloc_info,
+                &out.image,
+                &out.allocation,
+                nullptr
+            );
+
             if (result != VK_SUCCESS) {
                 throw std::runtime_error(
                     "Failed to create image: " + Vulkan_Utils::Vk_result_to_string(result)
                 );
             }
 
-            // ---------- Memory allocation ----------
-            VkMemoryRequirements memory_requirements{};
-            vkGetImageMemoryRequirements(device_handle, _out_image, &memory_requirements);
+            return out;
+        }
 
-            VkMemoryAllocateInfo alloc_info{};
-            alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-            alloc_info.allocationSize = memory_requirements.size;
-            alloc_info.memoryTypeIndex = _device.Find_memory_type(
-                memory_requirements.memoryTypeBits,
-                _properties
-            );
-
-            result = vkAllocateMemory(device_handle, &alloc_info, nullptr, &_out_image_memory);
-            if (result != VK_SUCCESS) {
-                vkDestroyImage(device_handle, _out_image, nullptr);
-                _out_image = VK_NULL_HANDLE;
-
-                throw std::runtime_error(
-                    "Failed to allocate image memory: " + Vulkan_Utils::Vk_result_to_string(result)
-                );
+        // ---------- Destroy_image ----------
+        void Destroy_image(VmaAllocator _allocator, Image_Allocation& _image)
+        {
+            if (_image.image != VK_NULL_HANDLE) {
+                vmaDestroyImage(_allocator, _image.image, _image.allocation);
+                _image.image = VK_NULL_HANDLE;
+                _image.allocation = VK_NULL_HANDLE;
             }
-
-            vkBindImageMemory(device_handle, _out_image, _out_image_memory, 0);
         }
 
         // ---------- Create_image_view ----------
         VkImageView Create_image_view(
-            const Vulkan_Device& _device,
+            VkDevice              _device,
             VkImage               _image,
             VkFormat              _format,
             VkImageAspectFlags    _aspect_flags,
@@ -114,7 +119,7 @@ namespace Renderer_System
 
             VkImageView image_view = VK_NULL_HANDLE;
             VkResult result = vkCreateImageView(
-                _device.Get_logical_device_handle(), &view_info, nullptr, &image_view);
+                _device, &view_info, nullptr, &image_view);
 
             if (result != VK_SUCCESS) {
                 throw std::runtime_error(

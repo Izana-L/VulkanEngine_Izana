@@ -3,72 +3,110 @@
 
 #include <stdexcept>
 #include <cassert>
+#include <cstring>
 
-namespace Renderer_System 
+namespace Renderer_System
 {
-    namespace Vulkan_Buffer_Utils 
+    namespace Vulkan_Buffer_Utils
     {
-
-        // ---------- Create_buffer ----------
-        void Create_buffer(
-            const Vulkan_Device& _device,
-            VkDeviceSize _size,
+        Buffer_Allocation Create_buffer(
+            VmaAllocator       _allocator,
+            VkDeviceSize       _size,
             VkBufferUsageFlags _usage,
-            VkMemoryPropertyFlags _properties,
-            VkBuffer& _out_buffer,
-            VkDeviceMemory& _out_buffer_memory) {
-
+            Buffer_Access      _access,
+            bool               _keep_mapped)
+        {
             assert(_size > 0 && "Create_buffer() called with a zero size");
+            assert(!(_keep_mapped && _access == Buffer_Access::Gpu_Only) &&
+                "Create_buffer(): GPU-only memory cannot be kept mapped");
 
-            VkDevice device_handle = _device.Get_logical_device_handle();
-
-            // ---------- Buffer creation ----------
+            // ---------- Buffer description (unchanged) ----------
             VkBufferCreateInfo buffer_info{};
             buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
             buffer_info.size = _size;
             buffer_info.usage = _usage;
-
-            // EXCLUSIVE: this buffer will only ever be used by one queue
-            // family at a time (the graphics queue) - no need for the more
-            // expensive CONCURRENT sharing mode here.
             buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-            VkResult result = vkCreateBuffer(device_handle, &buffer_info, nullptr, &_out_buffer);
-            if (result != VK_SUCCESS) {
-                throw std::runtime_error(
-                    "Failed to create buffer: " + Vulkan_Utils::Vk_result_to_string(result)
-                );
+            // ---------- Allocation description (this is the new part) ----------
+            VmaAllocationCreateInfo alloc_info{};
+
+            // VMA_MEMORY_USAGE_AUTO lets VMA derive the memory type from
+            // buffer_info.usage plus the access flags below. The old
+            // VMA_MEMORY_USAGE_GPU_ONLY / CPU_ONLY enums are deprecated —
+            // they predate ReBAR and unified-memory GPUs and pick badly there.
+            alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
+
+            if (_access == Buffer_Access::Cpu_To_Gpu)
+            {
+                // SEQUENTIAL_WRITE promises we only memcpy forward and never
+                // read back, which lets VMA hand us write-combined memory.
+                // Use HOST_ACCESS_RANDOM_BIT instead if you ever need reads.
+                alloc_info.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+
+                if (_keep_mapped)
+                    alloc_info.flags |= VMA_ALLOCATION_CREATE_MAPPED_BIT;
             }
 
-            // ---------- Memory allocation ----------
-            VkMemoryRequirements memory_requirements{};
-            vkGetBufferMemoryRequirements(device_handle, _out_buffer, &memory_requirements);
+            VmaAllocationInfo   allocation_info{};
+            Buffer_Allocation   out{};
 
-            VkMemoryAllocateInfo alloc_info{};
-            alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-            alloc_info.allocationSize = memory_requirements.size;
-            alloc_info.memoryTypeIndex = _device.Find_memory_type(memory_requirements.memoryTypeBits,_properties);
-                
-                
+            VkResult result = vmaCreateBuffer(
+                _allocator,
+                &buffer_info,
+                &alloc_info,
+                &out.buffer,
+                &out.allocation,
+                &allocation_info);
 
-            result = vkAllocateMemory(device_handle, &alloc_info, nullptr, &_out_buffer_memory);
             if (result != VK_SUCCESS) {
-                // Clean up the buffer we already created, since the overall
-                // operation failed - avoid leaking it.
-                vkDestroyBuffer(device_handle, _out_buffer, nullptr);
-                _out_buffer = VK_NULL_HANDLE;
-
                 throw std::runtime_error(
-                    "Failed to allocate buffer memory: " + Vulkan_Utils::Vk_result_to_string(result)
-                );
+                    "Failed to create buffer: " +
+                    Vulkan_Utils::Vk_result_to_string(result));
             }
 
-            // Bind the allocated memory to the buffer - offset 0 since this
-            // allocation is dedicated entirely to this one buffer.
-            vkBindBufferMemory(device_handle, _out_buffer, _out_buffer_memory, 0);
+            // With MAPPED_BIT, VMA hands back the pointer here — no manual
+            // vkMapMemory, and no risk of mapping the same VkDeviceMemory
+            // block twice (which Vulkan forbids, and which WOULD happen now
+            // that many buffers share one block).
+            out.mapped_ptr = allocation_info.pMappedData;
+
+            return out;
         }
 
-       
+        void Destroy_buffer(VmaAllocator _allocator, Buffer_Allocation& _buffer)
+        {
+            if (_buffer.buffer != VK_NULL_HANDLE) {
+                // Destroys the buffer AND returns its slice to the block.
+                // Tolerates VK_NULL_HANDLE for either argument.
+                vmaDestroyBuffer(_allocator, _buffer.buffer, _buffer.allocation);
+                _buffer.buffer = VK_NULL_HANDLE;
+                _buffer.allocation = VK_NULL_HANDLE;
+                _buffer.mapped_ptr = nullptr;
+            }
+        }
 
+        void Upload_to_buffer(VmaAllocator             _allocator,
+            const Buffer_Allocation& _buffer,
+            const void* _data,
+            VkDeviceSize             _size)
+        {
+            assert(_buffer.allocation != VK_NULL_HANDLE);
+
+            if (_buffer.mapped_ptr != nullptr)
+            {
+                std::memcpy(_buffer.mapped_ptr, _data, static_cast<size_t>(_size));
+            }
+            else
+            {
+                void* mapped = nullptr;
+                vmaMapMemory(_allocator, _buffer.allocation, &mapped);
+                std::memcpy(mapped, _data, static_cast<size_t>(_size));
+                vmaUnmapMemory(_allocator, _buffer.allocation);
+            }
+
+            // No-op when the memory type happens to be HOST_COHERENT (VMA
+            // checks internally), so this is always safe and never wasteful.
+            vmaFlushAllocation(_allocator, _buffer.allocation, 0, _size);
+        }
     }
 }

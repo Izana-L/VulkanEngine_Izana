@@ -6,6 +6,7 @@
 #include <Vulkan_Instance.hpp>
 #include <Vulkan_Surface.hpp>
 #include <Vulkan_Device.hpp>
+#include <Vulkan_Allocator.hpp>
 #include <Vulkan_Swapchain.hpp>
 #include <Vulkan_Render_Pass.hpp>
 #include <Vulkan_Depth_Resources.hpp>
@@ -82,6 +83,15 @@ namespace Renderer_System
         Vulkan_Instance        instance;
         Vulkan_Surface         surface;
         Vulkan_Device          device;
+
+        // Declared right after device on purpose. Construction runs in
+        // declaration order, so instance and device are ready when the
+        // allocator is built; destruction runs in reverse, so everything
+        // holding an allocation (depth_resources, meshes, textures,
+        // frames) is gone before the allocator, and the allocator is gone
+        // before the device.
+        Vulkan_Allocator       allocator;
+
         Vulkan_Swapchain       swapchain;
         Vulkan_Render_Pass     render_pass;
         Vulkan_Depth_Resources depth_resources;

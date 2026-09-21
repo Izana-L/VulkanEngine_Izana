@@ -4,13 +4,14 @@
 #include <GLFW/glfw3.h>
 
 #include <Vulkan_Device.hpp>
+#include <Vulkan_Image_Utils.hpp>
 
 namespace Renderer_System 
 {
 
     // Vulkan_Depth_Resources: owns the depth buffer used for depth testing
     // (so closer objects correctly occlude farther ones when geometry
-    // overlaps on screen). Manages the VkImage, its backing VkDeviceMemory,
+    // overlaps on screen). Manages the VkImage, its VMA allocation,
     // and the VkImageView that Vulkan_Framebuffer will reference.
     //
     // Unlike swapchain color images (one per swapchain image, since they
@@ -24,6 +25,7 @@ namespace Renderer_System
         // image view, sized to match the swapchain's current extent.
         Vulkan_Depth_Resources(
             const Vulkan_Device& _device,
+            VmaAllocator _allocator,
             VkFormat _depth_format,
             VkExtent2D _extent
         );
@@ -55,19 +57,21 @@ namespace Renderer_System
         // destructor, move assignment, and Recreate().
         void Destroy();
 
-        // Creates the VkImage, allocates and binds its VkDeviceMemory,
-        // and creates the VkImageView - the actual work, shared by the
-        // constructor and Recreate().
+        // Creates the VkImage with its memory, and creates the
+        // VkImageView - the actual work, shared by the constructor
+        // and Recreate().
         void Create(VkExtent2D _extent);
 
         VkDevice device_handle;
-        const Vulkan_Device* device; // kept to call Find_memory_type() again during Recreate()
+
+        // Replaces the Vulkan_Device back-pointer, which only existed to
+        // call Find_memory_type() again inside Recreate().
+        VmaAllocator allocator;
 
         VkFormat depth_format;
         VkExtent2D current_extent;
 
-        VkImage depth_image;
-        VkDeviceMemory depth_image_memory;
+        Vulkan_Image_Utils::Image_Allocation depth_image;
         VkImageView depth_image_view;
     };
 

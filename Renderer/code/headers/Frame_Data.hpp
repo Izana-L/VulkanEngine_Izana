@@ -5,6 +5,8 @@
 
 #include <Vulkan_Device.hpp>
 #include <Vulkan_Buffer_Utils.hpp>
+
+#include <vk_mem_alloc.h>
 #include <Vulkan_Utils.hpp>
 #include <Matrix.hpp>
 #include <Vector.hpp>
@@ -79,8 +81,8 @@ namespace Renderer_System
     // destroyed at shutdown. Not copyable — owns Vulkan handles.
     //
     // The uniform buffer is mapped persistently at construction time
-    // (valid for HOST_COHERENT memory). The Renderer writes into
-    // uniform_mapped_ptr directly each frame with std::memcpy — no
+    // (VMA_ALLOCATION_CREATE_MAPPED_BIT). The Renderer writes into
+    // uniform_buffer.mapped_ptr directly each frame with std::memcpy — no
     // map/unmap overhead per frame.
     struct Frame_Data
     {
@@ -127,20 +129,19 @@ namespace Renderer_System
         // Uniform buffer
         // =========================================================
 
-        VkBuffer       uniform_buffer = VK_NULL_HANDLE;
-        VkDeviceMemory uniform_memory = VK_NULL_HANDLE;
-
-        // Persistent CPU-side pointer into uniform_memory.
-        // Valid for the entire lifetime of this Frame_Data.
-        // Write here each frame: std::memcpy(uniform_mapped_ptr, &ubo, sizeof(ubo))
-        void* uniform_mapped_ptr = nullptr;
+        // Buffer, allocation and the persistent CPU-side pointer, all
+        // in one. uniform_buffer.mapped_ptr is valid for the entire
+        // lifetime of this Frame_Data.
+        // Write here each frame:
+        //   std::memcpy(uniform_buffer.mapped_ptr, &ubo, sizeof(ubo))
+        Vulkan_Buffer_Utils::Buffer_Allocation uniform_buffer;
 
         // =========================================================
         // Lifecycle
         // =========================================================
 
         // Allocates all resources for this frame slot.
-        void Init(const Vulkan_Device& _device)
+        void Init(const Vulkan_Device& _device, VmaAllocator _allocator)
         {
             VkDevice device = _device.Get_logical_device_handle();
 
@@ -223,38 +224,26 @@ namespace Renderer_System
             }
 
             // ── Uniform buffer (persistently mapped) ──────────────
-            Vulkan_Buffer_Utils::Create_buffer(
-                _device,
+            // Mapped once at creation and kept mapped for the lifetime of
+            // this frame slot.
+            uniform_buffer = Vulkan_Buffer_Utils::Create_buffer(
+                _allocator,
                 sizeof(Frame_UBO),
                 VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                uniform_buffer,
-                uniform_memory
+                Vulkan_Buffer_Utils::Buffer_Access::Cpu_To_Gpu,
+                true
             );
-
-            // Map once, keep mapped for the lifetime of this frame slot.
-            vkMapMemory(device, uniform_memory, 0, sizeof(Frame_UBO), 0, &uniform_mapped_ptr);
         }
 
         // Destroys all resources owned by this frame slot.
         // Safe to call on a default-constructed (all-null) Frame_Data.
-        void Destroy(VkDevice _device)
+        void Destroy(VkDevice _device, VmaAllocator _allocator)
         {
             assert(_device != VK_NULL_HANDLE &&
                 "Frame_Data::Destroy() called with a null device");
 
-            if (uniform_mapped_ptr != nullptr) {
-                vkUnmapMemory(_device, uniform_memory);
-                uniform_mapped_ptr = nullptr;
-            }
-            if (uniform_buffer != VK_NULL_HANDLE) {
-                vkDestroyBuffer(_device, uniform_buffer, nullptr);
-                uniform_buffer = VK_NULL_HANDLE;
-            }
-            if (uniform_memory != VK_NULL_HANDLE) {
-                vkFreeMemory(_device, uniform_memory, nullptr);
-                uniform_memory = VK_NULL_HANDLE;
-            }
+            Vulkan_Buffer_Utils::Destroy_buffer(_allocator, uniform_buffer);
+
             if (present_fence != VK_NULL_HANDLE) {
                 vkDestroyFence(_device, present_fence, nullptr);
                 present_fence = VK_NULL_HANDLE;

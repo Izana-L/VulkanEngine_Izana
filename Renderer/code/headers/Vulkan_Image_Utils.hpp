@@ -5,14 +5,25 @@
 
 #include <Vulkan_Device.hpp>
 
+#include <vk_mem_alloc.h>
+
 namespace Renderer_System
 {
     namespace Vulkan_Image_Utils
     {
 
-        // Creates a VkImage and allocates+binds its backing VkDeviceMemory in
-        // one call. Same "create resource, query memory requirements, allocate,
-        // bind" pattern as Vulkan_Buffer_Utils::Create_buffer, applied to images.
+        // An image and the VMA allocation backing it. Same idea as
+        // Vulkan_Buffer_Utils::Buffer_Allocation: the two always travel
+        // together, so they are freed together.
+        struct Image_Allocation
+        {
+            VkImage       image = VK_NULL_HANDLE;
+            VmaAllocation allocation = VK_NULL_HANDLE;
+        };
+
+        // Creates a VkImage and sub-allocates its memory through VMA in one
+        // call. Same "create resource, allocate, bind" pattern as
+        // Vulkan_Buffer_Utils::Create_buffer, applied to images.
         //
         // _width / _height: image dimensions in texels
         // _mip_levels: number of mip levels to allocate space for. The image
@@ -24,21 +35,22 @@ namespace Renderer_System
         // _usage: what the image will be used for (e.g. TRANSFER_DST_BIT |
         //   SAMPLED_BIT for a standard texture, plus TRANSFER_SRC_BIT if mips
         //   will be generated via blit from this image to itself)
-        // _properties: required memory properties — DEVICE_LOCAL_BIT for all
-        //   GPU-sampled textures (no CPU access needed after upload)
-        // _out_image / _out_image_memory: the created handles are written here
-        void Create_image(
-            const Vulkan_Device& _device,
-            uint32_t              _width,
-            uint32_t              _height,
-            uint32_t              _mip_levels,
-            VkFormat              _format,
-            VkImageTiling         _tiling,
-            VkImageUsageFlags     _usage,
-            VkMemoryPropertyFlags _properties,
-            VkImage& _out_image,
-            VkDeviceMemory& _out_image_memory
+        //
+        // The memory properties parameter is gone: every image created here
+        // is DEVICE_LOCAL, which VMA_MEMORY_USAGE_AUTO derives from _usage.
+        Image_Allocation Create_image(
+            VmaAllocator      _allocator,
+            uint32_t          _width,
+            uint32_t          _height,
+            uint32_t          _mip_levels,
+            VkFormat          _format,
+            VkImageTiling     _tiling,
+            VkImageUsageFlags _usage
         );
+
+        // Frees the image and its allocation. Does NOT touch image views —
+        // destroy those first. Safe with null handles.
+        void Destroy_image(VmaAllocator _allocator, Image_Allocation& _image);
 
         // Creates a VkImageView for an existing VkImage. A VkImage is just
         // memory — the view tells Vulkan how to interpret it (format, which
@@ -50,7 +62,7 @@ namespace Renderer_System
         //   VK_IMAGE_ASPECT_DEPTH_BIT for depth images
         // _mip_levels: how many mip levels this view exposes, starting from 0
         VkImageView Create_image_view(
-            const Vulkan_Device& _device,
+            VkDevice              _device,
             VkImage               _image,
             VkFormat              _format,
             VkImageAspectFlags    _aspect_flags,

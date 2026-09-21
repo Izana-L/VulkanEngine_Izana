@@ -60,7 +60,7 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>..\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(VULKAN_SDK)\Include;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\CoreTypes\code\headers;$(SolutionDir)..\..\ThirdParty\glm</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(VULKAN_SDK)\Include;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\CoreTypes\code\headers;$(SolutionDir)..\..\ThirdParty\glm;$(SolutionDir)..\..\ThirdParty\vma\include</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -86,7 +86,7 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>..\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(VULKAN_SDK)\Include;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\CoreTypes\code\headers;$(SolutionDir)..\..\ThirdParty\glm</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(VULKAN_SDK)\Include;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\CoreTypes\code\headers;$(SolutionDir)..\..\ThirdParty\glm;$(SolutionDir)..\..\ThirdParty\vma\include</AdditionalIncludeDirectories>
       <ShowIncludes>false</ShowIncludes>
     </ClCompile>
     <Link>
@@ -113,6 +113,7 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
     <ClCompile Include="..\code\sources\Renderer.cpp" />
     <ClCompile Include="..\code\sources\Sampler_Cache.cpp" />
     <ClCompile Include="..\code\sources\Texture_GPU.cpp" />
+    <ClCompile Include="..\code\sources\Vulkan_Allocator.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Buffer_Utils.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Command_Pool.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Depth_Resources.cpp" />
@@ -136,6 +137,7 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
     <ClInclude Include="..\code\headers\Renderer.hpp" />
     <ClInclude Include="..\code\headers\Sampler_Cache.hpp" />
     <ClInclude Include="..\code\headers\Texture_GPU.hpp" />
+    <ClInclude Include="..\code\headers\Vulkan_Allocator.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Buffer_Utils.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Command_Pool.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Depth_Resources.hpp" />

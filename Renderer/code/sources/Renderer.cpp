@@ -20,9 +20,10 @@ namespace Renderer_System
                         : instance(_enable_validation, "Game", "Engine"),
                         surface(instance, _window),
                         device(instance, surface),
+                        allocator(instance, device),
                         swapchain(device, surface, _window, 3, false),
                         render_pass(device, swapchain.Get_image_format(), device.Find_supported_depth_format()),
-                        depth_resources(device, device.Find_supported_depth_format(), swapchain.Get_extent()),
+                        depth_resources(device, allocator.Get_handle(), device.Find_supported_depth_format(), swapchain.Get_extent()),
                         framebuffers(device, render_pass, swapchain, depth_resources),
                         bindless_registry(device, 1024),
                         pipeline_cache(device),
@@ -50,7 +51,7 @@ namespace Renderer_System
 
         // ── Frame resources ────────────────────────────────────────
         for (auto& frame : frames)
-            frame.Init(device);
+            frame.Init(device, allocator.Get_handle());
 
         // ── Descriptor pool + sets ─────────────────────────────────
         Init_descriptor_pool();
@@ -112,7 +113,7 @@ namespace Renderer_System
                 descriptor_pool, nullptr);
 
         for (auto& frame : frames)
-            frame.Destroy(device.Get_logical_device_handle());
+            frame.Destroy(device.Get_logical_device_handle(), allocator.Get_handle());
 
         // Vulkan core objects are destroyed in reverse construction
         // order by their own destructors (RAII). sampler_cache destroys
@@ -189,7 +190,7 @@ namespace Renderer_System
             assert(!mesh_data->indices.empty() &&
                 "Upload_batch: MeshData has no indices");
 
-            meshes.emplace_back(device, transfer_cmd, *mesh_data);
+            meshes.emplace_back(allocator.Get_handle(), transfer_cmd, *mesh_data);
             result.mesh_gpu_ids.push_back(
                 static_cast<uint32_t>(meshes.size() - 1));
         }
@@ -203,7 +204,7 @@ namespace Renderer_System
             assert(upload.data->width > 0 && upload.data->height > 0 &&
                 "Upload_batch: ImageData has zero dimensions");
 
-            textures.emplace_back(device, transfer_cmd, *upload.data, upload.format);
+            textures.emplace_back(device, allocator.Get_handle(), transfer_cmd, *upload.data, upload.format);
         }
 
         // ── End, submit, wait — ONCE for the whole batch ──────────
@@ -350,7 +351,7 @@ namespace Renderer_System
             dst.type = static_cast<int32_t>(src.type);
         }
 
-        std::memcpy(frame.uniform_mapped_ptr, &ubo, sizeof(ubo));
+        std::memcpy(frame.uniform_buffer.mapped_ptr, &ubo, sizeof(ubo));
         // ── Reset fence just before submit (not before acquire) ───
         vkResetFences(dev, 1, &frame.in_flight_fence);
 
@@ -676,7 +677,7 @@ namespace Renderer_System
         for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; ++i)
         {
             VkDescriptorBufferInfo buffer_info{};
-            buffer_info.buffer = frames[i].uniform_buffer;
+            buffer_info.buffer = frames[i].uniform_buffer.buffer;
             buffer_info.offset = 0;
             buffer_info.range = sizeof(Frame_UBO);
 

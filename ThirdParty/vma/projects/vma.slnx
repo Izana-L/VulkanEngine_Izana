@@ -1,0 +1,9 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="vma.vcxproj" Id="3970b06f-9a7f-403e-8b80-3215b41ba6d9">
+    <Build Solution="*|x86" Project="false" />
+  </Project>
+</Solution>

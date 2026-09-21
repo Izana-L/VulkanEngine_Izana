@@ -4,6 +4,8 @@
 #include <GLFW/glfw3.h>
 
 #include <Vulkan_Device.hpp>
+#include <Vulkan_Image_Utils.hpp>
+#include <Vulkan_Buffer_Utils.hpp>
 #include <ImageData.hpp>
 
 #include <cstdint>
@@ -27,7 +29,7 @@ namespace Renderer_System
     //
     // Typical usage (mirrors Renderer::Upload_mesh):
     //   vkBeginCommandBuffer(transfer_cmd, ...);
-    //   textures.emplace_back(device, transfer_cmd, image_data);
+    //   textures.emplace_back(device, allocator, transfer_cmd, image_data);
     //   vkEndCommandBuffer(transfer_cmd);
     //   vkQueueSubmit(...); vkQueueWaitIdle(...);
     //   textures.back().Release_staging_buffers();
@@ -51,6 +53,7 @@ namespace Renderer_System
         //   ImageData itself doesn't know its color space.
         Texture_GPU(
             const Vulkan_Device& _device,
+            VmaAllocator               _allocator,
             VkCommandBuffer            _transfer_cmd,
             const CoreTypes::ImageData& _image_data,
             VkFormat                   _format
@@ -84,14 +87,15 @@ namespace Renderer_System
 
         void Destroy();
 
-        VkDevice       device_handle;
+        // Still needed: image views are not memory, so they are created
+        // and destroyed through the device, not through VMA.
+        VkDevice     device_handle;
+        VmaAllocator allocator;
 
-        VkImage        image;
-        VkDeviceMemory image_memory;
-        VkImageView    image_view;
+        Vulkan_Image_Utils::Image_Allocation   image;
+        VkImageView                            image_view;
 
-        VkBuffer       staging_buffer;
-        VkDeviceMemory staging_memory;
+        Vulkan_Buffer_Utils::Buffer_Allocation staging;
 
         uint32_t       width;
         uint32_t       height;

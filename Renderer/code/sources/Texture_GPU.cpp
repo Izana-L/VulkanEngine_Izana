@@ -13,16 +13,14 @@ namespace Renderer_System
     // ---------- Constructor ----------
     Texture_GPU::Texture_GPU(
         const Vulkan_Device& _device,
+        VmaAllocator                _allocator,
         VkCommandBuffer             _transfer_cmd,
         const CoreTypes::ImageData& _image_data,
         VkFormat                    _format)
 
         : device_handle(_device.Get_logical_device_handle()),
-        image(VK_NULL_HANDLE),
-        image_memory(VK_NULL_HANDLE),
+        allocator(_allocator),
         image_view(VK_NULL_HANDLE),
-        staging_buffer(VK_NULL_HANDLE),
-        staging_memory(VK_NULL_HANDLE),
         width(_image_data.width),
         height(_image_data.height),
         mip_levels(Vulkan_Image_Utils::Compute_mip_levels(_image_data.width, _image_data.height)),
@@ -30,6 +28,8 @@ namespace Renderer_System
     {
         assert(device_handle != VK_NULL_HANDLE &&
             "Vulkan_Device must be fully constructed before creating a Texture_GPU");
+        assert(allocator != VK_NULL_HANDLE &&
+            "Vulkan_Allocator must be fully constructed before creating a Texture_GPU");
         assert(_transfer_cmd != VK_NULL_HANDLE &&
             "Texture_GPU: transfer command buffer must be valid and already recording");
         assert(!_image_data.pixels.empty() &&
@@ -47,19 +47,20 @@ namespace Renderer_System
         const VkDeviceSize image_size =
             static_cast<VkDeviceSize>(width) * height * 4;
 
-        Vulkan_Buffer_Utils::Create_buffer(
-            _device,
+        staging = Vulkan_Buffer_Utils::Create_buffer(
+            allocator,
             image_size,
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            staging_buffer,
-            staging_memory
+            Vulkan_Buffer_Utils::Buffer_Access::Cpu_To_Gpu,
+            true
         );
 
-        void* mapped = nullptr;
-        vkMapMemory(device_handle, staging_memory, 0, image_size, 0, &mapped);
-        std::memcpy(mapped, _image_data.pixels.data(), static_cast<size_t>(image_size));
-        vkUnmapMemory(device_handle, staging_memory);
+        Vulkan_Buffer_Utils::Upload_to_buffer(
+            allocator,
+            staging,
+            _image_data.pixels.data(),
+            image_size
+        );
 
         // =========================================================
         // Image creation
@@ -69,18 +70,15 @@ namespace Renderer_System
         // target, because Generate_mipmaps blits each mip level FROM the
         // previous level of this same image — the image is both source and
         // destination of those internal blits.
-        Vulkan_Image_Utils::Create_image(
-            _device,
+        image = Vulkan_Image_Utils::Create_image(
+            allocator,
             width, height,
             mip_levels,
             format,
             VK_IMAGE_TILING_OPTIMAL,
             VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
             VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-            VK_IMAGE_USAGE_SAMPLED_BIT,
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            image,
-            image_memory
+            VK_IMAGE_USAGE_SAMPLED_BIT
         );
 
         // =========================================================
@@ -91,13 +89,13 @@ namespace Renderer_System
         // copied into. Generate_mipmaps re-transitions levels individually
         // as it processes them.
         Vulkan_Image_Utils::Transition_image_layout(
-            _transfer_cmd, image,
+            _transfer_cmd, image.image,
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             mip_levels
         );
 
         Vulkan_Image_Utils::Copy_buffer_to_image(
-            _transfer_cmd, staging_buffer, image, width, height
+            _transfer_cmd, staging.buffer, image.image, width, height
         );
 
         if (mip_levels > 1)
@@ -105,7 +103,7 @@ namespace Renderer_System
             // Generates mips 1..N from mip 0, leaves every level in
             // SHADER_READ_ONLY_OPTIMAL when done.
             Vulkan_Image_Utils::Generate_mipmaps(
-                _device, _transfer_cmd, image, format,
+                _device, _transfer_cmd, image.image, format,
                 static_cast<int32_t>(width), static_cast<int32_t>(height),
                 mip_levels
             );
@@ -115,7 +113,7 @@ namespace Renderer_System
             // Single mip level — no blitting needed, just transition
             // straight to shader-readable.
             Vulkan_Image_Utils::Transition_image_layout(
-                _transfer_cmd, image,
+                _transfer_cmd, image.image,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 mip_levels
             );
@@ -126,7 +124,7 @@ namespace Renderer_System
         // =========================================================
 
         image_view = Vulkan_Image_Utils::Create_image_view(
-            _device, image, format, VK_IMAGE_ASPECT_COLOR_BIT, mip_levels
+            device_handle, image.image, format, VK_IMAGE_ASPECT_COLOR_BIT, mip_levels
         );
     }
 
@@ -145,47 +143,30 @@ namespace Renderer_System
             vkDestroyImageView(device_handle, image_view, nullptr);
             image_view = VK_NULL_HANDLE;
         }
-        if (image != VK_NULL_HANDLE) {
-            vkDestroyImage(device_handle, image, nullptr);
-            image = VK_NULL_HANDLE;
-        }
-        if (image_memory != VK_NULL_HANDLE) {
-            vkFreeMemory(device_handle, image_memory, nullptr);
-            image_memory = VK_NULL_HANDLE;
-        }
+        Vulkan_Image_Utils::Destroy_image(allocator, image);
     }
 
     // ---------- Release_staging_buffers ----------
     void Texture_GPU::Release_staging_buffers()
     {
-        if (staging_buffer != VK_NULL_HANDLE) {
-            vkDestroyBuffer(device_handle, staging_buffer, nullptr);
-            staging_buffer = VK_NULL_HANDLE;
-        }
-        if (staging_memory != VK_NULL_HANDLE) {
-            vkFreeMemory(device_handle, staging_memory, nullptr);
-            staging_memory = VK_NULL_HANDLE;
-        }
+        Vulkan_Buffer_Utils::Destroy_buffer(allocator, staging);
     }
 
     // ---------- Move constructor ----------
     Texture_GPU::Texture_GPU(Texture_GPU&& _other) noexcept
         : device_handle(_other.device_handle),
+        allocator(_other.allocator),
         image(_other.image),
-        image_memory(_other.image_memory),
         image_view(_other.image_view),
-        staging_buffer(_other.staging_buffer),
-        staging_memory(_other.staging_memory),
+        staging(_other.staging),
         width(_other.width),
         height(_other.height),
         mip_levels(_other.mip_levels),
         format(_other.format)
     {
-        _other.image = VK_NULL_HANDLE;
-        _other.image_memory = VK_NULL_HANDLE;
+        _other.image = {};
         _other.image_view = VK_NULL_HANDLE;
-        _other.staging_buffer = VK_NULL_HANDLE;
-        _other.staging_memory = VK_NULL_HANDLE;
+        _other.staging = {};
     }
 
     // ---------- Move assignment ----------
@@ -195,21 +176,18 @@ namespace Renderer_System
             Destroy();
 
             device_handle = _other.device_handle;
+            allocator = _other.allocator;
             image = _other.image;
-            image_memory = _other.image_memory;
             image_view = _other.image_view;
-            staging_buffer = _other.staging_buffer;
-            staging_memory = _other.staging_memory;
+            staging = _other.staging;
             width = _other.width;
             height = _other.height;
             mip_levels = _other.mip_levels;
             format = _other.format;
 
-            _other.image = VK_NULL_HANDLE;
-            _other.image_memory = VK_NULL_HANDLE;
+            _other.image = {};
             _other.image_view = VK_NULL_HANDLE;
-            _other.staging_buffer = VK_NULL_HANDLE;
-            _other.staging_memory = VK_NULL_HANDLE;
+            _other.staging = {};
         }
         return *this;
     }
@@ -224,9 +202,9 @@ namespace Renderer_System
 
     VkImage Texture_GPU::Get_image() const
     {
-        assert(image != VK_NULL_HANDLE &&
+        assert(image.image != VK_NULL_HANDLE &&
             "Get_image() called on a moved-from or destroyed Texture_GPU");
-        return image;
+        return image.image;
     }
 
     uint32_t Texture_GPU::Get_width()      const { return width; }
