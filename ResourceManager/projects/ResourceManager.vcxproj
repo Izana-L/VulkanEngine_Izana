@@ -60,7 +60,7 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>..\code\headers;$(SolutionDir)..\..\ThirdParty\stb_image\include;$(SolutionDir)..\..\CoreTypes\code\headers;$(SolutionDir)..\..\ThirdParty\tinygltf\include;$(SolutionDir)..\..\Math\code\headers;..\..\ThirdParty\glm</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\code\headers;$(SolutionDir)..\..\ThirdParty\stb_image\include;$(SolutionDir)..\..\CoreTypes\code\headers;$(SolutionDir)..\..\ThirdParty\tinygltf\include;$(SolutionDir)..\..\Math\code\headers;..\..\ThirdParty\glm;..\..\ThirdParty\meshoptimizer\include</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -79,7 +79,7 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>..\code\headers;$(SolutionDir)..\..\ThirdParty\stb_image\include;$(SolutionDir)..\..\CoreTypes\code\headers;$(SolutionDir)..\..\ThirdParty\tinygltf\include;$(SolutionDir)..\..\Math\code\headers;..\..\ThirdParty\glm</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\code\headers;$(SolutionDir)..\..\ThirdParty\stb_image\include;$(SolutionDir)..\..\CoreTypes\code\headers;$(SolutionDir)..\..\ThirdParty\tinygltf\include;$(SolutionDir)..\..\Math\code\headers;..\..\ThirdParty\glm;..\..\ThirdParty\meshoptimizer\include</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -92,12 +92,14 @@
   <ItemGroup>
     <ClCompile Include="..\code\sources\Image_Loader.cpp" />
     <ClCompile Include="..\code\sources\Mesh_Loader.cpp" />
+    <ClCompile Include="..\code\sources\Mesh_Optimizer.cpp" />
     <ClCompile Include="..\code\sources\Primitive_Builder.cpp" />
     <ClCompile Include="..\code\sources\Resource_Manager.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\code\headers\Image_Loader.hpp" />
     <ClInclude Include="..\code\headers\Mesh_Loader.hpp" />
+    <ClInclude Include="..\code\headers\Mesh_Optimizer.hpp" />
     <ClInclude Include="..\code\headers\Primitive_Builder.hpp" />
     <ClInclude Include="..\code\headers\Primitive_Desc.hpp" />
     <ClInclude Include="..\code\headers\Resource_Manager.hpp" />

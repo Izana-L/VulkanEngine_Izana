@@ -2,6 +2,7 @@
 
 #include <Image_Loader.hpp>
 #include <Mesh_Loader.hpp>
+#include <Mesh_Optimizer.hpp>
 #include <Primitive_Builder.hpp>
 #include <Primitive_Desc.hpp>
 #include <Asset_Handle.hpp>

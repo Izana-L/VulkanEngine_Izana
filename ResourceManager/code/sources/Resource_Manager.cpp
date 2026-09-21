@@ -105,7 +105,11 @@ namespace ResourceManager
         handles.reserve(loaded.size());
 
         for (CoreTypes::MeshData& mesh_data : loaded)
+        {
+            //Mesh_Optimizer::Log_stats(Mesh_Optimizer::Optimize(mesh_data), _path);
+            Mesh_Optimizer::Optimize(mesh_data);
             handles.push_back(Register_mesh(std::move(mesh_data), _path));
+        }
 
         mesh_cache[key] = handles;
 
@@ -169,6 +173,8 @@ namespace ResourceManager
         // Cache miss — generate.
         CoreTypes::MeshData mesh_data = Primitive_Builder::Build(desc);
 
+       // Mesh_Optimizer::Log_stats(Mesh_Optimizer::Optimize(mesh_data), Describe(desc));
+        Mesh_Optimizer::Optimize(mesh_data), Describe(desc);
         CoreTypes::Asset_Handle handle = Register_mesh(std::move(mesh_data), Describe(desc));
 
         mesh_cache[key] = { handle };

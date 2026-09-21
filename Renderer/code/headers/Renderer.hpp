@@ -106,6 +106,7 @@ namespace Renderer_System
         // takes its handle. Destruction runs in reverse, so the pipeline is
         // gone before the cache is serialized — which is what we want.
         Pipeline_Cache         pipeline_cache;
+        Descriptor_Layout_Cache descriptor_layouts;
         // The layout every pipeline shares. Before the registry, because
         // pipelines are built against it and must be destroyed before it.
         Pipeline_Layout        pipeline_layout;

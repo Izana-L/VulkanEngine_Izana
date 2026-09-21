@@ -27,7 +27,8 @@ namespace Renderer_System
                         framebuffers(device, render_pass, swapchain, depth_resources),
                         bindless_registry(device, 1024),
                         pipeline_cache(device),
-                        pipeline_layout(device, bindless_registry.Get_layout()),
+                        descriptor_layouts(device, bindless_registry.Get_layout()),
+                        pipeline_layout(device, descriptor_layouts),
                         pipeline_registry(device, render_pass,
                             pipeline_cache.Get_handle(),
                             pipeline_layout.Get_handle()),
@@ -328,18 +329,26 @@ namespace Renderer_System
         Frame_UBO ubo{};
         ubo.view = _packet.view.view;
         ubo.projection = _packet.view.projection;
+        ubo.view_projection = _packet.view.view_projection;
+        ubo.inv_view = _packet.view.inv_view;
+        ubo.inv_projection = _packet.view.inv_projection;
         ubo.camera_position = _packet.view.camera_position;
+        ubo.time = _packet.time;
+        ubo.delta_time = _packet.delta_time;
 
         const uint32_t packet_lights = static_cast<uint32_t>(_packet.lights.size());
         const uint32_t light_count = (packet_lights > MAX_LIGHTS) ? MAX_LIGHTS : packet_lights;
-
         ubo.light_count = static_cast<int32_t>(light_count);
 
-       
+        // Las luces van ahora a SU PROPIO buffer. Se escriben directamente sobre
+        // la memoria mapeada — no hay array intermedio en la pila porque el
+        // destino ya es un array contiguo del tipo correcto.
+        Light_GPU* gpu_lights = static_cast<Light_GPU*>(frame.light_buffer.mapped_ptr);
+
         for (uint32_t i = 0; i < light_count; ++i)
         {
             const CoreTypes::GPU_Light& src = _packet.lights[i];
-            Light_UBO& dst = ubo.lights[i];
+            Light_GPU& dst = gpu_lights[i];
 
             dst.position_or_direction = src.position_or_direction;
             dst.intensity = src.intensity;
@@ -630,24 +639,26 @@ namespace Renderer_System
     void Renderer::Init_descriptor_pool()
     {
         // One uniform buffer descriptor per frame-in-flight.
-        VkDescriptorPoolSize pool_size{};
-        pool_size.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        pool_size.descriptorCount = FRAMES_IN_FLIGHT;
+        std::array<VkDescriptorPoolSize, 2> pool_sizes{};
+
+        pool_sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        pool_sizes[0].descriptorCount = FRAMES_IN_FLIGHT;
+
+        pool_sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        pool_sizes[1].descriptorCount = FRAMES_IN_FLIGHT;
 
         VkDescriptorPoolCreateInfo pool_info{};
         pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        pool_info.poolSizeCount = 1;
-        pool_info.pPoolSizes = &pool_size;
-        pool_info.maxSets = FRAMES_IN_FLIGHT;
+        pool_info.poolSizeCount = static_cast<uint32_t>(pool_sizes.size());
+        pool_info.pPoolSizes = pool_sizes.data();
+        pool_info.maxSets = FRAMES_IN_FLIGHT;   // un set 0 por fotograma
 
         VkResult result = vkCreateDescriptorPool(
             device.Get_logical_device_handle(), &pool_info, nullptr, &descriptor_pool);
 
         if (result != VK_SUCCESS) {
-            throw std::runtime_error(
-                "Renderer: failed to create descriptor pool: " +
-                Vulkan_Utils::Vk_result_to_string(result)
-            );
+            throw std::runtime_error("Renderer: failed to create descriptor pool: " +
+                Vulkan_Utils::Vk_result_to_string(result));
         }
     }
 
@@ -657,9 +668,9 @@ namespace Renderer_System
 
     void Renderer::Init_descriptor_sets()
     {
-        // Allocate one descriptor set per frame from the same layout.
         std::array<VkDescriptorSetLayout, FRAMES_IN_FLIGHT> layouts;
-        layouts.fill(pipeline_layout.Get_descriptor_set_layout());
+        // El layout ya no es de pipeline_layout: es de la cache.
+        layouts.fill(descriptor_layouts.Get(Descriptor_Set::Per_Frame));
 
         VkDescriptorSetAllocateInfo alloc_info{};
         alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -671,31 +682,46 @@ namespace Renderer_System
             device.Get_logical_device_handle(), &alloc_info, descriptor_sets.data());
 
         if (result != VK_SUCCESS) {
-            throw std::runtime_error(
-                "Renderer: failed to allocate descriptor sets: " +
-                Vulkan_Utils::Vk_result_to_string(result)
-            );
+            throw std::runtime_error("Renderer: failed to allocate descriptor sets: " +
+                Vulkan_Utils::Vk_result_to_string(result));
         }
 
-        // Point each descriptor set at the uniform buffer of its frame slot.
         for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; ++i)
         {
-            VkDescriptorBufferInfo buffer_info{};
-            buffer_info.buffer = frames[i].uniform_buffer.buffer;
-            buffer_info.offset = 0;
-            buffer_info.range = sizeof(Frame_UBO);
+            VkDescriptorBufferInfo ubo_info{};
+            ubo_info.buffer = frames[i].uniform_buffer.buffer;
+            ubo_info.offset = 0;
+            ubo_info.range = sizeof(Frame_UBO);
 
-            VkWriteDescriptorSet write{};
-            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            write.dstSet = descriptor_sets[i];
-            write.dstBinding = 0;
-            write.dstArrayElement = 0;
-            write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            write.descriptorCount = 1;
-            write.pBufferInfo = &buffer_info;
+            VkDescriptorBufferInfo light_info{};
+            light_info.buffer = frames[i].light_buffer.buffer;
+            light_info.offset = 0;
+            // El rango es la CAPACIDAD entera, no las luces vivas de este
+            // fotograma: el descriptor se escribe una vez al arrancar y el
+            // contenido cambia por memcpy. Cuantas entradas son validas lo
+            // dice Frame_UBO::light_count.
+            light_info.range = sizeof(Light_GPU) * MAX_LIGHTS;
 
-            vkUpdateDescriptorSets(
-                device.Get_logical_device_handle(), 1, &write, 0, nullptr);
+            std::array<VkWriteDescriptorSet, 2> writes{};
+
+            writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[0].dstSet = descriptor_sets[i];
+            writes[0].dstBinding = Binding_Per_Frame::Frame_UBO;
+            writes[0].dstArrayElement = 0;
+            writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            writes[0].descriptorCount = 1;
+            writes[0].pBufferInfo = &ubo_info;
+
+            writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[1].dstSet = descriptor_sets[i];
+            writes[1].dstBinding = Binding_Per_Frame::Lights;
+            writes[1].dstArrayElement = 0;
+            writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[1].descriptorCount = 1;
+            writes[1].pBufferInfo = &light_info;
+
+            vkUpdateDescriptorSets(device.Get_logical_device_handle(),
+                static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
         }
     }
     // =========================================================

@@ -106,6 +106,7 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\code\sources\Bindless_Registry.cpp" />
+    <ClCompile Include="..\code\sources\Descriptor_Layout_Cache.cpp" />
     <ClCompile Include="..\code\sources\Mesh_GPU.cpp" />
     <ClCompile Include="..\code\sources\Pipeline_Cache.cpp" />
     <ClCompile Include="..\code\sources\Pipeline_Layout.cpp" />
@@ -129,6 +130,8 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\code\headers\Bindless_Registry.hpp" />
+    <ClInclude Include="..\code\headers\Descriptor_Layout_Cache.hpp" />
+    <ClInclude Include="..\code\headers\Descriptor_Sets.hpp" />
     <ClInclude Include="..\code\headers\Frame_Data.hpp" />
     <ClInclude Include="..\code\headers\Mesh_GPU.hpp" />
     <ClInclude Include="..\code\headers\Pipeline_Cache.hpp" />

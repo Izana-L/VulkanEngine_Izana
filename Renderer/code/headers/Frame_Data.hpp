@@ -17,24 +17,11 @@
 namespace Renderer_System
 {
 
-    // Numero maximo de luces por frame. DEBE coincidir con MAX_LIGHTS
-    // en mesh.frag: si divergen, el shader lee fuera del array.
+    
     static constexpr uint32_t MAX_LIGHTS = 16;
 
-    // Light_UBO: la version GPU de CoreTypes::GPU_Light, en layout std140.
-    //
-    // No es un memcpy de GPU_Light: std140 alinea cada vec3 a 16 bytes y
-    // redondea el tamano de un struct dentro de un array al siguiente
-    // multiplo de 16. El orden de campos de abajo esta elegido para que
-    // cada escalar rellene el hueco que deja el vec3 anterior — por eso
-    // no hay padding explicito salvo el del final.
-    //
-    // Offsets resultantes (verificados por los static_assert de abajo):
-    //   0  position_or_direction   12 intensity
-    //   16 color                   28 range
-    //   32 spot_direction          44 inner_angle
-    //   48 outer_angle             52 type        56 _padding
-    struct Light_UBO
+    
+    struct Light_GPU
     {
         MathLib::Vector3 position_or_direction;
         float            intensity;
@@ -44,31 +31,34 @@ namespace Renderer_System
         float            inner_angle;
         float            outer_angle;
         int32_t          type;            // 0=directional, 1=point, 2=spot
-        float            _padding0;      
-        float            _padding1;      
+        float            _padding0;
+        float            _padding1;
     };
 
-    // Frame_UBO: per-frame uniform data uploaded to the GPU each frame.
-    // Matrices de camara + el array de luces del frame.
-    // La matriz de modelo va aparte (push constants), no aqui.
-    //
-    // Layout std140: view 0, projection 64, camera_position 128,
-    // light_count 140, lights 144 (stride 64). Total 1168 bytes, muy por
-    // debajo del minimo garantizado de maxUniformBufferRange (16 KB).
+    static_assert(sizeof(Light_GPU) == 64, "Light_GPU rompe std430");
+    static_assert(offsetof(Light_GPU, color) == 16, "Light_GPU rompe std430");
+    static_assert(offsetof(Light_GPU, spot_direction) == 32, "Light_GPU rompe std430");
+
+    
     struct Frame_UBO
     {
         MathLib::Matrix4 view;
         MathLib::Matrix4 projection;
+        MathLib::Matrix4 view_projection;
+        MathLib::Matrix4 inv_view;          
+        MathLib::Matrix4 inv_projection;   
         MathLib::Vector3 camera_position;
-        int32_t          light_count;
-        Light_UBO        lights[MAX_LIGHTS];
+        int32_t          light_count;       
+        float            time;              
+        float            delta_time;
+        float            _padding0;
+        float            _padding1;
     };
 
-
-    static_assert(sizeof(Light_UBO) == 64, "Light_UBO rompe el layout std140");
-    static_assert(offsetof(Light_UBO, color) == 16, "Light_UBO rompe el layout std140");
-    static_assert(offsetof(Light_UBO, spot_direction) == 32, "Light_UBO rompe el layout std140");
-    static_assert(offsetof(Frame_UBO, lights) == 144, "Frame_UBO rompe el layout std140");
+    static_assert(sizeof(Frame_UBO) == 352, "Frame_UBO rompe std140");
+    static_assert(offsetof(Frame_UBO, inv_view) == 192, "Frame_UBO rompe std140");
+    static_assert(offsetof(Frame_UBO, camera_position) == 320, "Frame_UBO rompe std140");
+    static_assert(offsetof(Frame_UBO, time) == 336, "Frame_UBO rompe std140");
     // Frame_Data: all Vulkan resources that must exist independently for
     // each frame-in-flight slot.
     //
@@ -136,6 +126,7 @@ namespace Renderer_System
         //   std::memcpy(uniform_buffer.mapped_ptr, &ubo, sizeof(ubo))
         Vulkan_Buffer_Utils::Buffer_Allocation uniform_buffer;
 
+        Vulkan_Buffer_Utils::Buffer_Allocation light_buffer;
         // =========================================================
         // Lifecycle
         // =========================================================
@@ -226,13 +217,10 @@ namespace Renderer_System
             // ── Uniform buffer (persistently mapped) ──────────────
             // Mapped once at creation and kept mapped for the lifetime of
             // this frame slot.
-            uniform_buffer = Vulkan_Buffer_Utils::Create_buffer(
-                _allocator,
-                sizeof(Frame_UBO),
-                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                Vulkan_Buffer_Utils::Buffer_Access::Cpu_To_Gpu,
-                true
-            );
+            uniform_buffer = Vulkan_Buffer_Utils::Create_buffer(_allocator, sizeof(Frame_UBO),VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
+                                                                Vulkan_Buffer_Utils::Buffer_Access::Cpu_To_Gpu,true);
+            light_buffer = Vulkan_Buffer_Utils::Create_buffer(_allocator,sizeof(Light_GPU) * MAX_LIGHTS, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                                              Vulkan_Buffer_Utils::Buffer_Access::Cpu_To_Gpu,true);
         }
 
         // Destroys all resources owned by this frame slot.
@@ -242,6 +230,7 @@ namespace Renderer_System
             assert(_device != VK_NULL_HANDLE &&
                 "Frame_Data::Destroy() called with a null device");
 
+            Vulkan_Buffer_Utils::Destroy_buffer(_allocator, light_buffer);
             Vulkan_Buffer_Utils::Destroy_buffer(_allocator, uniform_buffer);
 
             if (present_fence != VK_NULL_HANDLE) {
