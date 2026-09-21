@@ -56,15 +56,9 @@ namespace Renderer_System {
         // depth/stencil attachment during rendering.
         //
         // One mip level: depth buffers don't need mipmaps.
-        depth_image = Vulkan_Image_Utils::Create_image(
-            allocator,
-            _extent.width,
-            _extent.height,
-            1,
-            depth_format,
-            VK_IMAGE_TILING_OPTIMAL,
-            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
-        );
+        depth_image = Vulkan_Image_Utils::Create_image( allocator,_extent.width, _extent.height, 1,
+                                                        depth_format, VK_IMAGE_TILING_OPTIMAL,
+                                                        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,true);
 
         // ---------- Image view creation ----------
         // DEPTH_BIT here, not COLOR_BIT like the swapchain image views -
@@ -72,13 +66,8 @@ namespace Renderer_System {
         // If the format includes a stencil component (e.g. D24_UNORM_S8_UINT),
         // you'd also include VK_IMAGE_ASPECT_STENCIL_BIT here once stencil
         // testing is actually used - left out for now since we don't use it yet.
-        depth_image_view = Vulkan_Image_Utils::Create_image_view(
-            device_handle,
-            depth_image.image,
-            depth_format,
-            VK_IMAGE_ASPECT_DEPTH_BIT,
-            1
-        );
+        depth_image_view = Vulkan_Image_Utils::Create_image_view(device_handle, depth_image.image,
+                                                                 depth_format,VK_IMAGE_ASPECT_DEPTH_BIT,1);
 
         current_extent = _extent;
 

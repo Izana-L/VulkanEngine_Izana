@@ -5,6 +5,7 @@
 #include <bit>
 #include <cstdint>
 #include <vector>
+#include <limits>
 
 namespace CoreTypes
 {
@@ -22,8 +23,15 @@ namespace CoreTypes
         MathLib::Matrix4 projection;
         MathLib::Matrix4 view_projection;   // projection * view, precomputed
         MathLib::Vector3 camera_position;
+
+        // Reverse-Z is in effect: the near plane maps to depth 1.0 and the
+        // far end to 0.0. Anything reconstructing view-space position or
+        // linear depth from the depth buffer must account for that.
         float            near_plane = 0.1f;
-        float            far_plane = 1000.0f;
+
+        // Infinity for a perspective camera (infinite far plane). Finite
+        // only for an orthographic one.
+        float            far_plane = std::numeric_limits<float>::infinity();
     };
 
     // =========================================================

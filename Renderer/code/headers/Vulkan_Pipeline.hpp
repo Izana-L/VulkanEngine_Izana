@@ -23,7 +23,15 @@ namespace Renderer_System
 
         bool            depth_test_enable = true;
         bool            depth_write_enable = true;
-        VkCompareOp     depth_compare_op = VK_COMPARE_OP_LESS;
+
+        // Reverse-Z: the near plane maps to 1.0 and the far end to 0.0, so
+        // "closer to the camera" means a GREATER depth value. Must stay in
+        // sync with the 0.0 depth clear and the reversed projection matrix
+        // built in Extractor.cpp.
+        //
+        // Becomes VK_COMPARE_OP_GREATER_OR_EQUAL once a depth prepass exists
+        // (the main pass then tests for equality against the prepass).
+        VkCompareOp     depth_compare_op = VK_COMPARE_OP_GREATER;
     };
     struct Pipeline_Config
     {

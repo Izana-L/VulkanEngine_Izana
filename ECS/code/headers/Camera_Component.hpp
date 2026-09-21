@@ -55,14 +55,24 @@ namespace ECS
         // Clip planes (both projection types)
         // =========================================================
 
-        // Near clip plane distance. Geometry closer than this is clipped.
-        // Keep as large as possible to maximize depth buffer precision.
+         // Near clip plane distance. Geometry closer than this is clipped.
+        //
+        // Under Reverse-Z with an infinite far plane this is the ONLY value
+        // that affects depth precision (z_ndc = near_plane / distance), so
+        // keep it as large as the game tolerates.
         float near_plane = 0.1f;
 
-        // Far clip plane distance. Geometry farther than this is clipped.
-        // The ratio far/near determines depth buffer precision — a ratio of
-        // 10000 (near=0.1, far=1000) loses significant depth precision.
-        // Tighten far or increase near if z-fighting appears.
+        // Far clip plane distance.
+        //
+        // IGNORED by Projection::Perspective: that path builds a Reverse-Z
+        // matrix with an infinite far plane, so nothing is ever clipped for
+        // being too far away and there is no far/near ratio left to spend
+        // precision on. Raising or lowering this changes nothing for a
+        // perspective camera.
+        //
+        // Still used by Projection::Orthographic, which has no perspective
+        // divide and therefore needs a finite range. Kept as a field for
+        // that, and because frustum culling will want a finite bound later.
         float far_plane = 1000.0f;
 
         // =========================================================

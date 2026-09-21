@@ -5,6 +5,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
+#include <cmath>
 
 
 namespace MathLib 
@@ -132,6 +133,70 @@ namespace MathLib
         inline Matrix4 Perspective(float fovY, float aspect,
             float nearPlane, float farPlane) {
             return glm::perspective(fovY, aspect, nearPlane, farPlane);
+        }
+        // =========================================================
+        // Reverse-Z
+        // =========================================================
+
+        // Reverse-Z correction: maps clip-space z to (w - z), which after the
+        // perspective divide turns a [0,1] depth range into [1,0]. The near
+        // plane lands on 1.0 and the far plane on 0.0.
+        //
+        // Why bother: float32 packs most of its representable values near
+        // 0.0, and a perspective projection packs most of ITS resolution near
+        // the camera. In the standard mapping both pile up in the same place,
+        // so the far half of the frustum is starved and z-fights. Reversing
+        // the range makes the two distributions cancel, giving nearly uniform
+        // relative precision across the whole frustum.
+        //
+        // REQUIRES a floating-point depth buffer (VK_FORMAT_D32_SFLOAT).
+        // On a UNORM depth buffer the spacing is already uniform and this
+        // gains exactly nothing.
+        //
+        // Multiply on the LEFT of a standard [0,1] projection:
+        //   reversed = Reverse_z_correction() * standard;
+        //
+        // Callers must also clear depth to 0.0 and use a GREATER compare op.
+        // All three go together or the scene vanishes.
+        inline Matrix4 Reverse_z_correction() {
+            Matrix4 correction(1.0f);
+            correction[2][2] = -1.0f;   // z' = -z ...
+            correction[3][2] = 1.0f;   // ... + w
+            return correction;
+        }
+
+        // Reverse-Z perspective projection with an INFINITE far plane, built
+        // directly in its final form (no correction matrix needed).
+        //
+        // The depth mapping collapses to:
+        //     z_ndc = nearPlane / distance_from_camera
+        // so the near plane is 1.0 and infinity approaches 0.0, never
+        // reaching it. Nothing is ever clipped for being too far away.
+        //
+        // With the far plane gone there is no far/near ratio left to burn
+        // precision on: nearPlane is the ONLY knob that affects depth
+        // resolution. Raise it as high as the game tolerates.
+        //
+        // Same requirements as Reverse_z_correction(): float depth buffer,
+        // depth cleared to 0.0, compare op GREATER.
+        //
+        //   fovY      -> vertical field of view in radians
+        //   aspect    -> viewport width / viewport height
+        //   nearPlane -> closest distance the camera can see (must be > 0)
+        //
+        // Right-handed, camera looking down -Z, [0,1] depth: the same
+        // conventions glm::perspective follows under GLM_FORCE_DEPTH_ZERO_TO_ONE.
+        inline Matrix4 Perspective_reverse_z_infinite(float fovY, float aspect,
+            float nearPlane) {
+            const float focal = 1.0f / std::tan(fovY * 0.5f);
+
+            Matrix4 projection(0.0f);
+            projection[0][0] = focal / aspect;
+            projection[1][1] = focal;
+            projection[2][2] = 0.0f;        // far plane at infinity -> 0.0
+            projection[2][3] = -1.0f;       // w_clip = -z_view
+            projection[3][2] = nearPlane;   // near plane -> 1.0
+            return projection;
         }
 
         // Builds an orthographic projection matrix.

@@ -61,7 +61,7 @@ namespace Renderer_System {
         VkAttachmentDescription depth_attachment{};
         depth_attachment.format = _depth_format;
         depth_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-        depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; // clear depth to 1.0 (far plane) at the start of each frame
+        depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;// Reverse-Z: cleared to 0.0 (the far end) each frame - value lives in Renderer::Record_command_buffer
         depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE; // we don't need the depth data after rendering this frame
         depth_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         depth_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;

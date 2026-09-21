@@ -8,8 +8,12 @@ namespace Renderer_System
 {
     Vulkan_Allocator::Vulkan_Allocator(const Vulkan_Instance& _instance,
         const Vulkan_Device& _device)
-        : allocator(VK_NULL_HANDLE)
+        : allocator(VK_NULL_HANDLE), heap_count(0)
     {
+        VkPhysicalDeviceMemoryProperties memory_properties{};
+        vkGetPhysicalDeviceMemoryProperties( _device.Get_physical_device_handle(), &memory_properties);
+        heap_count = memory_properties.memoryHeapCount;
+
         VmaAllocatorCreateInfo allocator_info{};
         allocator_info.physicalDevice = _device.Get_physical_device_handle();
         allocator_info.device = _device.Get_logical_device_handle();
@@ -53,13 +57,16 @@ namespace Renderer_System
 
     void Vulkan_Allocator::Log_memory_budget() const
     {
+        // Moved-from allocator: vmaGetHeapBudgets would trip VMA's own assert.
+        if (allocator == VK_NULL_HANDLE) return;
+
         VmaBudget budgets[VK_MAX_MEMORY_HEAPS]{};
         vmaGetHeapBudgets(allocator, budgets);
 
-        VkPhysicalDeviceMemoryProperties memory_properties{};
-        // (or cache the heap count in Vulkan_Device)
-        for (uint32_t i = 0; i < VK_MAX_MEMORY_HEAPS; ++i) {
-            if (budgets[i].budget == 0) continue;
+        // heap_count, not VK_MAX_MEMORY_HEAPS: vmaGetHeapBudgets only fills
+        // the heaps this device actually has, and a budget of 0 is a real
+        // value, not an "empty slot" sentinel.
+        for (uint32_t i = 0; i < heap_count; ++i) {
             std::cout << "[VMA] Heap " << i << ": "
                 << (budgets[i].usage / (1024 * 1024)) << " MB used / "
                 << (budgets[i].budget / (1024 * 1024)) << " MB budget\n";
@@ -69,9 +76,10 @@ namespace Renderer_System
     // Move ctor / assignment: same pattern as Vulkan_Device — steal the
     // handle and null the source so only one object destroys it.
     Vulkan_Allocator::Vulkan_Allocator(Vulkan_Allocator&& _other) noexcept
-        : allocator(_other.allocator)
+        : allocator(_other.allocator), heap_count(_other.heap_count)
     {
         _other.allocator = VK_NULL_HANDLE;
+        _other.heap_count = 0;
     }
 
     Vulkan_Allocator& Vulkan_Allocator::operator=(Vulkan_Allocator&& _other) noexcept
@@ -79,7 +87,9 @@ namespace Renderer_System
         if (this != &_other) {
             Destroy();
             allocator = _other.allocator;
+            heap_count = _other.heap_count;
             _other.allocator = VK_NULL_HANDLE;
+            _other.heap_count = 0;
         }
         return *this;
     }

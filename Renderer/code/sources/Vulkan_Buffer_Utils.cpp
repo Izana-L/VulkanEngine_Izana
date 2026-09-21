@@ -16,9 +16,9 @@ namespace Renderer_System
             Buffer_Access      _access,
             bool               _keep_mapped)
         {
+            assert(_allocator != VK_NULL_HANDLE && "Create_buffer() called with a null allocator");
             assert(_size > 0 && "Create_buffer() called with a zero size");
-            assert(!(_keep_mapped && _access == Buffer_Access::Gpu_Only) &&
-                "Create_buffer(): GPU-only memory cannot be kept mapped");
+            assert(!(_keep_mapped && _access == Buffer_Access::Gpu_Only) && "Create_buffer(): GPU-only memory cannot be kept mapped");
 
             // ---------- Buffer description (unchanged) ----------
             VkBufferCreateInfo buffer_info{};
@@ -38,10 +38,9 @@ namespace Renderer_System
 
             if (_access == Buffer_Access::Cpu_To_Gpu)
             {
-                // SEQUENTIAL_WRITE promises we only memcpy forward and never
-                // read back, which lets VMA hand us write-combined memory.
-                // Use HOST_ACCESS_RANDOM_BIT instead if you ever need reads.
+                
                 alloc_info.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+                alloc_info.requiredFlags = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
 
                 if (_keep_mapped)
                     alloc_info.flags |= VMA_ALLOCATION_CREATE_MAPPED_BIT;
@@ -99,7 +98,13 @@ namespace Renderer_System
             else
             {
                 void* mapped = nullptr;
-                vmaMapMemory(_allocator, _buffer.allocation, &mapped);
+                VkResult result = vmaMapMemory(_allocator, _buffer.allocation, &mapped);
+
+                if (result != VK_SUCCESS) 
+                {  
+                    throw std::runtime_error("Upload_to_buffer: allocation is not host-visible: " + Vulkan_Utils::Vk_result_to_string(result));
+                }
+
                 std::memcpy(mapped, _data, static_cast<size_t>(_size));
                 vmaUnmapMemory(_allocator, _buffer.allocation);
             }

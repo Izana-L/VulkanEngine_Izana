@@ -6,6 +6,7 @@
 #include <Light_Component.hpp>
 #include <Camera_Component.hpp>
 #include <Resource_Manager.hpp>
+#include <Matrix4.hpp>
 #include <iostream>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -83,24 +84,20 @@ namespace EngineCore
 
         if (camera_comp->projection == ECS::Camera_Component::Projection::Perspective)
         {
-            projection = glm::perspective(
-                glm::radians(camera_comp->fov),
-                aspect,
-                camera_comp->near_plane,
-                camera_comp->far_plane);
+            projection = MathLib::Mat4::Perspective_reverse_z_infinite( glm::radians(camera_comp->fov),aspect,  camera_comp->near_plane);
         }
         else
         {
-            // Orthographic: half-size in each direction.
+  
             const float h = camera_comp->ortho_size;
             const float w = h * aspect;
-            projection = glm::ortho(-w, w, -h, h,
-                camera_comp->near_plane,
-                camera_comp->far_plane);
+
+            projection = MathLib::Mat4::Reverse_z_correction() * glm::ortho(-w, w, -h, h,camera_comp->near_plane,camera_comp->far_plane);
         }
 
         // Vulkan clip space has Y flipped compared to OpenGL.
         // Flip the Y column of the projection to correct NDC orientation.
+        // Independent of the Z reversal above - different axis, both needed.
         projection[1][1] *= -1.0f;
 
         _out_packet.view.view = view;
@@ -108,7 +105,8 @@ namespace EngineCore
         _out_packet.view.view_projection = projection * view;
         _out_packet.view.camera_position = cam_pos;
         _out_packet.view.near_plane = camera_comp->near_plane;
-        _out_packet.view.far_plane = camera_comp->far_plane;
+        _out_packet.view.far_plane =(camera_comp->projection == ECS::Camera_Component::Projection::Perspective)
+                                      ? std::numeric_limits<float>::infinity() : camera_comp->far_plane;
 
         // =========================================================
         // 3. Build Draw_Items from (Transform + Mesh) entities

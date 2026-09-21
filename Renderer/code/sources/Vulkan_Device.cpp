@@ -349,29 +349,7 @@ namespace Renderer_System {
             VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT);
     }
 
-    // ---------- Find_memory_type ----------
-    uint32_t Vulkan_Device::Find_memory_type(
-        uint32_t              _type_filter,
-        VkMemoryPropertyFlags _properties) const
-    {
-        assert(physical_device != VK_NULL_HANDLE);
-
-        VkPhysicalDeviceMemoryProperties memory_properties{};
-        vkGetPhysicalDeviceMemoryProperties(physical_device, &memory_properties);
-
-        for (uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i) {
-            bool type_is_allowed =
-                (_type_filter & (1 << i)) != 0;
-            bool has_required_properties =
-                (memory_properties.memoryTypes[i].propertyFlags & _properties) == _properties;
-
-            if (type_is_allowed && has_required_properties)
-                return i;
-        }
-
-        throw std::runtime_error(
-            "Failed to find a suitable GPU memory type for the given requirements");
-    }
+    
 
     // ---------- Is_device_suitable ----------
     bool Vulkan_Device::Is_device_suitable(

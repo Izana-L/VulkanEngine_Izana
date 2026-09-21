@@ -90,8 +90,7 @@ namespace Renderer_System {
 
         VkFormat  Find_supported_depth_format()   const;
         bool      Is_swapchain_maintenance1_supported() const;
-        uint32_t  Find_memory_type(uint32_t _type_filter,
-            VkMemoryPropertyFlags _properties) const;
+
 
     private:
 

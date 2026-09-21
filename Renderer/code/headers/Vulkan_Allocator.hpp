@@ -2,7 +2,7 @@
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
-
+#include <cstdint>
 #include <vk_mem_alloc.h>
 
 #include <Vulkan_Instance.hpp>
@@ -20,6 +20,7 @@ namespace Renderer_System
     class Vulkan_Allocator
     {
         VmaAllocator allocator;
+        uint32_t     heap_count;
 
     public:
 

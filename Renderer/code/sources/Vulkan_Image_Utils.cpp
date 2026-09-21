@@ -19,7 +19,8 @@ namespace Renderer_System
             uint32_t          _mip_levels,
             VkFormat          _format,
             VkImageTiling     _tiling,
-            VkImageUsageFlags _usage)
+            VkImageUsageFlags _usage,
+            bool              _dedicated)
         {
             assert(_allocator != VK_NULL_HANDLE && "Create_image() called with a null allocator");
             assert(_width > 0 && _height > 0 && "Create_image() called with zero dimensions");
@@ -57,10 +58,8 @@ namespace Renderer_System
             VmaAllocationCreateInfo alloc_info{};
             alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
 
-            // Textures and depth buffers are large and long-lived, so each
-            // gets its own VkDeviceMemory instead of a slice of a shared
-            // block. Do NOT copy this flag onto small, numerous allocations.
-            alloc_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+            if (_dedicated)
+                alloc_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
 
             Image_Allocation out{};
 

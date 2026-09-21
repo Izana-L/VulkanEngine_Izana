@@ -45,7 +45,8 @@ namespace Renderer_System
             uint32_t          _mip_levels,
             VkFormat          _format,
             VkImageTiling     _tiling,
-            VkImageUsageFlags _usage
+            VkImageUsageFlags _usage,
+            bool              _dedicated = false
         );
 
         // Frees the image and its allocation. Does NOT touch image views —
