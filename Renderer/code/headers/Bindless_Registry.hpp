@@ -18,12 +18,12 @@ namespace Renderer_System
     // draw item carries texture indices (via push constant or material
     // buffer) that the shader uses to index directly into the array:
     //
-    //   layout(set = 1, binding = 0) uniform sampler2D textures[];
+    //   layout(set = 3, binding = 0) uniform sampler2D textures[];
     //   vec4 albedo = texture(textures[nonuniformEXT(material.albedo_index)], uv);
     //
-    // Requires the device to support descriptor indexing features
-    // (Vulkan_Device::Is_bindless_supported() must be true before
-    // constructing this — checked via assert).
+    // Requires the device to support descriptor indexing features.
+    // Vulkan_Device only selects devices that do; the constructor still
+    // verifies it and throws std::runtime_error otherwise.
     //
     // Index allocation is sequential and permanent: textures are never
     // unregistered or have their slots reused during a session, mirroring

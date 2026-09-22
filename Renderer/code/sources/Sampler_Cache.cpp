@@ -11,16 +11,11 @@ namespace Renderer_System
     // ---------- Constructor ----------
     Sampler_Cache::Sampler_Cache(const Vulkan_Device& _device)
         : device_handle(_device.Get_logical_device_handle()),
-        max_supported_anisotropy(1.0f)
+        anisotropy_enabled(_device.Is_sampler_anisotropy_enabled()),
+        max_supported_anisotropy(_device.Get_max_sampler_anisotropy())
     {
         assert(device_handle != VK_NULL_HANDLE &&
             "Vulkan_Device must be fully constructed before creating a Sampler_Cache");
-
-        // Query the device's actual anisotropy limit so requested values
-        // above it are clamped instead of causing a validation error.
-        VkPhysicalDeviceProperties properties{};
-        vkGetPhysicalDeviceProperties(_device.Get_physical_device_handle(), &properties);
-        max_supported_anisotropy = properties.limits.maxSamplerAnisotropy;
     }
 
     // ---------- Destructor ----------
@@ -82,12 +77,17 @@ namespace Renderer_System
         sampler_info.addressModeV = _desc.address_mode_v;
         sampler_info.addressModeW = _desc.address_mode_u;   // match U for consistency
 
-        // Clamp requested anisotropy to what the GPU actually supports.
+        // Anisotropy is used only when the device FEATURE was enabled
+        // (Vulkan_Device enables it when supported) and the requested level
+        // is above 1, clamped to the device limit. Without the feature the
+        // sampler is created isotropic, which is valid on every device.
         const float clamped_anisotropy =
             std::min(_desc.anisotropy, max_supported_anisotropy);
 
-        sampler_info.anisotropyEnable = (clamped_anisotropy > 1.0f) ? VK_TRUE : VK_FALSE;
-        sampler_info.maxAnisotropy = clamped_anisotropy;
+        const bool use_anisotropy = anisotropy_enabled && clamped_anisotropy > 1.0f;
+
+        sampler_info.anisotropyEnable = use_anisotropy ? VK_TRUE : VK_FALSE;
+        sampler_info.maxAnisotropy = use_anisotropy ? clamped_anisotropy : 1.0f;
 
         // Border color only matters for CLAMP_TO_BORDER address mode,
         // which this engine doesn't currently use — left at a sane default.
@@ -108,14 +108,8 @@ namespace Renderer_System
         sampler_info.mipLodBias = 0.0f;
 
         VkSampler sampler = VK_NULL_HANDLE;
-        VkResult result = vkCreateSampler(device_handle, &sampler_info, nullptr, &sampler);
-
-        if (result != VK_SUCCESS) {
-            throw std::runtime_error(
-                "Sampler_Cache: failed to create sampler: " +
-                Vulkan_Utils::Vk_result_to_string(result)
-            );
-        }
+        VK_CHECK(vkCreateSampler(device_handle, &sampler_info, nullptr, &sampler),
+            "Sampler_Cache: failed to create sampler");
 
         return sampler;
     }

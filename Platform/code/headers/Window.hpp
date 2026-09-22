@@ -29,6 +29,20 @@ namespace Platform {
 
         static int window_count;
 
+        // Shared body of the move constructor and move assignment: takes
+        // ownership of every field of _other, the input callbacks included,
+        // and re-points the GLFW user pointer at this object.
+        void Move_from(Window&& _other) noexcept;
+
+        // Saves the current position and size so they can be restored when
+        // leaving fullscreen. Only records anything while the window is
+        // actually windowed: saving while fullscreen or borderless would
+        // overwrite the real geometry with the monitor's.
+        void Remember_windowed_geometry();
+
+        // Applies the saved geometry and restores decorations.
+        void Restore_windowed_geometry();
+
     public:
 
         Window(uint32_t _width, uint32_t _height, const std::string& _title);
@@ -47,13 +61,18 @@ namespace Platform {
         void Poll_events();
         // Blocks until an OS event arrives. For idle states (minimized)
         // where polling in a loop would just burn a core.
-        void Wait_events();
+        void Wait_events() const;
         // =========================================================
         // Size
         // =========================================================
 
         void Get_size(int& _out_width, int& _out_height) const;
         void Get_framebuffer_size(int& _out_width, int& _out_height) const;
+
+        // True once after every framebuffer resize reported by GLFW, then
+        // false until the next one. The engine loop forwards it to the
+        // Renderer so the swapchain is rebuilt on the next frame, without
+        // depending on the driver returning OUT_OF_DATE / SUBOPTIMAL.
         bool Consume_resized_flag();
         void Set_min_size(int _min_width, int _min_height);
         void Set_max_size(int _max_width, int _max_height);

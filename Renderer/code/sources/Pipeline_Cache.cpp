@@ -41,15 +41,8 @@ namespace Renderer_System
         cache_info.initialDataSize = blob.size();
         cache_info.pInitialData = blob.empty() ? nullptr : blob.data();
 
-        VkResult result =
-            vkCreatePipelineCache(device_handle, &cache_info, nullptr, &cache);
-
-        if (result != VK_SUCCESS)
-        {
-            throw std::runtime_error(
-                "Pipeline_Cache: failed to create pipeline cache: " +
-                Vulkan_Utils::Vk_result_to_string(result));
-        }
+        VK_CHECK(vkCreatePipelineCache(device_handle, &cache_info, nullptr, &cache),
+            "Pipeline_Cache: failed to create pipeline cache");
 
         std::cout << "[Pipeline_Cache] Ready (" << blob.size()
             << " bytes loaded from disk).\n";
@@ -71,9 +64,17 @@ namespace Renderer_System
     {
         if (cache == VK_NULL_HANDLE) return false;
 
+        // Save() runs from the destructor, so a failure is reported through
+        // the log rather than an exception.
         size_t size = 0;
-        if (vkGetPipelineCacheData(device_handle, cache, &size, nullptr) != VK_SUCCESS)
+        const VkResult size_result = vkGetPipelineCacheData(device_handle, cache, &size, nullptr);
+
+        if (size_result != VK_SUCCESS)
+        {
+            std::cerr << "[Pipeline_Cache] Could not query cache size: "
+                << Vulkan_Utils::Vk_result_to_string(size_result) << "\n";
             return false;
+        }
 
         if (size == 0) return false;
 
@@ -85,7 +86,11 @@ namespace Renderer_System
             vkGetPipelineCacheData(device_handle, cache, &size, blob.data());
 
         if (result != VK_SUCCESS && result != VK_INCOMPLETE)
+        {
+            std::cerr << "[Pipeline_Cache] Could not read cache data: "
+                << Vulkan_Utils::Vk_result_to_string(result) << "\n";
             return false;
+        }
 
         blob.resize(size);
 

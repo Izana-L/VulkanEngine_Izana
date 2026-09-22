@@ -17,9 +17,12 @@ namespace Renderer_System
     // hoisted here and created once.
     //
     // The layout contract, shared by every pipeline:
-    //   set 0, binding 0 : per-frame view/projection UBO (vertex stage)
-    //   set 1            : global bindless texture array (Bindless_Registry)
-    //   push constant    : mat4 model, 64 bytes, vertex stage
+    //   set 0 : per-frame UBO + light buffer (Descriptor_Layout_Cache)
+    //   set 1 : per-pass, reserved (empty layout)
+    //   set 2 : per-material, reserved (empty layout)
+    //   set 3 : global bindless texture array (Bindless_Registry)
+    //   push constant : Push_Constants (Frame_Data.hpp), 96 bytes,
+    //                   vertex + fragment stages
     //
     // The day a pipeline needs a different contract (a compute pass, a
     // shadow pass with no bindless set), this stops being one shared object
@@ -28,15 +31,21 @@ namespace Renderer_System
     class Pipeline_Layout
     {
         VkDevice         device_handle;
-        VkPipelineLayout pipeline_layout;              // ya no posee layouts de set
+        VkPipelineLayout pipeline_layout;              // does not own the set layouts
     public:
-        // Los layouts de conjunto son ahora de Descriptor_Layout_Cache.
-        // Esta clase solo compone el VkPipelineLayout a partir de los cuatro
-        // y anade el rango de push constants.
+        // The set layouts belong to Descriptor_Layout_Cache. This class only
+        // composes the VkPipelineLayout from the four of them and adds the
+        // push constant range (Push_Constants in Frame_Data.hpp, both stages).
         Pipeline_Layout(const Vulkan_Device& _device, const Descriptor_Layout_Cache& _layouts);
+        ~Pipeline_Layout();
+
+        Pipeline_Layout(const Pipeline_Layout&) = delete;
+        Pipeline_Layout& operator=(const Pipeline_Layout&) = delete;
+        Pipeline_Layout(Pipeline_Layout&&) = delete;
+        Pipeline_Layout& operator=(Pipeline_Layout&&) = delete;
+
         VkPipelineLayout Get_handle() const { return pipeline_layout; }
-        // Get_descriptor_set_layout() desaparece: quien necesite un layout de
-        // set se lo pide a la cache, que es quien los tiene.
+        // Whoever needs a set layout asks the cache, which owns them.
     };
 
 } // namespace Renderer_System

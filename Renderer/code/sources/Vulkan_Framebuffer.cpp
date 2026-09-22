@@ -83,13 +83,8 @@ namespace Renderer_System {
             framebuffer_info.height = extent.height;
             framebuffer_info.layers = 1; // not using multiview/stereo rendering
 
-            VkResult result = vkCreateFramebuffer(device_handle, &framebuffer_info, nullptr, &framebuffers[i]);
-            if (result != VK_SUCCESS) {
-                throw std::runtime_error(
-                    "Failed to create framebuffer " + std::to_string(i) + ": " +
-                    Vulkan_Utils::Vk_result_to_string(result)
-                );
-            }
+            VK_CHECK(vkCreateFramebuffer(device_handle, &framebuffer_info, nullptr, &framebuffers[i]),
+                ("Failed to create framebuffer " + std::to_string(i)).c_str());
         }
 
         std::cout << "[Vulkan_Framebuffer] Created " << framebuffers.size() << " framebuffer(s), size "

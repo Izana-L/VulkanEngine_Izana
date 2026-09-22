@@ -2,6 +2,7 @@
 #include <chrono>
 #include <cassert>
 #include <iostream>
+#include <stdexcept>
 #include <tuple>
 
 namespace Renderer_System
@@ -30,28 +31,32 @@ namespace Renderer_System
     
         if (sealed)
         {
+            // Reported, then built: a missing manifest entry costs a hitch
+            // on the first frame that needs the pipeline, which is better
+            // than aborting a debug run or drawing nothing in release. The
+            // fix belongs in Renderer::Build_pipeline_manifest().
             std::cerr << "[Pipeline_Registry] WARNING: building a pipeline "
-                "AFTER warm-up — the manifest is incomplete. This is "
+                "AFTER warm-up - the manifest is incomplete. This is "
                 "a frame hitch. Missing config: "
                 << _config.vertex_shader_path << " + "
                 << _config.fragment_shader_path << "\n";
-
-            assert(false &&"Pipeline_Registry: pipeline built after warm-up — add it to " "Renderer::Build_pipeline_manifest()");
         }
 
         // 8 bits in the sort key is the hard ceiling. Blowing past it would
         // silently wrap and bind the wrong pipeline, so it fails loudly.
         if (by_id.size() >= 256)
         {
-            throw std::runtime_error("Pipeline_Registry: more than 256 pipelines — pipeline_id no " "longer fits in the 8 bits the sort key reserves for it.");
+            throw std::length_error("Pipeline_Registry: more than 256 pipelines - pipeline_id no "
+                "longer fits in the 8 bits the sort key reserves for it.");
         }
 
         const uint8_t new_id = static_cast<uint8_t>(by_id.size());
 
         auto [inserted, ok] = registry.emplace(std::piecewise_construct,std::forward_as_tuple(_config),
                                                std::forward_as_tuple(device, render_pass, pipeline_cache, shared_layout, _config, new_id));
-  
-        assert(ok && "Pipeline_Registry: emplace failed on a key that wasn't found");
+
+        if (!ok)
+            throw std::logic_error("Pipeline_Registry: emplace failed on a key that was not found");
 
         by_id.push_back(inserted->second.pipeline.Get_handle());
 
@@ -65,9 +70,8 @@ namespace Renderer_System
 
     VkPipeline Pipeline_Registry::Get_by_id(uint8_t _id) const
     {
-        assert(_id < by_id.size() &&
-            "Pipeline_Registry::Get_by_id: id was never handed out by Get_id");
-
+        // An id that was never handed out yields VK_NULL_HANDLE; the caller
+        // (Renderer::Record_command_buffer) skips the item and reports it.
         if (_id >= by_id.size()) return VK_NULL_HANDLE;
 
         return by_id[_id];

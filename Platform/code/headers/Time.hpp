@@ -17,6 +17,15 @@ namespace Platform
     //
     // Usage pattern: call Update() once per frame, as the very first thing
     // in the main loop, then read Get_delta_time() etc. for that frame.
+    //
+    // Two clocks are kept on purpose:
+    //   - delta_time is CLAMPED (max_delta) so a stall (breakpoint, window
+    //     drag, asset hitch) never becomes a giant simulation step.
+    //   - total_time is NOT built from the clamped deltas. It advances by
+    //     the real interval between frames (scaled by time_scale), so a
+    //     two-second stall moves the game clock by two seconds instead of
+    //     silently losing 1.75 of them. Get_unscaled_total_time() is read
+    //     straight from the clock and never accumulates rounding error.
     class Time 
     {
     private:
@@ -40,6 +49,9 @@ namespace Platform
         std::deque<float> recent_delta_times;
         static constexpr size_t max_recent_samples = 60;
 
+        // Longest simulation step handed to gameplay, in seconds.
+        static constexpr float max_delta = 0.25f;
+
         float fixed_time_accumulator;
 
         // Profiling: start points for currently running named timers,
@@ -55,21 +67,26 @@ namespace Platform
         // Recalculates delta time, total time, FPS and frame count.
         // Must be called exactly once per frame, at the start of the loop,
         // before any system reads delta time for that frame.
+        //
+        // When a target FPS is set, the call first sleeps until the frame
+        // period since the previous Update() has elapsed, so consecutive
+        // frames are paced evenly instead of alternating long and short.
         void Update();
 
         // =========================================================
         // Delta time
         // =========================================================
 
-        // Time elapsed since the previous frame, in seconds, multiplied
-        // by the current time_scale. Use this for gameplay logic that
-        // should respect pause/slow-motion (movement, AI, physics...).
+        // Time elapsed since the previous frame, in seconds, clamped to
+        // max_delta and multiplied by the current time_scale. Use this for
+        // gameplay logic that should respect pause/slow-motion (movement,
+        // AI, physics...).
         float Get_delta_time() const;
 
-        // Time elapsed since the previous frame, in seconds, NOT affected
-        // by time_scale. Use this for things that must keep running at
-        // real speed even when the game is paused (UI animations, menu
-        // transitions, debug overlays).
+        // Time elapsed since the previous frame, in seconds, clamped to
+        // max_delta and NOT affected by time_scale. Use this for things that
+        // must keep running at real speed even when the game is paused (UI
+        // animations, menu transitions, debug overlays).
         float Get_unscaled_delta_time() const;
 
         // Same as Get_delta_time() but as a double, for cases needing
@@ -80,8 +97,9 @@ namespace Platform
         // Total elapsed time
         // =========================================================
 
-        // Total time elapsed since this Time instance was created,
-        // affected by time_scale (a paused game stops advancing this too).
+        // Time elapsed since this Time instance was created, affected by
+        // time_scale (a paused game stops advancing this too). Unlike the
+        // delta, it is never clamped: it follows the real clock.
         float Get_total_time() const;
 
         // Total real-world time elapsed since this Time instance was
@@ -124,10 +142,10 @@ namespace Platform
         // Frame rate limiting
         // =========================================================
 
-        // Sets a target FPS cap (0 = uncapped). When set, Update() will
-        // sleep at the end of the frame if it finished early, preventing
-        // the loop from running faster than necessary (saves CPU/GPU power,
-        // avoids unnecessarily high input polling rates on uncapped loops).
+        // Sets a target FPS cap (0 = uncapped). When set, Update() sleeps
+        // until one frame period has elapsed since the previous Update(),
+        // preventing the loop from running faster than necessary (saves
+        // CPU/GPU power, avoids unnecessarily high input polling rates).
         void Set_target_fps(float _target_fps);
         float Get_target_fps() const;
 

@@ -2,8 +2,8 @@
 
 #include <Atomic_Counter.hpp>
 
-#include <cassert>
 #include <functional>
+#include <stdexcept>
 #include <utility>
 
 namespace ThreadDispatcher
@@ -80,33 +80,52 @@ namespace ThreadDispatcher
         // Execution
         // =========================================================
 
-        // Executes the callable and, if a counter was provided,
-        // decrements it to signal completion to any waiting threads
-        // or to trigger chained tasks via Set_on_zero callbacks.
+        // Executes the callable and, if a counter was provided, decrements
+        // it to signal completion to waiting threads and to trigger chained
+        // work registered through Set_on_zero.
         //
-        // Must only be called once per Task - calling it twice would
-        // double-decrement the counter, corrupting synchronization state.
+        // The counter is released even when the callable throws: a failed
+        // task still counts as finished, otherwise every thread waiting on
+        // its group would block forever. The exception then propagates to
+        // the executing thread, which decides how to report it (see
+        // Thread_Dispatcher::Worker_loop and Steal_until_done).
+        //
+        // A task can be executed once: the counter is detached before the
+        // callable runs, so a second call can never decrement it again.
+        // Throws std::logic_error if the task is empty.
         void Execute()
         {
-            assert(Is_valid() && "Execute() called on an empty Task");
-
-            // Execute the actual work first, then signal completion.
-            // This ordering is important: the counter must be decremented
-            // AFTER the work is done, not before, so that Wait() and
-            // Set_on_zero callbacks see a fully completed task.
-            callable();
-
-            // Signal completion only if a counter was provided.
-            // Tasks without a counter are "fire and forget" - no one
-            // is waiting on them and no chaining is needed.
-            if (counter)
+            if (!Is_valid())
             {
-                counter->Decrement();
+                throw std::logic_error(
+                    "Task::Execute: the task is empty (default-constructed or already moved from)");
             }
 
-            // Null out the counter after decrementing to make it clear
-            // this task has been fully consumed and cannot be executed again.
+            // Detach the counter first so it is decremented exactly once no
+            // matter how the callable exits.
+            Counter_Ptr finished = std::move(counter);
             counter = nullptr;
+
+            try
+            {
+                callable();
+            }
+            catch (...)
+            {
+                if (finished)
+                {
+                    finished->Decrement();
+                }
+
+                throw;
+            }
+
+            // Work first, then completion: waiters and on_zero continuations
+            // must observe a fully completed task.
+            if (finished)
+            {
+                finished->Decrement();
+            }
         }
 
         // =========================================================

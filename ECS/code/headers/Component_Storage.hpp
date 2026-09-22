@@ -3,8 +3,9 @@
 #include <IComponent_Storage.hpp>
 #include <Sparse_Set.hpp>
 
+#include <stdexcept>
+#include <utility>
 #include <vector>
-#include <cassert>
 
 namespace ECS
 {
@@ -29,18 +30,16 @@ namespace ECS
 
         bool Has(Entity _entity) const override
         {
-            assert(Is_valid_entity(_entity) && "Has() called with INVALID_ENTITY");
             return sparse_set.Has(_entity);
         }
 
         void Remove(Entity _entity) override
         {
-            assert(Is_valid_entity(_entity) && "Remove() called with INVALID_ENTITY");
+            const uint32_t* found = sparse_set.Try_index_of(_entity);
+            if (!found) return;
 
-            if (!sparse_set.Has(_entity)) return;
-
-            uint32_t removed_index = sparse_set.Index_of(_entity);
-            uint32_t last_index = static_cast<uint32_t>(components.size()) - 1;
+            const uint32_t removed_index = *found;
+            const uint32_t last_index = static_cast<uint32_t>(components.size()) - 1;
 
             if (removed_index != last_index)
                 components[removed_index] = std::move(components[last_index]);
@@ -62,8 +61,7 @@ namespace ECS
 
         void Clone_to(Entity _source, Entity _destination) override
         {
-            assert(Has(_source) &&
-                "Clone_to() called but source entity has no component of this type");
+            // Get() throws if _source has no component of this type.
             Add(_destination, Get(_source));
         }
 
@@ -79,11 +77,9 @@ namespace ECS
 
         Component_Type& Add(Entity _entity, const Component_Type& _component)
         {
-            assert(Is_valid_entity(_entity) && "Add() called with INVALID_ENTITY");
-
-            if (sparse_set.Has(_entity))
+            if (const uint32_t* index = sparse_set.Try_index_of(_entity))
             {
-                Component_Type& existing = components[sparse_set.Index_of(_entity)];
+                Component_Type& existing = components[*index];
                 existing = _component;
                 return existing;
             }
@@ -95,11 +91,9 @@ namespace ECS
 
         Component_Type& Add(Entity _entity, Component_Type&& _component)
         {
-            assert(Is_valid_entity(_entity) && "Add() called with INVALID_ENTITY");
-
-            if (sparse_set.Has(_entity))
+            if (const uint32_t* index = sparse_set.Try_index_of(_entity))
             {
-                Component_Type& existing = components[sparse_set.Index_of(_entity)];
+                Component_Type& existing = components[*index];
                 existing = std::move(_component);
                 return existing;
             }
@@ -112,11 +106,9 @@ namespace ECS
         template< typename... Args >
         Component_Type& Emplace(Entity _entity, Args&&... _args)
         {
-            assert(Is_valid_entity(_entity) && "Emplace() called with INVALID_ENTITY");
-
-            if (sparse_set.Has(_entity))
+            if (const uint32_t* index = sparse_set.Try_index_of(_entity))
             {
-                Component_Type& existing = components[sparse_set.Index_of(_entity)];
+                Component_Type& existing = components[*index];
                 existing = Component_Type(std::forward< Args >(_args)...);
                 return existing;
             }
@@ -126,16 +118,28 @@ namespace ECS
             return components.back();
         }
 
+        // Throws std::out_of_range if _entity has no component here.
         Component_Type& Get(Entity _entity)
         {
-            assert(Has(_entity) && "Get() called for an entity without this component");
             return components[sparse_set.Index_of(_entity)];
         }
 
         const Component_Type& Get(Entity _entity) const
         {
-            assert(Has(_entity) && "Get() const called for an entity without this component");
             return components[sparse_set.Index_of(_entity)];
+        }
+
+        // Returns nullptr instead of throwing when the component is absent.
+        Component_Type* Try_get(Entity _entity)
+        {
+            const uint32_t* index = sparse_set.Try_index_of(_entity);
+            return index ? &components[*index] : nullptr;
+        }
+
+        const Component_Type* Try_get(Entity _entity) const
+        {
+            const uint32_t* index = sparse_set.Try_index_of(_entity);
+            return index ? &components[*index] : nullptr;
         }
 
         bool Is_empty() const { return components.empty(); }
@@ -170,30 +174,31 @@ namespace ECS
         //
         // Used by Transform_System to keep Transform_Components in
         // parent-before-child order so Update() needs only one
-        // cache-friendly forward pass — no external sorted list needed.
+        // cache-friendly forward pass, with no external sorted list.
         //
-        // Cost: O(n) — one pass to build the reordered component buffer,
-        // one pass in Sparse_Set::Reorder() to update the sparse indices.
-        // Called only when the hierarchy changes, never every frame.
+        // _new_order must be a permutation of every entity in this
+        // storage. It is validated BEFORE anything is moved (see
+        // Sparse_Set::Permutation_indices), so an invalid order throws
+        // std::invalid_argument and leaves the storage untouched. The
+        // validation runs in every build configuration: a shorter order
+        // applied blindly would move only the listed components and
+        // destroy the rest when the old array is discarded.
+        //
+        // Cost: O(n): one pass to validate, one to build the reordered
+        // component buffer, one in Sparse_Set::Reorder() to update the
+        // sparse indices. Called only when the hierarchy changes.
         void Reorder(const std::vector<Entity>& _new_order)
         {
-            assert(_new_order.size() == components.size() &&
-                "Component_Storage::Reorder: new_order size must match component count");
+            const std::vector<uint32_t> old_indices = sparse_set.Permutation_indices(_new_order);
 
-            // Build reordered component array in a temporary buffer.
             std::vector< Component_Type > reordered;
-            reordered.reserve(_new_order.size());
+            reordered.reserve(old_indices.size());
 
-            for (Entity entity : _new_order)
-            {
-                assert(sparse_set.Has(entity) &&
-                    "Component_Storage::Reorder: entity in new_order not in storage");
-                reordered.push_back(std::move(components[sparse_set.Index_of(entity)]));
-            }
+            for (uint32_t old_index : old_indices)
+                reordered.push_back(std::move(components[old_index]));
 
             components = std::move(reordered);
 
-            // Update sparse indices to match the new dense order.
             sparse_set.Reorder(_new_order);
         }
     };

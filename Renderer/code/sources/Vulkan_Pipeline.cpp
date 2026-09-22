@@ -4,6 +4,7 @@
 #include <Filesystem.hpp>
 
 #include <glm/glm.hpp>
+#include <cstring>
 #include <iterator>
 #include <stdexcept>
 #include <iostream>
@@ -12,6 +13,25 @@
 
 namespace Renderer_System
 {
+
+    namespace
+    {
+        // Scoped owner of a VkShaderModule. Shader modules are only needed
+        // while vkCreateGraphicsPipelines runs; this guarantees they are
+        // destroyed on every exit path of the constructor, including an
+        // exception thrown by the creation of a later module.
+        struct Shader_Module
+        {
+            VkDevice       device;
+            VkShaderModule handle;
+
+            Shader_Module(VkDevice _device, VkShaderModule _handle) : device(_device), handle(_handle) {}
+            ~Shader_Module() { if (handle != VK_NULL_HANDLE) vkDestroyShaderModule(device, handle, nullptr); }
+
+            Shader_Module(const Shader_Module&) = delete;
+            Shader_Module& operator=(const Shader_Module&) = delete;
+        };
+    }
 
     // ---------- Constructor ----------
     Vulkan_Pipeline::Vulkan_Pipeline(const Vulkan_Device& _device, const Vulkan_Render_Pass& _render_pass, VkPipelineCache _pipeline_cache,
@@ -27,19 +47,21 @@ namespace Renderer_System
             "Pipeline_Config: fragment_shader_path must not be empty");
 
         // ---------- Shader modules ----------
-        VkShaderModule vertex_shader_module = Create_shader_module(_config.vertex_shader_path);
-        VkShaderModule fragment_shader_module = Create_shader_module(_config.fragment_shader_path);
+        // Owned by RAII guards: if the second module (or anything after it)
+        // throws, the first one is destroyed on unwinding instead of leaking.
+        const Shader_Module vertex_shader_module(device_handle, Create_shader_module(_config.vertex_shader_path));
+        const Shader_Module fragment_shader_module(device_handle, Create_shader_module(_config.fragment_shader_path));
 
         VkPipelineShaderStageCreateInfo vertex_stage_info{};
         vertex_stage_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         vertex_stage_info.stage = VK_SHADER_STAGE_VERTEX_BIT;
-        vertex_stage_info.module = vertex_shader_module;
+        vertex_stage_info.module = vertex_shader_module.handle;
         vertex_stage_info.pName = "main";
 
         VkPipelineShaderStageCreateInfo fragment_stage_info{};
         fragment_stage_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         fragment_stage_info.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-        fragment_stage_info.module = fragment_shader_module;
+        fragment_stage_info.module = fragment_shader_module.handle;
         fragment_stage_info.pName = "main";
 
         VkPipelineShaderStageCreateInfo shader_stages[] = {
@@ -166,16 +188,11 @@ namespace Renderer_System
         pipeline_info.renderPass = _render_pass.Get_handle();
         pipeline_info.subpass = 0;
 
-        VkResult result = vkCreateGraphicsPipelines(device_handle, _pipeline_cache, 1, &pipeline_info, nullptr, &pipeline );
-
-        vkDestroyShaderModule(device_handle, fragment_shader_module, nullptr);
-        vkDestroyShaderModule(device_handle, vertex_shader_module, nullptr);
-
-        if (result != VK_SUCCESS) {
-            throw std::runtime_error(
-                "Failed to create graphics pipeline: " + Vulkan_Utils::Vk_result_to_string(result)
-            );
-        }
+        // The shader modules are destroyed by their guards when this
+        // constructor returns or throws; the pipeline keeps no reference
+        // to them once created.
+        VK_CHECK(vkCreateGraphicsPipelines(device_handle, _pipeline_cache, 1, &pipeline_info, nullptr, &pipeline),
+            "Failed to create graphics pipeline");
 
         // VALID_BIT first: if the driver didn't fill the feedback in, every
         // other bit in it is meaningless.
@@ -259,20 +276,26 @@ namespace Renderer_System
             );
         }
 
+        if (shader_code.size() % sizeof(uint32_t) != 0) {
+            throw std::runtime_error(
+                "Shader file is not valid SPIR-V (size is not a multiple of 4): " + _spv_file_path
+            );
+        }
+
+        // pCode must point at 4-byte aligned words; a std::vector<uint8_t>
+        // gives no such guarantee, so the words are copied into a uint32_t
+        // vector first.
+        std::vector<uint32_t> words(shader_code.size() / sizeof(uint32_t));
+        std::memcpy(words.data(), shader_code.data(), shader_code.size());
+
         VkShaderModuleCreateInfo create_info{};
         create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
         create_info.codeSize = shader_code.size();
-        create_info.pCode = reinterpret_cast<const uint32_t*>(shader_code.data());
+        create_info.pCode = words.data();
 
-        VkShaderModule shader_module;
-        VkResult result = vkCreateShaderModule(device_handle, &create_info, nullptr, &shader_module);
-
-        if (result != VK_SUCCESS) {
-            throw std::runtime_error(
-                "Failed to create shader module from '" + _spv_file_path + "': " +
-                Vulkan_Utils::Vk_result_to_string(result)
-            );
-        }
+        VkShaderModule shader_module = VK_NULL_HANDLE;
+        VK_CHECK(vkCreateShaderModule(device_handle, &create_info, nullptr, &shader_module),
+            ("Failed to create shader module from '" + _spv_file_path + "'").c_str());
 
         return shader_module;
     }

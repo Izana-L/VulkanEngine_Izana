@@ -18,16 +18,36 @@ namespace Renderer_System
     {
         assert(device_handle != VK_NULL_HANDLE &&
             "Vulkan_Device must be fully constructed before creating a Bindless_Registry");
-        assert(_device.Is_bindless_supported() &&
-            "Bindless_Registry requires descriptor indexing features — "
-            "Vulkan_Device::Is_bindless_supported() returned false. "
-            "Check GPU/driver support before constructing this class.");
-        assert(max_textures > 0 &&
-            "Bindless_Registry: _max_textures must be greater than zero");
 
-        Create_layout();
-        Create_pool();
-        Create_set();
+        // Enforced in every build: writing a descriptor array with the
+        // UPDATE_AFTER_BIND / PARTIALLY_BOUND flags on a device that did
+        // not enable descriptor indexing is invalid usage that no layer
+        // may be present to report. Vulkan_Device only selects devices
+        // with the features, so this is a defence against a future change
+        // to that policy, not an expected path.
+        if (!_device.Is_bindless_supported())
+        {
+            throw std::runtime_error(
+                "Bindless_Registry: the device was created without the descriptor indexing "
+                "features bindless textures require");
+        }
+
+        if (max_textures == 0)
+            throw std::invalid_argument("Bindless_Registry: _max_textures must be greater than zero");
+
+        try
+        {
+            Create_layout();
+            Create_pool();
+            Create_set();
+        }
+        catch (...)
+        {
+            // The destructor does not run for a constructor that threw.
+            if (pool != VK_NULL_HANDLE) vkDestroyDescriptorPool(device_handle, pool, nullptr);
+            if (layout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device_handle, layout, nullptr);
+            throw;
+        }
     }
 
     // ---------- Destructor ----------
@@ -48,10 +68,8 @@ namespace Renderer_System
     // ---------- Register_texture ----------
     uint32_t Bindless_Registry::Register_texture(VkImageView _image_view, VkSampler _sampler)
     {
-        assert(_image_view != VK_NULL_HANDLE &&
-            "Register_texture() called with a null image view");
-        assert(_sampler != VK_NULL_HANDLE &&
-            "Register_texture() called with a null sampler");
+        if (_image_view == VK_NULL_HANDLE || _sampler == VK_NULL_HANDLE)
+            throw std::invalid_argument("Bindless_Registry::Register_texture: null image view or sampler");
 
         if (next_free_index >= max_textures) {
             throw std::runtime_error(
@@ -147,15 +165,8 @@ namespace Renderer_System
         layout_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
         layout_info.pNext = &binding_flags_info;
 
-        VkResult result = vkCreateDescriptorSetLayout(
-            device_handle, &layout_info, nullptr, &layout);
-
-        if (result != VK_SUCCESS) {
-            throw std::runtime_error(
-                "Bindless_Registry: failed to create descriptor set layout: " +
-                Vulkan_Utils::Vk_result_to_string(result)
-            );
-        }
+        VK_CHECK(vkCreateDescriptorSetLayout(device_handle, &layout_info, nullptr, &layout),
+            "Bindless_Registry: failed to create descriptor set layout");
     }
 
     // ---------- Create_pool ----------
@@ -178,15 +189,8 @@ namespace Renderer_System
         // single global bindless set.
         pool_info.maxSets = 1;
 
-        VkResult result = vkCreateDescriptorPool(
-            device_handle, &pool_info, nullptr, &pool);
-
-        if (result != VK_SUCCESS) {
-            throw std::runtime_error(
-                "Bindless_Registry: failed to create descriptor pool: " +
-                Vulkan_Utils::Vk_result_to_string(result)
-            );
-        }
+        VK_CHECK(vkCreateDescriptorPool(device_handle, &pool_info, nullptr, &pool),
+            "Bindless_Registry: failed to create descriptor pool");
     }
 
     // ---------- Create_set ----------
@@ -198,14 +202,8 @@ namespace Renderer_System
         alloc_info.descriptorSetCount = 1;
         alloc_info.pSetLayouts = &layout;
 
-        VkResult result = vkAllocateDescriptorSets(device_handle, &alloc_info, &set);
-
-        if (result != VK_SUCCESS) {
-            throw std::runtime_error(
-                "Bindless_Registry: failed to allocate descriptor set: " +
-                Vulkan_Utils::Vk_result_to_string(result)
-            );
-        }
+        VK_CHECK(vkAllocateDescriptorSets(device_handle, &alloc_info, &set),
+            "Bindless_Registry: failed to allocate descriptor set");
     }
 
 } // namespace Renderer

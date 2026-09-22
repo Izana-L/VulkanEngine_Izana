@@ -4,8 +4,11 @@
 #include <GLFW/glfw3.h>
 
 #include <Vulkan_Device.hpp>
+#include <ImageData.hpp>
 
 #include <vk_mem_alloc.h>
+
+#include <cstdint>
 
 namespace Renderer_System
 {
@@ -129,6 +132,18 @@ namespace Renderer_System
         // dimensions: floor(log2(max(width, height))) + 1.
         // A 1024x1024 texture needs 11 levels (1024, 512, ..., 1).
         uint32_t Compute_mip_levels(uint32_t _width, uint32_t _height);
+
+        // Maps the CPU-side pixel format of ImageData to the VkFormat the
+        // GPU image is created with. This is the ONE place where
+        // CoreTypes::Pixel_Format meets VkFormat, as ImageData.hpp promises.
+        VkFormat To_vk_format(CoreTypes::Pixel_Format _format);
+
+        // Bytes of one texel for the uncompressed formats Texture_GPU can
+        // upload with a tightly packed buffer copy. Returns 0 for
+        // block-compressed or unsupported formats, which Texture_GPU
+        // rejects (a buffer-to-image copy of a block format needs
+        // block-sized regions and mip generation by blit is not possible).
+        uint32_t Bytes_per_pixel(VkFormat _format);
 
     } // namespace Vulkan_Image_Utils
 } // namespace Renderer

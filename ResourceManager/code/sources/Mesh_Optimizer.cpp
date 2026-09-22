@@ -98,15 +98,15 @@ namespace ResourceManager::Mesh_Optimizer
         const Optimize_Options& _options)
     {
         Optimize_Stats stats;
-        //stats.before = Analyze(_mesh);
+        stats.before = Analyze(_mesh);
 
-        //// Nothing to do, and every meshopt_* call below would be indexing
-        //// into an empty vector.
-        //if (_mesh.vertices.empty() || _mesh.indices.empty())
-        //{
-        //    stats.after = stats.before;
-        //    return stats;
-        //}
+        // Nothing to do, and every meshopt_* call below would be indexing
+        // into an empty vector (Position_stream() dereferences vertices[0]).
+        if (_mesh.vertices.empty() || _mesh.indices.empty())
+        {
+            stats.after = stats.before;
+            return stats;
+        }
 
         // ── 1. Remap: merge binary-identical vertices ─────────
         if (_options.remap_vertices)
@@ -173,7 +173,7 @@ namespace ResourceManager::Mesh_Optimizer
         // no matter how small it is.
         _mesh.index_type = (_mesh.vertices.size() <= UINT16_VERTEX_LIMIT)? CoreTypes::Index_Type::UINT16 : CoreTypes::Index_Type::UINT32;
 
-       /* stats.after = Analyze(_mesh);*/
+        stats.after = Analyze(_mesh);
 
         return stats;
     }

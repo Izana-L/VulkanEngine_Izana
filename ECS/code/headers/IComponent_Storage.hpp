@@ -2,6 +2,8 @@
 
 #include <Entity.hpp>
 
+#include <cstddef>
+
 namespace ECS
 {
 

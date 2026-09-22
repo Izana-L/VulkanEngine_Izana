@@ -21,53 +21,68 @@ namespace EngineCore
         Transform_System& _transform_system,
         Camera_Controller& _camera_controller,
         Extractor& _extractor,
-        CoreTypes::Id                      _camera_entity)
+        ECS::Entity                        _camera_entity)
     {
         CoreTypes::RenderPacket packet;
 
+        Extract_Params extract_params;
+        extract_params.opaque_pipeline_id = _renderer.Get_opaque_pipeline_id();
+        extract_params.transparent_pipeline_id = _renderer.Get_transparent_pipeline_id();
+
         while (!_window.Should_close())
         {
-            // ── 1. Timing ─────────────────────────────────────────
+            // ── 1. Snapshot the input state of the previous frame ──
+            _input.Begin_frame();
+
+            // ── 2. OS events -> GLFW callbacks ────────────────────
+            _window.Poll_events();
+
+            if (_window.Is_minimized())
+            {
+                // No frame is produced while minimized, so nothing consumes
+                // what the callbacks accumulated: drop it, or the first
+                // frame after restoring would receive the whole backlog as
+                // one mouse delta. Time is deliberately NOT updated here:
+                // the pause shows up as one long (clamped) delta on the
+                // next real frame, and the clocks follow real time anyway.
+                _input.Discard_pending();
+                _window.Wait_events();
+                continue;
+            }
+
+            // ── 3. Timing ─────────────────────────────────────────
             time.Update();
             const float dt = time.Get_delta_time();
 
-            _input.Begin_frame();
+            // ── 4. Resize: window flag -> renderer ────────────────
+            // Applied before extract, so the aspect ratio below and the
+            // viewport the frame is drawn with come from the same extent.
+            if (_window.Consume_resized_flag())
+                _renderer.Notify_framebuffer_resized();
 
-            // ── 2. OS events → GLFW callbacks ─────────────────────
-            _window.Poll_events();
-            if (_window.Is_minimized())
-            {
-                _window.Wait_events();
-                time.Update();     // swallow the paused interval so dt does not spike
-                continue;
-            }
-            // ── 3. Input snapshots + named actions ────────────────
+            _renderer.Recreate_swapchain_if_needed();
+
+            // ── 5. Input snapshots + named actions ────────────────
             _input.Update();
 
-            // ── 4. Camera (input → transform) ─────────────────────
+            // ── 6. Camera (input -> transform) ────────────────────
             _camera_controller.Update(_camera_entity, _input, _world, dt);
 
-            // ── 5. Transform matrices (TRS, hierarchy) ────────────
+            // ── 7. Transform matrices (TRS, hierarchy) ────────────
             _transform_system.Update(_world);
 
-            // ── 6. Extract ECS → RenderPacket ─────────────────────
-            int fb_width = 0;
-            int fb_height = 0;
-            _window.Get_framebuffer_size(fb_width, fb_height);
+            // ── 8. Extract ECS -> RenderPacket ────────────────────
+            uint32_t render_width = 0;
+            uint32_t render_height = 0;
+            _renderer.Get_render_size(render_width, render_height);
 
-            const float aspect_ratio = (fb_height > 0)
-                ? static_cast<float>(fb_width) / static_cast<float>(fb_height)
+            extract_params.aspect_ratio = (render_height > 0)
+                ? static_cast<float>(render_width) / static_cast<float>(render_height)
                 : 1.0f;
 
-            const bool has_camera = _extractor.Extract(_world, _resources, aspect_ratio, _renderer.Get_opaque_pipeline_id(), packet);
+            const bool has_camera = _extractor.Extract(_world, _resources, extract_params, packet);
 
-            // El extract no conoce el reloj: los escalares de fotograma
-            // los pone el bucle, que es su dueno.
-            packet.time = time.Get_total_time();
-            packet.delta_time = dt;
-
-
-            // ── 7. Render ─────────────────────────────────────────
+            // ── 9. Render ─────────────────────────────────────────
             if (has_camera)
                 _renderer.Render(packet);
         }

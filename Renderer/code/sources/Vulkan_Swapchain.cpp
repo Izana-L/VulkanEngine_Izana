@@ -62,15 +62,18 @@ namespace Renderer_System
     {
         assert(swapchain != VK_NULL_HANDLE && "Recreate() called on a moved-from or already-destroyed Vulkan_Swapchain");
 
-        // Handle minimization: wait until the window has a non-zero size.
-        int width = 0, height = 0;
-        window->Get_framebuffer_size(width, height);
-        while (width == 0 || height == 0) {
+        // Handle minimization: block until the window has a non-zero size.
+        // The size is read once per iteration and tested BEFORE blocking,
+        // so the loop leaves as soon as the size is valid instead of
+        // waiting for one more event after it already is.
+        while (true) {
+            int width = 0, height = 0;
             window->Get_framebuffer_size(width, height);
-            glfwWaitEvents();
+            if (width > 0 && height > 0) break;
+            window->Wait_events();
         }
 
-        vkDeviceWaitIdle(device_handle);
+        VK_CHECK(vkDeviceWaitIdle(device_handle), "Vulkan_Swapchain: wait for device idle before recreation");
 
         Destroy();
         Create_swapchain_internal();
@@ -238,21 +241,19 @@ namespace Renderer_System
         create_info.clipped = VK_TRUE;
         create_info.oldSwapchain = VK_NULL_HANDLE;
 
-        VkResult result = vkCreateSwapchainKHR(device_handle, &create_info, nullptr, &swapchain);
-        if (result != VK_SUCCESS) {
-            throw std::runtime_error(
-                "Failed to create swapchain: " + Vulkan_Utils::Vk_result_to_string(result)
-            );
-        }
+        VK_CHECK(vkCreateSwapchainKHR(device_handle, &create_info, nullptr, &swapchain),
+            "Failed to create swapchain");
 
         image_format = surface_format.format;
         extent = chosen_extent;
         selected_present_mode = present_mode;
 
         uint32_t actual_image_count = 0;
-        vkGetSwapchainImagesKHR(device_handle, swapchain, &actual_image_count, nullptr);
+        VK_CHECK(vkGetSwapchainImagesKHR(device_handle, swapchain, &actual_image_count, nullptr),
+            "Vulkan_Swapchain: query swapchain images");
         images.resize(actual_image_count);
-        vkGetSwapchainImagesKHR(device_handle, swapchain, &actual_image_count, images.data());
+        VK_CHECK(vkGetSwapchainImagesKHR(device_handle, swapchain, &actual_image_count, images.data()),
+            "Vulkan_Swapchain: query swapchain images");
 
         std::cout << "[Vulkan_Swapchain] Swapchain created: "
             << extent.width << "x" << extent.height
@@ -294,12 +295,8 @@ namespace Renderer_System
             view_create_info.subresourceRange.baseArrayLayer = 0;
             view_create_info.subresourceRange.layerCount = 1;
 
-            VkResult result = vkCreateImageView(device_handle, &view_create_info, nullptr, &image_views[i]);
-            if (result != VK_SUCCESS) {
-                throw std::runtime_error(
-                    "Failed to create swapchain image view: " + Vulkan_Utils::Vk_result_to_string(result)
-                );
-            }
+            VK_CHECK(vkCreateImageView(device_handle, &view_create_info, nullptr, &image_views[i]),
+                "Failed to create swapchain image view");
         }
     }
 
@@ -312,20 +309,25 @@ namespace Renderer_System
         assert(_surface != VK_NULL_HANDLE && "Query_swap_chain_support() called with a null surface");
 
         Swap_chain_support_details details;
-        vkGetPhysicalDeviceSurfaceCapabilitiesKHR(_physical_device, _surface, &details.capabilities);
+        VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(_physical_device, _surface, &details.capabilities),
+            "Vulkan_Swapchain: query surface capabilities");
 
         uint32_t format_count = 0;
-        vkGetPhysicalDeviceSurfaceFormatsKHR(_physical_device, _surface, &format_count, nullptr);
+        VK_CHECK(vkGetPhysicalDeviceSurfaceFormatsKHR(_physical_device, _surface, &format_count, nullptr),
+            "Vulkan_Swapchain: query surface formats");
         if (format_count > 0) {
             details.formats.resize(format_count);
-            vkGetPhysicalDeviceSurfaceFormatsKHR(_physical_device, _surface, &format_count, details.formats.data());
+            VK_CHECK(vkGetPhysicalDeviceSurfaceFormatsKHR(_physical_device, _surface, &format_count, details.formats.data()),
+                "Vulkan_Swapchain: query surface formats");
         }
 
         uint32_t present_mode_count = 0;
-        vkGetPhysicalDeviceSurfacePresentModesKHR(_physical_device, _surface, &present_mode_count, nullptr);
+        VK_CHECK(vkGetPhysicalDeviceSurfacePresentModesKHR(_physical_device, _surface, &present_mode_count, nullptr),
+            "Vulkan_Swapchain: query surface present modes");
         if (present_mode_count > 0) {
             details.present_modes.resize(present_mode_count);
-            vkGetPhysicalDeviceSurfacePresentModesKHR(_physical_device, _surface, &present_mode_count, details.present_modes.data());
+            VK_CHECK(vkGetPhysicalDeviceSurfacePresentModesKHR(_physical_device, _surface, &present_mode_count, details.present_modes.data()),
+                "Vulkan_Swapchain: query surface present modes");
         }
 
         return details;

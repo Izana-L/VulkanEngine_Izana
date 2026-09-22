@@ -15,12 +15,29 @@ namespace Renderer_System
     //
     // This is the first Vulkan object created and the last one destroyed -
     // everything else in the Renderer depends on it, directly or indirectly.
+    //
+    // Instance extensions are negotiated against what the loader reports,
+    // never assumed:
+    //   - the surface extensions GLFW needs are mandatory;
+    //   - VK_EXT_debug_utils is enabled when validation is on and the
+    //     extension exists;
+    //   - VK_KHR_get_surface_capabilities2 + VK_KHR_surface_maintenance1
+    //     (the instance half of VK_KHR_swapchain_maintenance1, whose
+    //     device half Vulkan_Device enables) are enabled whenever the
+    //     loader exposes them, independently of validation. Vulkan_Device
+    //     reads Is_surface_maintenance1_enabled() and only enables the
+    //     device extension when this half is present.
     class Vulkan_Instance 
     {
         VkInstance instance;
         VkDebugUtilsMessengerEXT debug_messenger;
         bool validation_enabled;
+        bool surface_maintenance1_enabled;
         uint32_t api_version;
+
+        // Names of the instance extensions actually enabled, kept for
+        // logging and for Vulkan_Device's queries.
+        std::vector<std::string> enabled_extensions;
 
     public:
         // Creates the VkInstance.
@@ -55,6 +72,14 @@ namespace Renderer_System
         // weren't available on the system (see Check_validation_layer_support).
         bool Is_validation_enabled() const;
 
+        // Whether VK_KHR_get_surface_capabilities2 and
+        // VK_KHR_surface_maintenance1 were enabled. This is the
+        // precondition for VK_KHR_swapchain_maintenance1 on the device.
+        bool Is_surface_maintenance1_enabled() const;
+
+        // True if the named extension was enabled on this instance.
+        bool Is_extension_enabled(const char* _name) const;
+
         // The actual Vulkan API version this instance was created with.
         // May be lower than the version requested in the constructor if
         // the system's driver doesn't support it.
@@ -78,10 +103,11 @@ namespace Renderer_System
         // why this single layer is enough on modern Vulkan SDKs).
         std::vector<const char*> Get_required_validation_layers() const;
 
-        // Returns the list of instance extensions required: whatever GLFW
-        // needs to create a surface on this OS, plus the debug utils
-        // extension if validation is enabled.
-        std::vector<const char*> Get_required_extensions() const;
+        // Builds the list of instance extensions to enable: whatever GLFW
+        // needs to create a surface on this OS (mandatory), plus every
+        // optional extension the loader actually reports. Records the
+        // outcome in enabled_extensions / surface_maintenance1_enabled.
+        std::vector<const char*> Select_extensions();
 
         // Checks that all requested validation layers are actually
         // available on this system before trying to enable them. Without

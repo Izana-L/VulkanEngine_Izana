@@ -17,9 +17,15 @@ namespace Input_System
     // named actions loaded from a JSON configuration file.
     //
     // Lifecycle per frame:
-    //   1. Window::Poll_events()  — GLFW fires callbacks → Input stores raw events
-    //   2. Input::Update()        — swap snapshots, compute action states
-    //   3. Game code queries      — Is_key_down(), Get_action_value(), etc.
+    //   1. Input::Begin_frame()   - snapshot the previous key/button state
+    //   2. Window::Poll_events()  - GLFW fires callbacks -> Input stores raw events
+    //   3. Input::Update()        - publish mouse/scroll deltas, compute action states
+    //   4. Game code queries      - Is_key_down(), Get_action_value(), etc.
+    //
+    // While the window is minimized the loop does not run steps 3-4; it
+    // calls Discard_pending() instead, so that mouse motion and scroll
+    // received during that time is dropped rather than delivered as one
+    // huge delta on the first frame after restoring.
     //
     // Subscribes to Window via std::function callbacks (Set_*_callback).
     // Does not touch GLFW directly except for cursor mode.
@@ -38,12 +44,25 @@ namespace Input_System
         // =========================================================
         // Frame update
         // =========================================================
+
+        // Must be called once per frame BEFORE Poll_events(): copies the
+        // current key/button state into the previous snapshot so the
+        // callbacks fired by Poll_events() produce edges relative to it.
         void Begin_frame();
+
         // Must be called once per frame AFTER Poll_events() and BEFORE
         // any game code queries input state.
-        // Swaps current/previous snapshots and resets per-frame data
-        // (mouse delta, scroll, pressed/released flags).
+        // Publishes the accumulated mouse/scroll deltas, resets the
+        // accumulators, and recomputes action values and edges.
         void Update();
+
+        // Drops everything accumulated since the last Update() (mouse
+        // motion, scroll, pressed/released edges) and re-syncs the
+        // snapshots with the current key/button state. Used while the
+        // window is minimized, when no frame consumes the input: without
+        // it the accumulators keep growing and the first frame after
+        // restoring receives the whole backlog at once.
+        void Discard_pending();
 
         // =========================================================
         // Raw keyboard state
@@ -84,6 +103,9 @@ namespace Input_System
         // Cursor mode
         // =========================================================
 
+        // Switching modes discards any mouse delta latched for the current
+        // frame and any motion accumulated since, so a toggle never turns
+        // the movement that triggered it into a camera jump.
         void        Set_cursor_mode(Cursor_Mode _mode);
         Cursor_Mode Get_cursor_mode() const;
 
@@ -94,11 +116,17 @@ namespace Input_System
         // Loads action bindings from a JSON file.
         // Format: { "actions": [ { "name": "MoveForward", "bindings": ["W", "Arrow_Up"] } ] }
         // Replaces any previously loaded actions.
+        //
+        // Throws std::runtime_error if the file cannot be opened, is not
+        // valid JSON, or names a key or mouse button that does not exist:
+        // a misspelled binding is a configuration error, and reporting it
+        // at load time is what keeps it from silently binding to nothing.
         void Load_actions(const std::string& _path);
 
         // 0.0 (inactive) or 1.0 (active) for keyboard/mouse bindings.
         // Returns 0.0 if the action name is not found.
         float Get_action_value(const std::string& _action) const;
+
         // Resolves an action name to a stable index, once. Per-frame code
         // should cache the result and use the overloads below instead of
         // hashing a string every frame.
@@ -110,10 +138,28 @@ namespace Input_System
         size_t Get_action_id(const std::string& _action) const;
         float  Get_action_value(size_t _action_id) const;
         bool   Is_action_down(size_t _action_id) const;
+        bool   Was_action_pressed(size_t _action_id) const;
+        bool   Was_action_released(size_t _action_id) const;
+
         // Convenience wrappers built on Get_action_value.
         bool  Is_action_down(const std::string& _action) const;
         bool  Was_action_pressed(const std::string& _action) const;
         bool  Was_action_released(const std::string& _action) const;
+
+        // =========================================================
+        // Name translation (single table, see Input.cpp)
+        // =========================================================
+
+        // Name of a key as written in the action JSON ("Arrow_Up").
+        // Key::Unknown and out-of-range values yield "Unknown".
+        static const char* Key_to_string(Key _key);
+        static const char* Mouse_button_to_string(Mouse_Button _button);
+
+        // Reverse lookups. Unknown names return Key::Unknown /
+        // Mouse_Button::COUNT (the sentinel); Load_actions treats both as
+        // errors.
+        static Key          String_to_key(const std::string& _str);
+        static Mouse_Button String_to_mouse_button(const std::string& _str);
 
     private:
 
@@ -135,7 +181,7 @@ namespace Input_System
         };
 
         // =========================================================
-        // GLFW callbacks — called by Window during Poll_events()
+        // GLFW callbacks - called by Window during Poll_events()
         // =========================================================
 
         void Handle_key(int _glfw_key, int _glfw_action);
@@ -149,9 +195,6 @@ namespace Input_System
 
         static Key          Glfw_key_to_key(int _glfw_key);
         static Mouse_Button Glfw_button_to_btn(int _glfw_button);
-        static std::string  Key_to_string(Key _key);
-        static Key          String_to_key(const std::string& _str);
-        static Mouse_Button String_to_mouse_button(const std::string& _str);
 
         // =========================================================
         // Action helpers
@@ -162,6 +205,9 @@ namespace Input_System
 
         // Recomputes value, pressed and released for all actions.
         void Update_actions();
+
+        // Zeroes the latched deltas and the accumulators.
+        void Clear_motion();
 
         // =========================================================
         // Data
@@ -191,7 +237,7 @@ namespace Input_System
 
         // Actions loaded from JSON.
         std::vector<Action>                        actions;
-        std::unordered_map<std::string, size_t>    action_index;   // name → index in actions
+        std::unordered_map<std::string, size_t>    action_index;   // name -> index in actions
     };
 
-} // namespace Input
+} // namespace Input_System

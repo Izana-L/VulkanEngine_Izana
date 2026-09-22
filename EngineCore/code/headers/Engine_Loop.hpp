@@ -1,7 +1,7 @@
 #pragma once
 
 #include <Time.hpp>
-#include <Id.hpp>
+#include <Entity.hpp>
 
 namespace Platform { class Window; }
 namespace Input_System { class Input; }
@@ -20,13 +20,16 @@ namespace EngineCore
     // Owns the Time struct and iterates frames until the window requests
     // close. Each frame runs the systems in a fixed, deterministic order:
     //
-    //   1. Time::Update()               — delta time, FPS
-    //   2. Window::Poll_events()        — GLFW dispatches callbacks
-    //   3. Input::Update()              — swap key snapshots, flush actions
-    //   4. Camera_Controller::Update()  — input → camera transform
-    //   5. Transform_System::Update()   — recompute TRS matrices
-    //   6. Extractor::Extract()         — ECS → RenderPacket
-    //   7. Renderer::Render()           — draw the frame
+    //   1. Input::Begin_frame()          - snapshot previous input state
+    //   2. Window::Poll_events()         - GLFW dispatches callbacks
+    //      (minimized: discard pending input, wait for events, restart)
+    //   3. Time::Update()                - delta time, FPS
+    //   4. Resize handling               - Window flag -> Renderer swapchain
+    //   5. Input::Update()               - publish deltas, flush actions
+    //   6. Camera_Controller::Update()   - input -> camera transform
+    //   7. Transform_System::Update()    - recompute TRS matrices
+    //   8. Extractor::Extract()          - ECS -> RenderPacket
+    //   9. Renderer::Render()            - draw the frame
     //
     // Separated from Engine so the loop strategy can be changed
     // (fixed timestep, render thread) without touching Engine's
@@ -43,7 +46,7 @@ namespace EngineCore
 
         // Runs the loop until window.Should_close() returns true.
         // _camera_entity: the ECS entity with Transform + Camera_Component
-        //   that Camera_Controller and Extractor will use.
+        //   that Camera_Controller will drive.
         void Run(Platform::Window& _window,
             Input_System::Input& _input,
             Renderer_System::Renderer& _renderer,
@@ -52,7 +55,7 @@ namespace EngineCore
             Transform_System& _transform_system,
             Camera_Controller& _camera_controller,
             Extractor& _extractor,
-            CoreTypes::Id                            _camera_entity);
+            ECS::Entity                        _camera_entity);
 
         const Platform::Time& Get_time() const { return time; }
 

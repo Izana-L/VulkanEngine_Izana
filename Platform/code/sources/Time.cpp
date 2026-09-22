@@ -21,20 +21,36 @@ namespace Platform {
     {
         Time_point now = Clock::now();
 
-        std::chrono::duration<float> elapsed = now - last_frame_time;
-        float raw_delta = elapsed.count();
+        // Frame rate cap. The deadline is measured from the PREVIOUS
+        // Update(), which is the start of the previous frame: sleeping until
+        // then paces every frame to the same period. Subtracting the
+        // previous delta from the period would count the previous sleep
+        // twice and make frames alternate between sleeping and not.
+        if (target_fps > 0.0f) {
+            const auto period = std::chrono::duration_cast<Clock::duration>(
+                std::chrono::duration<double>(1.0 / static_cast<double>(target_fps)));
+            const Time_point deadline = last_frame_time + period;
 
-        // Clamp to avoid huge spikes (e.g. after a breakpoint, window drag-resize
-        // stall, or the very first frame) - prevents physics/gameplay from
-        // taking a giant simulation step that could break things.
-        constexpr float max_delta = 0.25f;
-        raw_delta = std::min(raw_delta, max_delta);
+            if (now < deadline) {
+                std::this_thread::sleep_until(deadline);
+                now = Clock::now();
+            }
+        }
 
-        unscaled_delta_time = raw_delta;
-        delta_time = raw_delta * time_scale;
+        const double raw_delta = std::chrono::duration<double>(now - last_frame_time).count();
 
-        unscaled_total_time += static_cast<double>(unscaled_delta_time);
-        total_time += static_cast<double>(delta_time);
+        // Clamp the SIMULATION step to avoid huge spikes (e.g. after a
+        // breakpoint, window drag-resize stall, or the very first frame) -
+        // prevents physics/gameplay from taking a giant step.
+        const double clamped_delta = std::min(raw_delta, static_cast<double>(max_delta));
+
+        unscaled_delta_time = static_cast<float>(clamped_delta);
+        delta_time = static_cast<float>(clamped_delta) * time_scale;
+
+        // The clocks follow the real interval, not the clamped one: a stall
+        // is not lost, it is simply not simulated as a single step.
+        unscaled_total_time = std::chrono::duration<double>(now - start_time).count();
+        total_time += raw_delta * static_cast<double>(time_scale);
 
         last_frame_time = now;
         ++frame_count;
@@ -43,18 +59,6 @@ namespace Platform {
         recent_delta_times.push_back(unscaled_delta_time);
         if (recent_delta_times.size() > max_recent_samples) {
             recent_delta_times.pop_front();
-        }
-
-        // Optional frame rate cap: if the frame finished faster than the
-        // target, sleep for the remaining time.
-        if (target_fps > 0.0f) {
-            float target_frame_time = 1.0f / target_fps;
-            float frame_elapsed = std::chrono::duration<float>(Clock::now() - now).count();
-            float remaining = target_frame_time - raw_delta - frame_elapsed;
-
-            if (remaining > 0.0f) {
-                std::this_thread::sleep_for(std::chrono::duration<float>(remaining));
-            }
         }
     }
 

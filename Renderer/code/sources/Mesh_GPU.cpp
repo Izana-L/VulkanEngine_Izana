@@ -102,7 +102,8 @@ namespace Renderer_System
             for (size_t i = 0; i < _mesh_data.indices.size(); ++i)
                 dst[i] = static_cast<uint16_t>(_mesh_data.indices[i]);
 
-            vmaFlushAllocation(allocator, index_staging.allocation, 0, index_buffer_size);
+            VK_CHECK(vmaFlushAllocation(allocator, index_staging.allocation, 0, index_buffer_size),
+                "Mesh_GPU: flush index staging buffer");
         }
         else
         {

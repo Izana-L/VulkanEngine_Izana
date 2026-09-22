@@ -80,29 +80,60 @@ namespace Platform {
         }
     }
 
-    // ---------- Move constructor ----------
-    Window::Window(Window&& _other) noexcept
-        : window_handle(_other.window_handle),
-        width(_other.width),
-        height(_other.height),
-        title(std::move(_other.title)),
-        was_resized(_other.was_resized),
-        windowed_pos_x(_other.windowed_pos_x),
-        windowed_pos_y(_other.windowed_pos_y),
-        windowed_width(_other.windowed_width),
-        windowed_height(_other.windowed_height),
-        is_fullscreen(_other.is_fullscreen),
-        is_windowed_fullscreen(_other.is_windowed_fullscreen),
-        close_callback(std::move(_other.close_callback)),
-        focus_callback(std::move(_other.focus_callback)),
-        iconify_callback(std::move(_other.iconify_callback)),
-        position_callback(std::move(_other.position_callback)) {
+    // ---------- Move_from ----------
+    void Window::Move_from(Window&& _other) noexcept {
+        window_handle = _other.window_handle;
+        width = _other.width;
+        height = _other.height;
+        title = std::move(_other.title);
+        was_resized = _other.was_resized;
+        windowed_pos_x = _other.windowed_pos_x;
+        windowed_pos_y = _other.windowed_pos_y;
+        windowed_width = _other.windowed_width;
+        windowed_height = _other.windowed_height;
+        is_fullscreen = _other.is_fullscreen;
+        is_windowed_fullscreen = _other.is_windowed_fullscreen;
+
+        // Every callback travels with the window. Leaving the input ones
+        // behind would silently disconnect Input from a moved Window.
+        close_callback = std::move(_other.close_callback);
+        focus_callback = std::move(_other.focus_callback);
+        iconify_callback = std::move(_other.iconify_callback);
+        position_callback = std::move(_other.position_callback);
+        key_callback = std::move(_other.key_callback);
+        mouse_button_callback = std::move(_other.mouse_button_callback);
+        mouse_move_callback = std::move(_other.mouse_move_callback);
+        scroll_callback = std::move(_other.scroll_callback);
 
         _other.window_handle = nullptr;
+        _other.close_callback = nullptr;
+        _other.focus_callback = nullptr;
+        _other.iconify_callback = nullptr;
+        _other.position_callback = nullptr;
+        _other.key_callback = nullptr;
+        _other.mouse_button_callback = nullptr;
+        _other.mouse_move_callback = nullptr;
+        _other.scroll_callback = nullptr;
 
         if (window_handle) {
             glfwSetWindowUserPointer(window_handle, this);
         }
+    }
+
+    // ---------- Move constructor ----------
+    Window::Window(Window&& _other) noexcept
+        : window_handle(nullptr),
+        width(0),
+        height(0),
+        was_resized(false),
+        windowed_pos_x(0),
+        windowed_pos_y(0),
+        windowed_width(0),
+        windowed_height(0),
+        is_fullscreen(false),
+        is_windowed_fullscreen(false) {
+
+        Move_from(std::move(_other));
     }
 
     // ---------- Move assignment ----------
@@ -116,27 +147,7 @@ namespace Platform {
                 }
             }
 
-            window_handle = _other.window_handle;
-            width = _other.width;
-            height = _other.height;
-            title = std::move(_other.title);
-            was_resized = _other.was_resized;
-            windowed_pos_x = _other.windowed_pos_x;
-            windowed_pos_y = _other.windowed_pos_y;
-            windowed_width = _other.windowed_width;
-            windowed_height = _other.windowed_height;
-            is_fullscreen = _other.is_fullscreen;
-            is_windowed_fullscreen = _other.is_windowed_fullscreen;
-            close_callback = std::move(_other.close_callback);
-            focus_callback = std::move(_other.focus_callback);
-            iconify_callback = std::move(_other.iconify_callback);
-            position_callback = std::move(_other.position_callback);
-
-            _other.window_handle = nullptr;
-
-            if (window_handle) {
-                glfwSetWindowUserPointer(window_handle, this);
-            }
+            Move_from(std::move(_other));
         }
         return *this;
     }
@@ -154,7 +165,7 @@ namespace Platform {
         assert(window_handle != nullptr && "Poll_events() called on a moved-from Window");
         glfwPollEvents();
     }
-    void Window::Wait_events() {
+    void Window::Wait_events() const {
         assert(window_handle != nullptr && "Wait_events() called on a moved-from Window");
         glfwWaitEvents();
     }
@@ -326,17 +337,39 @@ namespace Platform {
     // Fullscreen
     // =========================================================
 
+    void Window::Remember_windowed_geometry() {
+        if (is_fullscreen || is_windowed_fullscreen) return;
+
+        glfwGetWindowPos(window_handle, &windowed_pos_x, &windowed_pos_y);
+        Get_size(windowed_width, windowed_height);
+    }
+
+    void Window::Restore_windowed_geometry() {
+        Set_decorated(true);
+        glfwSetWindowMonitor(
+            window_handle, nullptr,
+            windowed_pos_x, windowed_pos_y,
+            windowed_width, windowed_height,
+            0
+        );
+    }
+
     void Window::Set_fullscreen(bool _fullscreen) {
         assert(window_handle != nullptr && "Set_fullscreen() called on a moved-from Window");
 
         if (_fullscreen == is_fullscreen) return;
 
         if (_fullscreen) {
-            glfwGetWindowPos(window_handle, &windowed_pos_x, &windowed_pos_y);
-            Get_size(windowed_width, windowed_height);
-
             GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-            const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+            const GLFWvidmode* mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
+            if (!mode) {
+                std::cerr << "[Window] Set_fullscreen: no primary monitor available\n";
+                return;
+            }
+
+            // A no-op when coming from borderless: the geometry saved when
+            // the window was last windowed is the one to restore later.
+            Remember_windowed_geometry();
 
             glfwSetWindowMonitor(
                 window_handle, monitor,
@@ -344,18 +377,18 @@ namespace Platform {
                 mode->width, mode->height,
                 mode->refreshRate
             );
+
+            is_fullscreen = true;
+            is_windowed_fullscreen = false;
         }
         else {
-            glfwSetWindowMonitor(
-                window_handle, nullptr,
-                windowed_pos_x, windowed_pos_y,
-                windowed_width, windowed_height,
-                0
-            );
-        }
+            // Restores decorations too, in case the path went
+            // windowed -> borderless -> fullscreen -> windowed.
+            Restore_windowed_geometry();
 
-        is_fullscreen = _fullscreen;
-        is_windowed_fullscreen = false;
+            is_fullscreen = false;
+            is_windowed_fullscreen = false;
+        }
     }
 
     bool Window::Is_fullscreen() const {
@@ -369,11 +402,14 @@ namespace Platform {
         if (_enabled == is_windowed_fullscreen) return;
 
         if (_enabled) {
-            glfwGetWindowPos(window_handle, &windowed_pos_x, &windowed_pos_y);
-            Get_size(windowed_width, windowed_height);
-
             GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-            const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+            const GLFWvidmode* mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
+            if (!mode) {
+                std::cerr << "[Window] Set_windowed_fullscreen: no primary monitor available\n";
+                return;
+            }
+
+            Remember_windowed_geometry();
 
             Set_decorated(false);
             glfwSetWindowMonitor(
@@ -382,19 +418,16 @@ namespace Platform {
                 mode->width, mode->height,
                 0
             );
+
+            is_windowed_fullscreen = true;
+            is_fullscreen = false;
         }
         else {
-            Set_decorated(true);
-            glfwSetWindowMonitor(
-                window_handle, nullptr,
-                windowed_pos_x, windowed_pos_y,
-                windowed_width, windowed_height,
-                0
-            );
-        }
+            Restore_windowed_geometry();
 
-        is_windowed_fullscreen = _enabled;
-        is_fullscreen = false;
+            is_windowed_fullscreen = false;
+            is_fullscreen = false;
+        }
     }
 
     bool Window::Is_windowed_fullscreen() const {

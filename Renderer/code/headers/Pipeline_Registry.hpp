@@ -6,6 +6,7 @@
 #include <Vulkan_Device.hpp>
 #include <Vulkan_Render_Pass.hpp>
 #include <Vulkan_Pipeline.hpp>
+#include <Hash.hpp>
 #include <vector>
 #include <cstdint>
 #include <string>
@@ -15,7 +16,7 @@ namespace Renderer_System
 {
 
     // Hash functor for Pipeline_Config, so it can be an unordered_map key.
-    // Same hash_combine pattern as Sampler_Desc_Hash.
+    // Uses the shared CoreTypes::Hash_combine, like Sampler_Desc_Hash.
     //
     // MUST agree field-for-field with Pipeline_Config::operator==.
     struct Pipeline_Config_Hash
@@ -23,21 +24,17 @@ namespace Renderer_System
         size_t operator()(const Pipeline_Config& _config) const
         {
             size_t seed = 0;
-            auto combine = [&seed](size_t _value)
-                {
-                    seed ^= _value + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-                };
 
-            combine(std::hash<std::string>{}(_config.vertex_shader_path));
-            combine(std::hash<std::string>{}(_config.fragment_shader_path));
-            combine(std::hash<int>{}(static_cast<int>(_config.polygon_mode)));
-            combine(std::hash<bool>{}(_config.blend_enable));
-            combine(std::hash<int>{}(static_cast<int>(_config.src_color_blend_factor)));
-            combine(std::hash<int>{}(static_cast<int>(_config.dst_color_blend_factor)));
-            combine(std::hash<int>{}(static_cast<int>(_config.color_blend_op)));
-            combine(std::hash<int>{}(static_cast<int>(_config.src_alpha_blend_factor)));
-            combine(std::hash<int>{}(static_cast<int>(_config.dst_alpha_blend_factor)));
-            combine(std::hash<int>{}(static_cast<int>(_config.alpha_blend_op)));
+            CoreTypes::Hash_combine_value(seed, _config.vertex_shader_path);
+            CoreTypes::Hash_combine_value(seed, _config.fragment_shader_path);
+            CoreTypes::Hash_combine_value(seed, static_cast<int>(_config.polygon_mode));
+            CoreTypes::Hash_combine_value(seed, _config.blend_enable);
+            CoreTypes::Hash_combine_value(seed, static_cast<int>(_config.src_color_blend_factor));
+            CoreTypes::Hash_combine_value(seed, static_cast<int>(_config.dst_color_blend_factor));
+            CoreTypes::Hash_combine_value(seed, static_cast<int>(_config.color_blend_op));
+            CoreTypes::Hash_combine_value(seed, static_cast<int>(_config.src_alpha_blend_factor));
+            CoreTypes::Hash_combine_value(seed, static_cast<int>(_config.dst_alpha_blend_factor));
+            CoreTypes::Hash_combine_value(seed, static_cast<int>(_config.alpha_blend_op));
 
             return seed;
         }
@@ -104,9 +101,15 @@ namespace Renderer_System
 
         // True once Warm_up has run. Nothing should be built after this.
         bool Is_sealed() const { return sealed; }
-        // LOAD TIME.Returns the stable id for _config, building the
-        // pipeline if this configuration is new. Hashes two std::strings —
+
+        // LOAD TIME. Returns the stable id for _config, building the
+        // pipeline if this configuration is new. Hashes two std::strings:
         // fine once at setup, wrong once per draw.
+        //
+        // Building after Warm_up() is a frame hitch, not a fault: the
+        // pipeline is built and a warning names the missing manifest
+        // entry, in every build configuration. Throws std::length_error
+        // when the 256-pipeline limit of the sort key is reached.
         uint8_t Get_id(const Pipeline_Config & _config);
 
         // HOT PATH. O(1) array index, no hashing, no allocation.

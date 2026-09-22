@@ -32,13 +32,7 @@ namespace Renderer_System
         // resolves everything. Only volk / VK_NO_PROTOTYPES setups need to
         // fill this in.
 
-        VkResult result = vmaCreateAllocator(&allocator_info, &allocator);
-        if (result != VK_SUCCESS) {
-            throw std::runtime_error(
-                "Failed to create VMA allocator: " +
-                Vulkan_Utils::Vk_result_to_string(result)
-            );
-        }
+        VK_CHECK(vmaCreateAllocator(&allocator_info, &allocator), "Failed to create VMA allocator");
 
         std::cout << "[Vulkan_Allocator] Created.\n";
     }

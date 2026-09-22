@@ -1,14 +1,8 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 
-
 #include "common/frame_set.glsl"
-
-// Model matrix as push constant - one per draw call.
-layout(push_constant) uniform Push_Constants
-{
-    mat4 model;
-} push;
+#include "common/push_constants.glsl"
 
 // Vertex inputs - matches CoreTypes::Vertex_Static_Mesh
 layout(location = 0) in vec3 in_position;

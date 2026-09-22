@@ -1,4 +1,7 @@
 #pragma once
+#ifndef GLM_ENABLE_EXPERIMENTAL
+#define GLM_ENABLE_EXPERIMENTAL
+#endif
 #include <Matrix.hpp>
 #include <Vector.hpp>
 #include <MathConstants.hpp>
@@ -240,6 +243,21 @@ namespace MathLib
         // Use FromDirection(v3) for directions (w=0, translation ignored)
         inline Vector4 Transform_vector(const Matrix4& m, const Vector4& v) {
             return m * v;
+        }
+
+        // Transforms a POINT (w = 1): rotation, scale and translation apply.
+        inline Vector3 Transform_point(const Matrix4& m, const Vector3& p) {
+            return Vector3(m * Vector4(p, 1.0f));
+        }
+
+        // Transforms a DIRECTION (w = 0): translation is ignored and the
+        // result is re-normalized, so a scaled matrix still yields a unit
+        // vector. A degenerate matrix (zero scale on that axis) returns the
+        // input unchanged rather than NaN.
+        inline Vector3 Transform_direction(const Matrix4& m, const Vector3& d) {
+            const Vector3 transformed = Vector3(m * Vector4(d, 0.0f));
+            const float   length = glm::length(transformed);
+            return (length > Constants::EPSILON) ? transformed / length : d;
         }
 
         // =========================================================

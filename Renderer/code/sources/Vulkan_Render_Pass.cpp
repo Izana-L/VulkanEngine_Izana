@@ -133,12 +133,8 @@ namespace Renderer_System {
         render_pass_info.dependencyCount = 1;
         render_pass_info.pDependencies = &dependency;
 
-        VkResult result = vkCreateRenderPass(device_handle, &render_pass_info, nullptr, &render_pass);
-        if (result != VK_SUCCESS) {
-            throw std::runtime_error(
-                "Failed to create render pass: " + Vulkan_Utils::Vk_result_to_string(result)
-            );
-        }
+        VK_CHECK(vkCreateRenderPass(device_handle, &render_pass_info, nullptr, &render_pass),
+            "Failed to create render pass");
 
         std::cout << "[Vulkan_Render_Pass] Render pass created successfully (color + depth attachments).\n";
     }

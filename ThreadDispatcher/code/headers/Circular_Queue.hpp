@@ -1,11 +1,12 @@
 #pragma once
 
-#include <atomic>
-#include <cassert>
 #include <condition_variable>
+#include <cstddef>
+#include <memory>
 #include <mutex>
+#include <new>
 #include <optional>
-#include <vector>
+#include <utility>
 
 namespace ThreadDispatcher
 {
@@ -14,12 +15,23 @@ namespace ThreadDispatcher
     // producer/consumer buffer between threads. Handles synchronization
     // internally, blocking Push/Emplace when full and Pop when empty.
     //
-    // Allocates a single contiguous memory buffer on construction and
-    // never reallocates at runtime, making it safe and cache-friendly
-    // for high-frequency task queuing.
+    // Allocates a single contiguous, correctly aligned buffer on
+    // construction and never reallocates at runtime. Elements are
+    // constructed in place when pushed and destroyed when popped; any
+    // element still stored when the queue is destroyed is destroyed then.
     //
-    // Thread-safe: all public operations are protected by an internal
-    // mutex and condition variable.
+    // Lifecycle:
+    //   - Close():  no further pushes are accepted; pops keep returning the
+    //               remaining elements and report "finished" (nullopt) once
+    //               the queue is empty. This is the orderly shutdown path.
+    //   - Cancel(): no further pushes are accepted and every pop returns
+    //               nullopt at once, whatever is still stored. This is the
+    //               abort path; the stored elements are destroyed by the
+    //               destructor.
+    //
+    // Thread-safe: every public operation takes the internal mutex, the
+    // flags included, so a waiter can never miss a wake-up between testing
+    // its predicate and blocking on the condition variable.
     template< typename TYPE >
     class Circular_Queue final
     {
@@ -29,38 +41,94 @@ namespace ThreadDispatcher
 
     private:
 
-        // Single contiguous buffer storing all elements as raw bytes.
-        // Elements are constructed in place via placement new and
-        // destroyed manually, avoiding default construction overhead.
-        std::vector< std::byte > elements;
-        const size_t             real_capacity;
+        struct Storage_Deleter
+        {
+            size_t capacity;
 
-        std::atomic< size_t >    first;
-        std::atomic< size_t >    last;
-        std::atomic< size_t >    allocated;
+            void operator()(Value_Type* _slots) const
+            {
+                std::allocator< Value_Type >{}.deallocate(_slots, capacity);
+            }
+        };
 
-        // When cancelled, all blocking Push/Pop calls wake up and
-        // return immediately (Pop returns nullopt). Used during shutdown
-        // to unblock waiting worker threads.
-        std::atomic< bool >      cancelled;
-        std::condition_variable  condition;
-        std::mutex               mutex;
+        // Raw slots: constructed only while occupied.
+        std::unique_ptr< Value_Type[], Storage_Deleter > slots;
+        const size_t                                     capacity;
+
+        size_t head = 0;      // index of the front element
+        size_t count = 0;     // occupied slots
+
+        bool closed = false;
+        bool cancelled = false;
+
+        mutable std::mutex      mutex;
+        std::condition_variable not_empty;
+        std::condition_variable not_full;
+
+        Value_Type* Slot(size_t _logical_index)
+        {
+            return slots.get() + (head + _logical_index) % capacity;
+        }
+
+        // Precondition: mutex held, count < capacity, not closed/cancelled.
+        template< typename... ARGUMENTS >
+        void Construct_back(ARGUMENTS&&... _arguments)
+        {
+            ::new (static_cast<void*>(Slot(count))) Value_Type(std::forward< ARGUMENTS >(_arguments)...);
+            ++count;
+        }
+
+        // Precondition: mutex held, count > 0.
+        Value_Type Take_front()
+        {
+            Value_Type* front = Slot(0);
+            Value_Type  value = std::move(*front);
+            front->~Value_Type();
+
+            head = (head + 1) % capacity;
+            --count;
+
+            return value;
+        }
+
+        // Shared body of Push / Emplace. Returns false when the queue no
+        // longer accepts elements.
+        template< typename... ARGUMENTS >
+        bool Enqueue(ARGUMENTS&&... _arguments)
+        {
+            std::unique_lock lock(mutex);
+
+            not_full.wait(lock, [this] { return count < capacity || closed || cancelled; });
+
+            if (closed || cancelled) return false;
+
+            Construct_back(std::forward< ARGUMENTS >(_arguments)...);
+
+            lock.unlock();
+            not_empty.notify_one();
+
+            return true;
+        }
 
     public:
 
-        // Constructs the queue with the given capacity.
-        // Allocates (capacity + 1) slots internally to distinguish
-        // full from empty without an extra flag.
+        // Constructs the queue with the given capacity (at least 1).
         explicit Circular_Queue(size_t _desired_capacity)
-            : elements((_desired_capacity + 1) * sizeof(Value_Type)),
-            real_capacity(_desired_capacity + 1),
-            first(0),
-            last(0),
-            allocated(0),
-            cancelled(false)
+            : slots(std::allocator< Value_Type >{}.allocate(_desired_capacity == 0 ? 1 : _desired_capacity),
+                Storage_Deleter{ _desired_capacity == 0 ? 1 : _desired_capacity }),
+            capacity(_desired_capacity == 0 ? 1 : _desired_capacity)
         {}
 
-        // Not copyable or movable - owns a live buffer with potentially
+        // Destroys every element still stored. Callers must make sure no
+        // thread is blocked in Push/Pop at this point (Thread_Dispatcher
+        // joins its workers before the queue goes away).
+        ~Circular_Queue()
+        {
+            for (size_t i = 0; i < count; ++i)
+                Slot(i)->~Value_Type();
+        }
+
+        // Not copyable or movable: owns a live buffer with potentially
         // constructed elements and blocking threads waiting on it.
         Circular_Queue(const Circular_Queue&) = delete;
         Circular_Queue& operator=(const Circular_Queue&) = delete;
@@ -74,19 +142,15 @@ namespace ThreadDispatcher
         // Maximum number of elements this queue can hold.
         size_t Capacity() const
         {
-            return real_capacity - 1;
+            return capacity;
         }
 
-        // Current number of elements in the queue.
+        // Current number of elements in the queue. May be stale by the time
+        // the caller reads it; meant for diagnostics.
         size_t Size() const
         {
-            return allocated;
-        }
-
-        // Number of additional elements that can be pushed before blocking.
-        size_t Available() const
-        {
-            return Capacity() - Size();
+            std::lock_guard lock(mutex);
+            return count;
         }
 
         bool Is_empty() const
@@ -96,25 +160,7 @@ namespace ThreadDispatcher
 
         bool Is_full() const
         {
-            return Available() == 0;
-        }
-
-        // =========================================================
-        // Element access
-        // =========================================================
-
-        // Returns a reference to the front element (next to be popped).
-        // Precondition: !Is_empty()
-        Value_Type& Front()
-        {
-            assert(!Is_empty() && "Front() called on an empty Circular_Queue");
-            return Element_at(first);
-        }
-
-        const Value_Type& Front() const
-        {
-            assert(!Is_empty() && "Front() const called on an empty Circular_Queue");
-            return Element_at(first);
+            return Size() == capacity;
         }
 
         // =========================================================
@@ -122,70 +168,26 @@ namespace ThreadDispatcher
         // =========================================================
 
         // Constructs an element in place at the back of the queue.
-        // Blocks if the queue is full until space becomes available
-        // or Cancel() is called.
+        // Blocks while the queue is full. Returns false, without storing
+        // anything, once the queue has been closed or cancelled.
         template< typename... ARGUMENTS >
-        void Emplace(ARGUMENTS&&... _arguments)
+        bool Emplace(ARGUMENTS&&... _arguments)
         {
-            assert(Capacity() > 0 && "Emplace() called on a zero-capacity Circular_Queue");
-
-            std::unique_lock lock(mutex);
-
-            if (Is_full() && !cancelled)
-            {
-                condition.wait(lock, [this] { return !Is_full() || cancelled; });
-            }
-
-            if (cancelled) return;
-
-            new (&Allocate_one()) Value_Type(std::forward< ARGUMENTS >(_arguments)...);
-
-            lock.unlock();
-            condition.notify_one();
+            return Enqueue(std::forward< ARGUMENTS >(_arguments)...);
         }
 
-        // Copies an element to the back of the queue.
-        // Blocks if the queue is full until space becomes available
-        // or Cancel() is called.
-        void Push(const Value_Type& _value)
+        // Copies an element to the back of the queue. Same blocking and
+        // return semantics as Emplace.
+        bool Push(const Value_Type& _value)
         {
-            assert(Capacity() > 0 && "Push() called on a zero-capacity Circular_Queue");
-
-            std::unique_lock lock(mutex);
-
-            if (Is_full() && !cancelled)
-            {
-                condition.wait(lock, [this] { return !Is_full() || cancelled; });
-            }
-
-            if (cancelled) return;
-
-            Allocate_one() = _value;
-
-            lock.unlock();
-            condition.notify_one();
+            return Enqueue(_value);
         }
 
-        // Moves an element to the back of the queue.
-        // Blocks if the queue is full until space becomes available
-        // or Cancel() is called.
-        void Push(Value_Type&& _value)
+        // Moves an element to the back of the queue. Same blocking and
+        // return semantics as Emplace.
+        bool Push(Value_Type&& _value)
         {
-            assert(Capacity() > 0 && "Push() called on a zero-capacity Circular_Queue");
-
-            std::unique_lock lock(mutex);
-
-            if (Is_full() && !cancelled)
-            {
-                condition.wait(lock, [this] { return !Is_full() || cancelled; });
-            }
-
-            if (cancelled) return;
-
-            Allocate_one() = std::move(_value);
-
-            lock.unlock();
-            condition.notify_one();
+            return Enqueue(std::move(_value));
         }
 
         // =========================================================
@@ -193,43 +195,38 @@ namespace ThreadDispatcher
         // =========================================================
 
         // Removes and returns the front element.
-        // Blocks if the queue is empty until an element is available
-        // or Cancel() is called (returns nullopt in that case).
+        // Blocks while the queue is empty and still open. Returns nullopt
+        // once the queue is cancelled, or closed and drained.
         std::optional< Value_Type > Pop()
         {
             std::unique_lock lock(mutex);
 
-            if (Is_empty() && !cancelled)
-            {
-                condition.wait(lock, [this] { return !Is_empty() || cancelled; });
-            }
+            not_empty.wait(lock, [this] { return count > 0 || closed || cancelled; });
 
-            if (cancelled) return std::nullopt;
+            if (cancelled || count == 0) return std::nullopt;
 
-            Value_Type value = std::move(Front());
-            Free_one();
+            std::optional< Value_Type > value(Take_front());
 
             lock.unlock();
-            condition.notify_one();
+            not_full.notify_one();
 
             return value;
         }
 
         // Non-blocking pop: returns the front element if available,
         // or nullopt immediately if the queue is empty or cancelled.
-        // Used by worker threads that want to check for work without
-        // blocking (e.g. to do work-stealing or yield the CPU instead).
+        // Used by threads that want to check for work without blocking
+        // (work stealing, yielding instead of sleeping).
         std::optional< Value_Type > Try_pop()
         {
             std::unique_lock lock(mutex);
 
-            if (Is_empty() || cancelled) return std::nullopt;
+            if (cancelled || count == 0) return std::nullopt;
 
-            Value_Type value = std::move(Front());
-            Free_one();
+            std::optional< Value_Type > value(Take_front());
 
             lock.unlock();
-            condition.notify_one();
+            not_full.notify_one();
 
             return value;
         }
@@ -238,87 +235,45 @@ namespace ThreadDispatcher
         // Shutdown
         // =========================================================
 
-        // Wakes up all threads blocked on Push or Pop and causes them
-        // to return immediately (Push is a no-op, Pop returns nullopt).
-        // Used during Thread_Dispatcher shutdown to unblock workers
-        // waiting for tasks that will never arrive.
+        // Orderly shutdown: rejects further pushes, lets consumers drain
+        // what is stored, then makes Pop() return nullopt.
+        void Close()
+        {
+            {
+                std::lock_guard lock(mutex);
+                closed = true;
+            }
+
+            not_empty.notify_all();
+            not_full.notify_all();
+        }
+
+        // Abort: rejects further pushes and makes every Pop() return
+        // nullopt immediately, leaving the stored elements to the
+        // destructor. Anything waiting on the completion of those elements
+        // will never be signalled; see Thread_Dispatcher::Steal_until_done.
         void Cancel()
         {
-            cancelled = true;
-            condition.notify_all();
+            {
+                std::lock_guard lock(mutex);
+                cancelled = true;
+            }
+
+            not_empty.notify_all();
+            not_full.notify_all();
         }
 
-        // Returns true if Cancel() has been called.
+        bool Is_closed() const
+        {
+            std::lock_guard lock(mutex);
+            return closed;
+        }
+
         bool Is_cancelled() const
         {
+            std::lock_guard lock(mutex);
             return cancelled;
         }
-
-    private:
-
-        // =========================================================
-        // Internal helpers
-        // =========================================================
-
-        Value_Type& Element_at(size_t _index)
-        {
-            return reinterpret_cast<Value_Type&>(elements[_index * sizeof(Value_Type)]);
-        }
-
-        const Value_Type& Element_at(size_t _index) const
-        {
-            return reinterpret_cast<const Value_Type&>(elements[_index * sizeof(Value_Type)]);
-        }
-
-        // Reserves a slot at the back of the circular buffer and returns
-        // a reference to it. Does not construct the element - caller is
-        // responsible for constructing via placement new or assignment.
-        Value_Type& Allocate_one()
-        {
-            if (last >= first)
-            {
-                if (last == real_capacity - 1)
-                {
-                    if (first > 0) return Allocate_one_before(0);
-                }
-                else
-                {
-                    return Allocate_one_before(last + 1);
-                }
-            }
-            else
-            {
-                if (last < first - 1) return Allocate_one_before(last + 1);
-            }
-
-            throw std::bad_alloc();
-        }
-
-        Value_Type& Allocate_one_before(size_t _new_last)
-        {
-            size_t previous_last = last;
-            last = _new_last;
-            ++allocated;
-            return Element_at(previous_last);
-        }
-
-        // Destroys the front element and advances the read pointer.
-        void Free_one()
-        {
-            Front().~Value_Type();
-
-            if (first < last)
-            {
-                ++first;
-                --allocated;
-            }
-            else if (first > last)
-            {
-                if (++first == real_capacity) first = 0;
-                --allocated;
-            }
-        }
-
     };
 
 }

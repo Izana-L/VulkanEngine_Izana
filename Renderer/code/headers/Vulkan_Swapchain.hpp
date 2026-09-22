@@ -35,6 +35,11 @@ namespace Renderer_System
         VkPhysicalDevice physical_device_handle;
         VkSurfaceKHR surface_handle;
 
+        // Queue the swapchain images are presented on. Declared before the
+        // window pointer so the declaration order matches the constructor
+        // initializer lists (members are always initialized in declaration order).
+        VkQueue present_queue_handle;
+
         // Stored so Recreate() can rebuild the swapchain without needing
         // these passed in again from outside.
         const Platform::Window* window;
@@ -49,7 +54,6 @@ namespace Renderer_System
         VkFormat image_format;
         VkExtent2D extent;
         VkPresentModeKHR selected_present_mode;
-        VkQueue present_queue_handle;
 
     public:
         // Creates the swapchain for the given device/surface/window.

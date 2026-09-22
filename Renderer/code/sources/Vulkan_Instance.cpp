@@ -3,6 +3,7 @@
 #include <iostream>
 #include <cstring>
 #include <cassert>
+#include <unordered_set>
 
 namespace Renderer_System 
 {
@@ -19,6 +20,24 @@ namespace Renderer_System
         {
             "VK_LAYER_KHRONOS_validation"
         };
+
+        // Every instance extension the loader exposes, by name.
+        std::unordered_set<std::string> Enumerate_instance_extensions()
+        {
+            uint32_t count = 0;
+            VK_CHECK(vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr),
+                "Vulkan_Instance: enumerate instance extensions");
+
+            std::vector<VkExtensionProperties> properties(count);
+            VK_CHECK(vkEnumerateInstanceExtensionProperties(nullptr, &count, properties.data()),
+                "Vulkan_Instance: enumerate instance extensions");
+
+            std::unordered_set<std::string> names;
+            for (const VkExtensionProperties& extension : properties)
+                names.insert(extension.extensionName);
+
+            return names;
+        }
     }
 
     // ---------- Manual extension function loading ----------
@@ -69,6 +88,7 @@ namespace Renderer_System
         : instance(VK_NULL_HANDLE),
         debug_messenger(VK_NULL_HANDLE),
         validation_enabled(_enable_validation),
+        surface_maintenance1_enabled(false),
         api_version(0) {
 
         std::vector<const char*> required_layers = Get_required_validation_layers();
@@ -98,7 +118,7 @@ namespace Renderer_System
         app_info.engineVersion = VK_MAKE_VERSION(1, 0, 0);
         app_info.apiVersion = api_version;
 
-        std::vector<const char*> extensions = Get_required_extensions();
+        std::vector<const char*> extensions = Select_extensions();
 
         VkInstanceCreateInfo create_info{};
         create_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -129,7 +149,9 @@ namespace Renderer_System
 
             // pNext is Vulkan's mechanism for "extending" a struct with
             // additional data without changing its original definition.
-            create_info.pNext = &debug_create_info;
+            // Only chained when the debug utils extension was enabled.
+            if (Is_extension_enabled(VK_EXT_DEBUG_UTILS_EXTENSION_NAME))
+                create_info.pNext = &debug_create_info;
         }
         else {
             create_info.enabledLayerCount = 0;
@@ -139,18 +161,13 @@ namespace Renderer_System
         // The actual call that creates the VkInstance. Almost every Vulkan
         // function returns a VkResult; VK_SUCCESS means it worked, anything
         // else is a specific error code.
-        VkResult result = vkCreateInstance(&create_info, nullptr, &instance);
-        if (result != VK_SUCCESS) {
-            throw std::runtime_error(
-                "Failed to create Vulkan instance: " + Vulkan_Utils::Vk_result_to_string(result)
-            );
-        }
+        VK_CHECK(vkCreateInstance(&create_info, nullptr, &instance), "Failed to create Vulkan instance");
 
         Log_activated_extensions_and_layers(extensions, validation_enabled ? required_layers : std::vector<const char*>{});
 
         // Only now create the "permanent" debug messenger, active for the
         // rest of this Vulkan_instance's lifetime.
-        if (validation_enabled) {
+        if (validation_enabled && Is_extension_enabled(VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) {
             Setup_debug_messenger();
         }
     }
@@ -170,8 +187,10 @@ namespace Renderer_System
             // instance, so it must go first.
             if (debug_messenger != VK_NULL_HANDLE) {
                 Destroy_debug_utils_messenger_ext(instance, debug_messenger, nullptr);
+                debug_messenger = VK_NULL_HANDLE;
             }
             vkDestroyInstance(instance, nullptr);
+            instance = VK_NULL_HANDLE;
         }
     }
 
@@ -180,7 +199,9 @@ namespace Renderer_System
         : instance(_other.instance),
         debug_messenger(_other.debug_messenger),
         validation_enabled(_other.validation_enabled),
-        api_version(_other.api_version) {
+        surface_maintenance1_enabled(_other.surface_maintenance1_enabled),
+        api_version(_other.api_version),
+        enabled_extensions(std::move(_other.enabled_extensions)) {
 
         // Leave the moved-from object in a valid empty state so its
         // destructor doesn't try to destroy handles "this" now owns.
@@ -198,7 +219,9 @@ namespace Renderer_System
             instance = _other.instance;
             debug_messenger = _other.debug_messenger;
             validation_enabled = _other.validation_enabled;
+            surface_maintenance1_enabled = _other.surface_maintenance1_enabled;
             api_version = _other.api_version;
+            enabled_extensions = std::move(_other.enabled_extensions);
 
             _other.instance = VK_NULL_HANDLE;
             _other.debug_messenger = VK_NULL_HANDLE;
@@ -216,8 +239,20 @@ namespace Renderer_System
     // ---------- Is_validation_enabled ----------
     bool Vulkan_Instance::Is_validation_enabled() const 
     {
-        assert(instance != VK_NULL_HANDLE && "Is_validation_enabled() called on a moved-from Vulkan_Instance");
         return validation_enabled;
+    }
+
+    bool Vulkan_Instance::Is_surface_maintenance1_enabled() const
+    {
+        return surface_maintenance1_enabled;
+    }
+
+    bool Vulkan_Instance::Is_extension_enabled(const char* _name) const
+    {
+        for (const std::string& name : enabled_extensions)
+            if (name == _name) return true;
+
+        return false;
     }
 
     // ---------- Get_api_version ----------
@@ -239,7 +274,7 @@ namespace Renderer_System
             vkGetInstanceProcAddr(nullptr, "vkEnumerateInstanceVersion"));
 
         if (enumerate_version_function != nullptr) {
-            enumerate_version_function(&supported_version);
+            VK_CHECK(enumerate_version_function(&supported_version), "Vulkan_Instance: enumerate instance version");
         }
         // If the function isn't found, we silently assume Vulkan 1.0,
         // which is a safe, conservative fallback.
@@ -267,24 +302,66 @@ namespace Renderer_System
         return validation_layers;
     }
 
-    // ---------- Get_required_extensions ----------
-    std::vector<const char*> Vulkan_Instance::Get_required_extensions() const {
+    // ---------- Select_extensions ----------
+    std::vector<const char*> Vulkan_Instance::Select_extensions() {
         uint32_t glfw_extension_count = 0;
 
         // GLFW knows which Vulkan instance extensions the current OS needs
         // to create a window surface (this differs between Windows, Linux, etc.)
         const char** glfw_extensions = glfwGetRequiredInstanceExtensions(&glfw_extension_count);
 
+        if (glfw_extensions == nullptr || glfw_extension_count == 0) {
+            throw std::runtime_error("Vulkan_Instance: GLFW could not provide the instance extensions "
+                "required to create a surface (no Vulkan-capable loader found)");
+        }
+
+        const std::unordered_set<std::string> available = Enumerate_instance_extensions();
+
         std::vector<const char*> extensions(glfw_extensions, glfw_extensions + glfw_extension_count);
+
+        for (const char* name : extensions) {
+            if (available.count(name) == 0) {
+                throw std::runtime_error(std::string("Vulkan_Instance: required instance extension ") +
+                    name + " is not available");
+            }
+        }
+
+        // Optional extensions: enabled only when the loader reports them,
+        // so vkCreateInstance never fails over an extension this engine can
+        // live without.
+        const auto try_enable = [&](const char* name) -> bool
+            {
+                if (available.count(name) == 0) return false;
+                extensions.push_back(name);
+                return true;
+            };
 
         // VK_EXT_debug_utils is required to use the debug messenger system
         // (vkCreateDebugUtilsMessengerEXT etc.) - only needed if validation is on.
-        if (validation_enabled)
-        {
-            extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-            extensions.push_back(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
-            extensions.push_back(VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
+        if (validation_enabled && !try_enable(VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) {
+            std::cerr << "[Vulkan_instance] VK_EXT_debug_utils not available - validation messages "
+                "will not be reported through the debug messenger.\n";
         }
+
+        // Instance half of swapchain maintenance1. It is independent of
+        // validation: without it, Vulkan_Device must not enable
+        // VK_KHR_swapchain_maintenance1 and the Renderer falls back to
+        // per-image semaphores alone for present synchronization.
+        // The KHR names are preferred; drivers that only ship the EXT
+        // promotion predecessors are accepted too (same functionality).
+        const bool capabilities2 = try_enable(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
+        const bool maintenance1 = capabilities2 &&
+            (try_enable(VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME) ||
+                try_enable(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME));
+
+        surface_maintenance1_enabled = maintenance1;
+
+        if (!surface_maintenance1_enabled) {
+            std::cout << "[Vulkan_instance] Surface maintenance1 not available on this loader - "
+                "present fences disabled.\n";
+        }
+
+        enabled_extensions.assign(extensions.begin(), extensions.end());
 
         return extensions;
     }
@@ -296,12 +373,14 @@ namespace Renderer_System
         // First call: ask Vulkan how many layers are available, without
         // requesting the actual data yet (standard "query size, then query
         // data" pattern used throughout the Vulkan API).
-        vkEnumerateInstanceLayerProperties(&layer_count, nullptr);
+        VK_CHECK(vkEnumerateInstanceLayerProperties(&layer_count, nullptr),
+            "Vulkan_Instance: enumerate instance layers");
 
         std::vector<VkLayerProperties> available_layers(layer_count);
 
         // Second call: now actually fill the vector with the real data
-        vkEnumerateInstanceLayerProperties(&layer_count, available_layers.data());
+        VK_CHECK(vkEnumerateInstanceLayerProperties(&layer_count, available_layers.data()),
+            "Vulkan_Instance: enumerate instance layers");
 
         for (const char* requested_layer : _layers) {
             bool found = false;
@@ -364,6 +443,7 @@ namespace Renderer_System
 
         VkResult result = Create_debug_utils_messenger_ext(instance, &create_info, nullptr, &debug_messenger);
         if (result != VK_SUCCESS) {
+            debug_messenger = VK_NULL_HANDLE;
             std::cerr << "[Vulkan_instance] Failed to set up debug messenger: " << Vulkan_Utils::Vk_result_to_string(result) << "\n";
         }
     }
@@ -371,9 +451,9 @@ namespace Renderer_System
     // ---------- Debug_callback ----------
     VKAPI_ATTR VkBool32 VKAPI_CALL Vulkan_Instance::Debug_callback(
         VkDebugUtilsMessageSeverityFlagBitsEXT _severity,
-        VkDebugUtilsMessageTypeFlagsEXT _type,
+        VkDebugUtilsMessageTypeFlagsEXT /*_type*/,
         const VkDebugUtilsMessengerCallbackDataEXT* _callback_data,
-        void* _user_data) {
+        void* /*_user_data*/) {
 
         // Only print warnings and errors - verbose/info messages are
         // extremely noisy (internal layer logging) and rarely useful day-to-day.

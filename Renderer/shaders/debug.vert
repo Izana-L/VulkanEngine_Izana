@@ -1,15 +1,10 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 
-layout(set = 0, binding = 0) uniform Frame_UBO
-{
-    mat4 view;
-    mat4 projection;
-} ubo;
-
-layout(push_constant) uniform Push_Constants
-{
-    mat4 model;
-} push;
+// Shares the frame block and the push constant block with mesh.vert, so
+// it cannot drift from the layouts the Renderer actually uploads.
+#include "common/frame_set.glsl"
+#include "common/push_constants.glsl"
 
 layout(location = 0) in vec3 in_position;
 layout(location = 1) in vec3 in_normal;
@@ -19,5 +14,5 @@ layout(location = 4) in vec4 in_color;
 
 void main()
 {
-    gl_Position = ubo.projection * ubo.view * push.model * vec4(in_position, 1.0);
+    gl_Position = frame.projection * frame.view * push.model * vec4(in_position, 1.0);
 }

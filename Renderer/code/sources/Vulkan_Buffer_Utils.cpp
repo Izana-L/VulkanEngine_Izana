@@ -49,19 +49,13 @@ namespace Renderer_System
             VmaAllocationInfo   allocation_info{};
             Buffer_Allocation   out{};
 
-            VkResult result = vmaCreateBuffer(
+            VK_CHECK(vmaCreateBuffer(
                 _allocator,
                 &buffer_info,
                 &alloc_info,
                 &out.buffer,
                 &out.allocation,
-                &allocation_info);
-
-            if (result != VK_SUCCESS) {
-                throw std::runtime_error(
-                    "Failed to create buffer: " +
-                    Vulkan_Utils::Vk_result_to_string(result));
-            }
+                &allocation_info), "Failed to create buffer");
 
             // With MAPPED_BIT, VMA hands back the pointer here — no manual
             // vkMapMemory, and no risk of mapping the same VkDeviceMemory
@@ -98,12 +92,8 @@ namespace Renderer_System
             else
             {
                 void* mapped = nullptr;
-                VkResult result = vmaMapMemory(_allocator, _buffer.allocation, &mapped);
-
-                if (result != VK_SUCCESS) 
-                {  
-                    throw std::runtime_error("Upload_to_buffer: allocation is not host-visible: " + Vulkan_Utils::Vk_result_to_string(result));
-                }
+                VK_CHECK(vmaMapMemory(_allocator, _buffer.allocation, &mapped),
+                    "Upload_to_buffer: allocation is not host-visible");
 
                 std::memcpy(mapped, _data, static_cast<size_t>(_size));
                 vmaUnmapMemory(_allocator, _buffer.allocation);
@@ -111,7 +101,8 @@ namespace Renderer_System
 
             // No-op when the memory type happens to be HOST_COHERENT (VMA
             // checks internally), so this is always safe and never wasteful.
-            vmaFlushAllocation(_allocator, _buffer.allocation, 0, _size);
+            VK_CHECK(vmaFlushAllocation(_allocator, _buffer.allocation, 0, _size),
+                "Upload_to_buffer: flush allocation");
         }
     }
 }

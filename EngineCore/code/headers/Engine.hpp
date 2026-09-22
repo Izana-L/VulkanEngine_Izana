@@ -9,8 +9,10 @@
 #include <Camera_Controller.hpp>
 #include <Extractor.hpp>
 #include <Engine_Loop.hpp>
-#include <Id.hpp>
+#include <Entity.hpp>
+#include <Asset_Handle.hpp>
 
+#include <cstdint>
 #include <string>
 
 namespace EngineCore
@@ -18,20 +20,20 @@ namespace EngineCore
 
     // Engine: owns and initializes all engine subsystems in dependency order.
     //
-    // Construction order (matches member declaration order — C++ guarantees
+    // Construction order (matches member declaration order: C++ guarantees
     // members are constructed in declaration order and destroyed in reverse):
     //
-    //   Layer 0: window, dispatcher (foundation)
-    //   Layer 1: input, resources   (services)
-    //   Layer 2: renderer           (GPU subsystem)
+    //   Layer 0: window                 (foundation)
+    //   Layer 1: input, resources       (services)
+    //   Layer 2: renderer               (GPU subsystem)
     //   Layer 3: world, transform_system, camera_controller, extractor
-    //   Layer 4: loop               (orchestration)
+    //   Layer 4: loop                   (orchestration)
     //
     // Usage:
     //   Engine engine;
     //   engine.Run();
     //
-    // Not copyable or movable — owns the entire engine lifetime.
+    // Not copyable or movable: owns the entire engine lifetime.
     class Engine
     {
     public:
@@ -51,26 +53,26 @@ namespace EngineCore
     private:
 
         // =========================================================
-        // Subsystems — declaration order = construction order
+        // Subsystems: declaration order = construction order
         // =========================================================
 
-        // Layer 0 — Foundation
+        // Layer 0: Foundation
         Platform::Window                    window;
 
-        // Layer 1 — Services
-        Input_System::Input                        input;
+        // Layer 1: Services
+        Input_System::Input                 input;
         ResourceManager::Resource_Manager   resources;
 
-        // Layer 2 — GPU
-        Renderer_System::Renderer                  renderer;
+        // Layer 2: GPU
+        Renderer_System::Renderer           renderer;
 
-        // Layer 3 — Simulation
+        // Layer 3: Simulation
         ECS::World                          world;
         Transform_System                    transform_system;
         Camera_Controller                   camera_controller;
         Extractor                           extractor;
 
-        // Layer 4 — Orchestration
+        // Layer 4: Orchestration
         Engine_Loop                         loop;
 
         // =========================================================
@@ -79,14 +81,26 @@ namespace EngineCore
 
         // Entity that has Transform_Component + Camera_Component.
         // Created by Setup_scene(), passed to Engine_Loop::Run().
-        CoreTypes::Id camera_entity = CoreTypes::INVALID_ID;
+        ECS::Entity camera_entity = ECS::INVALID_ENTITY;
 
         // =========================================================
         // Internal helpers
         // =========================================================
 
-        // Creates the initial test scene: camera, a sphere primitive,
-        // and a directional light. Temporary until the editor (Fase 11).
+        // Bridges ResourceManager (Layer 1, Vulkan-agnostic) and the
+        // Renderer (Layer 2): uploads the asset to the GPU if it has no
+        // gpu id yet and registers the id. A cache hit in the resource
+        // manager therefore never uploads twice: the second caller finds
+        // the id already registered.
+        uint32_t Ensure_mesh_uploaded(CoreTypes::Asset_Handle _mesh);
+        uint32_t Ensure_image_uploaded(CoreTypes::Asset_Handle _image);
+
+        // Creates an entity with a transform and a mesh at _position, with
+        // the mesh uploaded if needed.
+        ECS::Entity Spawn_mesh_entity(CoreTypes::Asset_Handle _mesh, const MathLib::Vector3& _position);
+
+        // Creates the initial test scene: camera, a textured sphere, a cube
+        // and a directional light. Temporary until the editor exists.
         void Setup_scene();
     };
 

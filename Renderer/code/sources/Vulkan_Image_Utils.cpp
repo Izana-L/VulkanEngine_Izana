@@ -2,6 +2,7 @@
 #include <Vulkan_Utils.hpp>
 
 #include <stdexcept>
+#include <string>
 #include <cassert>
 #include <algorithm>
 #include <cmath>
@@ -65,20 +66,14 @@ namespace Renderer_System
 
             // Creates the image, queries its requirements, allocates and
             // binds. Nothing leaks if any of those steps fails.
-            VkResult result = vmaCreateImage(
+            VK_CHECK(vmaCreateImage(
                 _allocator,
                 &image_info,
                 &alloc_info,
                 &out.image,
                 &out.allocation,
                 nullptr
-            );
-
-            if (result != VK_SUCCESS) {
-                throw std::runtime_error(
-                    "Failed to create image: " + Vulkan_Utils::Vk_result_to_string(result)
-                );
-            }
+            ), "Failed to create image");
 
             return out;
         }
@@ -117,14 +112,8 @@ namespace Renderer_System
             view_info.subresourceRange.layerCount = 1;
 
             VkImageView image_view = VK_NULL_HANDLE;
-            VkResult result = vkCreateImageView(
-                _device, &view_info, nullptr, &image_view);
-
-            if (result != VK_SUCCESS) {
-                throw std::runtime_error(
-                    "Failed to create image view: " + Vulkan_Utils::Vk_result_to_string(result)
-                );
-            }
+            VK_CHECK(vkCreateImageView(_device, &view_info, nullptr, &image_view),
+                "Failed to create image view");
 
             return image_view;
         }
@@ -401,6 +390,43 @@ namespace Renderer_System
                 0, nullptr,
                 1, &barrier
             );
+        }
+
+        // ---------- To_vk_format ----------
+        VkFormat To_vk_format(CoreTypes::Pixel_Format _format)
+        {
+            switch (_format)
+            {
+            case CoreTypes::Pixel_Format::RGBA8_UNORM: return VK_FORMAT_R8G8B8A8_UNORM;
+            case CoreTypes::Pixel_Format::RGBA8_SRGB:  return VK_FORMAT_R8G8B8A8_SRGB;
+            case CoreTypes::Pixel_Format::BC7_SRGB:    return VK_FORMAT_BC7_SRGB_BLOCK;
+            case CoreTypes::Pixel_Format::BC5_UNORM:   return VK_FORMAT_BC5_UNORM_BLOCK;
+            case CoreTypes::Pixel_Format::R8_UNORM:    return VK_FORMAT_R8_UNORM;
+            case CoreTypes::Pixel_Format::RG8_UNORM:   return VK_FORMAT_R8G8_UNORM;
+            case CoreTypes::Pixel_Format::R32_SFLOAT:  return VK_FORMAT_R32_SFLOAT;
+            }
+
+            throw std::invalid_argument("To_vk_format: unknown Pixel_Format " +
+                std::to_string(static_cast<unsigned>(_format)));
+        }
+
+        // ---------- Bytes_per_pixel ----------
+        uint32_t Bytes_per_pixel(VkFormat _format)
+        {
+            switch (_format)
+            {
+            case VK_FORMAT_R8_UNORM:
+            case VK_FORMAT_R8_SRGB:           return 1;
+            case VK_FORMAT_R8G8_UNORM:        return 2;
+            case VK_FORMAT_R8G8B8A8_UNORM:
+            case VK_FORMAT_R8G8B8A8_SRGB:
+            case VK_FORMAT_B8G8R8A8_UNORM:
+            case VK_FORMAT_B8G8R8A8_SRGB:
+            case VK_FORMAT_R32_SFLOAT:        return 4;
+            case VK_FORMAT_R16G16B16A16_SFLOAT: return 8;
+            case VK_FORMAT_R32G32B32A32_SFLOAT: return 16;
+            default:                          return 0;   // block-compressed or unsupported
+            }
         }
 
         // ---------- Compute_mip_levels ----------

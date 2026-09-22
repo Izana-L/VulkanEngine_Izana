@@ -4,6 +4,7 @@
 #include <GLFW/glfw3.h>
 
 #include <Vulkan_Device.hpp>
+#include <Hash.hpp>
 
 #include <cstdint>
 #include <unordered_map>
@@ -51,25 +52,24 @@ namespace Renderer_System
     };
 
     // Hash functor for Sampler_Desc, required to use it as an
-    // unordered_map key. Combines each field's hash with the classic
-    // boost::hash_combine pattern.
+    // unordered_map key. Folds each field with the shared
+    // CoreTypes::Hash_combine (one implementation for the whole engine,
+    // with a mixing constant that matches the width of size_t).
+    //
+    // MUST agree field-for-field with Sampler_Desc::operator==.
     struct Sampler_Desc_Hash
     {
         size_t operator()(const Sampler_Desc& _desc) const
         {
             size_t seed = 0;
-            auto combine = [&seed](size_t _value)
-                {
-                    seed ^= _value + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-                };
 
-            combine(std::hash<int>{}(static_cast<int>(_desc.mag_filter)));
-            combine(std::hash<int>{}(static_cast<int>(_desc.min_filter)));
-            combine(std::hash<int>{}(static_cast<int>(_desc.mipmap_mode)));
-            combine(std::hash<int>{}(static_cast<int>(_desc.address_mode_u)));
-            combine(std::hash<int>{}(static_cast<int>(_desc.address_mode_v)));
-            combine(std::hash<float>{}(_desc.anisotropy));
-            combine(std::hash<float>{}(_desc.max_lod));
+            CoreTypes::Hash_combine_value(seed, static_cast<int>(_desc.mag_filter));
+            CoreTypes::Hash_combine_value(seed, static_cast<int>(_desc.min_filter));
+            CoreTypes::Hash_combine_value(seed, static_cast<int>(_desc.mipmap_mode));
+            CoreTypes::Hash_combine_value(seed, static_cast<int>(_desc.address_mode_u));
+            CoreTypes::Hash_combine_value(seed, static_cast<int>(_desc.address_mode_v));
+            CoreTypes::Hash_combine_value(seed, _desc.anisotropy);
+            CoreTypes::Hash_combine_value(seed, _desc.max_lod);
 
             return seed;
         }
@@ -118,6 +118,12 @@ namespace Renderer_System
         VkSampler Create_sampler(const Sampler_Desc& _desc) const;
 
         VkDevice device_handle;
+
+        // Whether the samplerAnisotropy FEATURE was enabled on the device.
+        // The limit alone (maxSamplerAnisotropy) says nothing about the
+        // feature: creating a sampler with anisotropyEnable on a device
+        // that did not enable it is invalid usage.
+        bool     anisotropy_enabled;
         float    max_supported_anisotropy;
 
         std::unordered_map<Sampler_Desc, VkSampler, Sampler_Desc_Hash> cache;

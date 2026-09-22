@@ -6,6 +6,7 @@
 #include <cassert>
 #include <cstring>
 #include <stdexcept>
+#include <string>
 
 namespace Renderer_System
 {
@@ -41,11 +42,29 @@ namespace Renderer_System
         // Staging buffer
         // =========================================================
 
-        // Assumes 4 bytes per pixel (RGBA8) — matches Image_Loader, which
-        // always forces STBI_rgb_alpha regardless of the source file's
-        // actual channel count.
+        // The staging size follows the FORMAT, not an assumed 4 bytes per
+        // pixel, and the pixel buffer must actually hold that much: a copy
+        // that read past the end of the vector would upload garbage or
+        // crash. Block-compressed formats are rejected here because the
+        // tightly packed copy and the blit-based mip generation below do
+        // not apply to them.
+        const uint32_t bytes_per_pixel = Vulkan_Image_Utils::Bytes_per_pixel(format);
+
+        if (bytes_per_pixel == 0) {
+            throw std::invalid_argument(
+                "Texture_GPU: format " + std::to_string(static_cast<int>(format)) +
+                " cannot be uploaded with a packed copy (block-compressed or unsupported)");
+        }
+
         const VkDeviceSize image_size =
-            static_cast<VkDeviceSize>(width) * height * 4;
+            static_cast<VkDeviceSize>(width) * height * bytes_per_pixel;
+
+        if (_image_data.pixels.size() < image_size) {
+            throw std::invalid_argument(
+                "Texture_GPU: ImageData holds " + std::to_string(_image_data.pixels.size()) +
+                " bytes but " + std::to_string(width) + "x" + std::to_string(height) +
+                " texels of this format need " + std::to_string(image_size));
+        }
 
         staging = Vulkan_Buffer_Utils::Create_buffer(
             allocator,

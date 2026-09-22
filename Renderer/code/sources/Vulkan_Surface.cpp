@@ -15,13 +15,8 @@ namespace Renderer_System {
         // creation internally (on Windows it would otherwise be
         // vkCreateWin32SurfaceKHR with a HWND/HINSTANCE) - GLFW abstracts
         // that away so we don't need any #ifdef _WIN32 here.
-        VkResult result = glfwCreateWindowSurface(instance_handle,_window.Get_native_handle(),nullptr,  &surface );
-          
-
-        if (result != VK_SUCCESS) 
-        {
-            throw std::runtime_error("Failed to create window surface: " + Vulkan_Utils::Vk_result_to_string(result));       
-        }
+        VK_CHECK(glfwCreateWindowSurface(instance_handle, _window.Get_native_handle(), nullptr, &surface),
+            "Failed to create window surface");
 
         std::cout << "[Vulkan_surface] Surface created successfully.\n";
     }
@@ -36,6 +31,7 @@ namespace Renderer_System {
         if (surface != VK_NULL_HANDLE) 
         {
             vkDestroySurfaceKHR(instance_handle, surface, nullptr);
+            surface = VK_NULL_HANDLE;
         }
     }
 

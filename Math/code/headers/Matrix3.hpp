@@ -1,4 +1,7 @@
 #pragma once
+#ifndef GLM_ENABLE_EXPERIMENTAL
+#define GLM_ENABLE_EXPERIMENTAL
+#endif
 #include <Matrix.hpp>
 #include <Vector.hpp>
 #include <MathConstants.hpp>

@@ -1,4 +1,7 @@
 #pragma once
+#ifndef GLM_ENABLE_EXPERIMENTAL
+#define GLM_ENABLE_EXPERIMENTAL
+#endif
 #include <Vector.hpp>
 #include <MathConstants.hpp>
 #include <glm/gtx/compatibility.hpp>

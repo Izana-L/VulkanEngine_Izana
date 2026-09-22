@@ -15,10 +15,23 @@ namespace Renderer_System
         assert(_bindless_layout != VK_NULL_HANDLE &&
             "Descriptor_Layout_Cache: el Bindless_Registry debe construirse antes");
 
-        layouts[Descriptor_Set::Per_Frame] = Create_per_frame_layout();
-        layouts[Descriptor_Set::Per_Pass] = Create_empty_layout();
-        layouts[Descriptor_Set::Per_Material] = Create_empty_layout();
-        layouts[Descriptor_Set::Bindless] = _bindless_layout;   // prestado
+        try
+        {
+            layouts[Descriptor_Set::Per_Frame] = Create_per_frame_layout();
+            layouts[Descriptor_Set::Per_Pass] = Create_empty_layout();
+            layouts[Descriptor_Set::Per_Material] = Create_empty_layout();
+        }
+        catch (...)
+        {
+            // Partially built: release what was created (the destructor
+            // does not run for an object whose constructor threw).
+            for (uint32_t set = 0; set < Descriptor_Set::Bindless; ++set)
+                if (layouts[set] != VK_NULL_HANDLE)
+                    vkDestroyDescriptorSetLayout(device_handle, layouts[set], nullptr);
+            throw;
+        }
+
+        layouts[Descriptor_Set::Bindless] = _bindless_layout;   // borrowed
     }
 
     Descriptor_Layout_Cache::~Descriptor_Layout_Cache()
@@ -73,13 +86,8 @@ namespace Renderer_System
         info.pBindings = bindings.data();
 
         VkDescriptorSetLayout layout = VK_NULL_HANDLE;
-        VkResult result = vkCreateDescriptorSetLayout(device_handle, &info, nullptr, &layout);
-
-        if (result != VK_SUCCESS) {
-            throw std::runtime_error(
-                "Descriptor_Layout_Cache: fallo al crear el layout del set 0: " +
-                Vulkan_Utils::Vk_result_to_string(result));
-        }
+        VK_CHECK(vkCreateDescriptorSetLayout(device_handle, &info, nullptr, &layout),
+            "Descriptor_Layout_Cache: failed to create the set 0 layout");
         return layout;
     }
 
@@ -92,13 +100,8 @@ namespace Renderer_System
         info.pBindings = nullptr;
 
         VkDescriptorSetLayout layout = VK_NULL_HANDLE;
-        VkResult result = vkCreateDescriptorSetLayout(device_handle, &info, nullptr, &layout);
-
-        if (result != VK_SUCCESS) {
-            throw std::runtime_error(
-                "Descriptor_Layout_Cache: fallo al crear un layout vacio: " +
-                Vulkan_Utils::Vk_result_to_string(result));
-        }
+        VK_CHECK(vkCreateDescriptorSetLayout(device_handle, &info, nullptr, &layout),
+            "Descriptor_Layout_Cache: failed to create an empty set layout");
         return layout;
     }
 }

@@ -2,7 +2,7 @@
 #include <fstream>
 #include <iostream>
 #include <algorithm>
-
+#include <chrono>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -285,7 +285,10 @@ namespace Platform {
             auto file_time = fs::last_write_time(_path, error_code);
             if (error_code) return 0;
 
-            auto system_time = std::chrono::clock_cast<std::chrono::system_clock>(file_time);
+            // file_clock::to_sys is the C++20 conversion every major standard
+            // library ships; clock_cast needs the <chrono> time-zone machinery,
+            // which libstdc++ only added in GCC 14.
+            auto system_time = std::chrono::file_clock::to_sys(file_time);
             return std::chrono::duration_cast<std::chrono::seconds>(system_time.time_since_epoch()).count();
         }
 
