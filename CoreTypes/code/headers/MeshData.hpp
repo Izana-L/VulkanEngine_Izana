@@ -32,7 +32,7 @@ namespace CoreTypes
     //   fits. index_type records what the Renderer actually stored.
     struct MeshData
     {
-        std::vector< Vertex_Static_Mesh > vertices;
+        std::vector< Vertex_Static_Mesh_CPU  > vertices;
         std::vector< uint32_t >           indices;
         Index_Type                        index_type = Index_Type::UINT32;
     };

@@ -15,7 +15,7 @@ namespace ResourceManager::Mesh_Optimizer
 
     namespace
     {
-        using Vertex = CoreTypes::Vertex_Static_Mesh;
+        using Vertex = CoreTypes::Vertex_Static_Mesh_CPU;
 
         // meshopt_generateVertexRemap decides whether two vertices are the
         // same by comparing all sizeof(Vertex) bytes. Padding bytes are
@@ -72,10 +72,9 @@ namespace ResourceManager::Mesh_Optimizer
                                                                                _mesh.vertices.size(),ANALYZER_CACHE_SIZE, 
                                                                                ANALYZER_WARP_SIZE, ANALYZER_PRIMGROUP_SIZE);
             
-            
 
         const meshopt_VertexFetchStatistics fetch = meshopt_analyzeVertexFetch(_mesh.indices.data(), _mesh.indices.size(),
-                                                                               _mesh.vertices.size(), sizeof(Vertex));
+                                                                               _mesh.vertices.size(), sizeof(CoreTypes::Vertex_Static_Mesh));
 
         const meshopt_OverdrawStatistics overdraw = meshopt_analyzeOverdraw( _mesh.indices.data(),  _mesh.indices.size(),
                                                                              Position_stream(_mesh),_mesh.vertices.size(),sizeof(Vertex));

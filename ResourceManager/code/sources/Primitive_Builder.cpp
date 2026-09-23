@@ -15,7 +15,7 @@ namespace ResourceManager::Primitive_Builder
 
     namespace
     {
-        using Vertex = CoreTypes::Vertex_Static_Mesh;
+        using Vertex = CoreTypes::Vertex_Static_Mesh_CPU;
         using Mesh = CoreTypes::MeshData;
         using Vec2 = MathLib::Vector2;
         using Vec3 = MathLib::Vector3;

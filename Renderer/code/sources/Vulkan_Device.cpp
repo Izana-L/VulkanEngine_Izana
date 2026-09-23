@@ -1,5 +1,6 @@
 #include <Vulkan_Device.hpp>
 #include <Vulkan_Utils.hpp>
+#include <Vulkan_Vertex_Layout.hpp>
 
 #include <stdexcept>
 #include <iostream>
@@ -70,7 +71,8 @@ namespace Renderer_System {
 
         if (best_device == VK_NULL_HANDLE)
             throw std::runtime_error("No suitable GPU found (Vulkan 1.3, a present-capable queue, "
-                "VK_KHR_swapchain and descriptor indexing features are required)");
+                "VK_KHR_swapchain, descriptor indexing features and A2B10G10R10_SNORM vertex "
+                "attributes are required)");
                 
         physical_device = best_device;
         queue_family_indices = best_support.queue_families;
@@ -372,8 +374,7 @@ namespace Renderer_System {
         VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR maintenance1_features{};
         maintenance1_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_KHR;
 
-        const bool query_maintenance1 =
-            support.swapchain_maintenance1_extension != nullptr && _instance.Is_surface_maintenance1_enabled();
+        const bool query_maintenance1 = support.swapchain_maintenance1_extension != nullptr && _instance.Is_surface_maintenance1_enabled();
 
         indexing_features.pNext = query_maintenance1 ? &maintenance1_features : nullptr;
 
@@ -384,12 +385,20 @@ namespace Renderer_System {
         vkGetPhysicalDeviceFeatures2(_device, &features2);
 
         support.sampler_anisotropy = features2.features.samplerAnisotropy == VK_TRUE;
+        support.vertex_formats = true;
+        for (VkFormat format : Vulkan_Vertex_Layout::OPTIONAL_VERTEX_FORMATS)
+        {
+            VkFormatProperties format_properties{};
+            vkGetPhysicalDeviceFormatProperties(_device, format, &format_properties);
 
-        support.bindless =
-            indexing_features.runtimeDescriptorArray == VK_TRUE &&
-            indexing_features.descriptorBindingPartiallyBound == VK_TRUE &&
-            indexing_features.shaderSampledImageArrayNonUniformIndexing == VK_TRUE &&
-            indexing_features.descriptorBindingSampledImageUpdateAfterBind == VK_TRUE;
+            if ((format_properties.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT) == 0)
+                support.vertex_formats = false;
+        }
+        support.bindless = indexing_features.runtimeDescriptorArray == VK_TRUE &&
+                           indexing_features.descriptorBindingPartiallyBound == VK_TRUE &&
+                           indexing_features.shaderSampledImageArrayNonUniformIndexing == VK_TRUE &&
+                           indexing_features.descriptorBindingSampledImageUpdateAfterBind == VK_TRUE;
+           
 
         support.swapchain_maintenance1_feature =
             query_maintenance1 && maintenance1_features.swapchainMaintenance1 == VK_TRUE;
@@ -426,11 +435,11 @@ namespace Renderer_System {
         // pipeline layout carries the bindless set and the fragment shader
         // indexes it. A device that cannot do it is not selected, so
         // Bindless_Registry never has to run on a device without support.
-        return api_1_3_supported
-            && _support.queue_families.Is_complete()
-            && _support.swapchain_extension
-            && _support.surface_adequate
-            && _support.bindless;
+        return api_1_3_supported&& _support.queue_families.Is_complete()&& _support.swapchain_extension&& 
+                                   _support.surface_adequate && _support.bindless && _support.vertex_formats;
+            
+            
+            
     }
 
     // ---------- Find_queue_families ----------

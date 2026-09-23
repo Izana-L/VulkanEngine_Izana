@@ -341,7 +341,7 @@ namespace ResourceManager::Mesh_Loader
 
             for (uint32_t i = 0; i < vertex_count; ++i)
             {
-                CoreTypes::Vertex_Static_Mesh& v = mesh_data.vertices[i];
+                CoreTypes::Vertex_Static_Mesh_CPU& v = mesh_data.vertices[i];
 
                 v.position = { positions[i * 3 + 0], positions[i * 3 + 1], positions[i * 3 + 2] };
 

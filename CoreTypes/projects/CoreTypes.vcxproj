@@ -159,6 +159,7 @@
     <ClInclude Include="..\code\headers\ImageData.hpp" />
     <ClInclude Include="..\code\headers\MeshData.hpp" />
     <ClInclude Include="..\code\headers\Vertex.hpp" />
+    <ClInclude Include="..\code\headers\Vertex_Packing.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

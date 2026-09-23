@@ -285,11 +285,25 @@ namespace Platform {
             auto file_time = fs::last_write_time(_path, error_code);
             if (error_code) return 0;
 
-            // file_clock::to_sys is the C++20 conversion every major standard
-            // library ships; clock_cast needs the <chrono> time-zone machinery,
-            // which libstdc++ only added in GCC 14.
+            // C++20 only requires file_clock to expose one of to_sys/from_sys or
+            // to_utc/from_utc, so there is no single portable conversion here.
+#ifdef _MSC_VER
+            // The MSVC file clock is a raw FILETIME: 100 ns ticks counted from
+            // 1601-01-01, which the fixed epoch delta turns into Unix seconds.
+            // clock_cast would compile, but it routes through utc_clock and so
+            // pulls the leap second table out of the time zone database at run
+            // time, which also shifts the result off the usual Unix epoch.
+            static_assert(std::ratio_equal<fs::file_time_type::period, std::ratio<1, 10000000>>::value,
+                "Expected the MSVC file clock to tick in 100 ns units");
+            constexpr int64_t ticks_per_second = 10000000;
+            constexpr int64_t seconds_from_1601_to_1970 = 11644473600;
+            const int64_t ticks = static_cast<int64_t>(file_time.time_since_epoch().count());
+            return ticks / ticks_per_second - seconds_from_1601_to_1970;
+#else
+            // libstdc++ and libc++ ship to_sys, and it needs no time zone data.
             auto system_time = std::chrono::file_clock::to_sys(file_time);
             return std::chrono::duration_cast<std::chrono::seconds>(system_time.time_since_epoch()).count();
+#endif
         }
 
     }

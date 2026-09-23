@@ -41,5 +41,8 @@
     <ClInclude Include="..\code\headers\Asset_Handle.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\code\headers\Vertex_Packing.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

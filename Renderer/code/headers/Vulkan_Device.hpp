@@ -52,6 +52,10 @@ namespace Renderer_System {
         bool sampler_anisotropy = false;
         float max_sampler_anisotropy = 1.0f;
 
+        // Every format in Vulkan_Vertex_Layout::OPTIONAL_VERTEX_FORMATS
+        // can be read from a vertex buffer. REQUIRED: the mesh pipeline
+        // cannot be created without it.
+        bool vertex_formats = false;
         // Device half of swapchain maintenance1: which extension name the
         // driver exposes (KHR preferred, EXT accepted), and whether the
         // feature bit behind it is supported.

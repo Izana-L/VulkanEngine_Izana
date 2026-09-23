@@ -1,4 +1,5 @@
 #include <Mesh_GPU.hpp>
+#include <Vertex_Packing.hpp>
 #include <Vulkan_Buffer_Utils.hpp>
 #include <Vulkan_Utils.hpp>
 
@@ -35,33 +36,25 @@ namespace Renderer_System
         // Vertex buffer
         // =========================================================
 
-        const VkDeviceSize vertex_buffer_size =
-            sizeof(CoreTypes::Vertex_Static_Mesh) * _mesh_data.vertices.size();
+        std::vector< CoreTypes::Vertex_Static_Mesh > packed_vertices;
+        packed_vertices.reserve(_mesh_data.vertices.size());
+
+        for (const CoreTypes::Vertex_Static_Mesh_CPU& vertex : _mesh_data.vertices)
+            packed_vertices.push_back(CoreTypes::Vertex_Packing::Pack(vertex));
+
+        const VkDeviceSize vertex_buffer_size = sizeof(CoreTypes::Vertex_Static_Mesh) * packed_vertices.size();
 
         // Staging: CPU-visible, source of the transfer.
-        vertex_staging = Vulkan_Buffer_Utils::Create_buffer(
-            allocator,
-            vertex_buffer_size,
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            Vulkan_Buffer_Utils::Buffer_Access::Cpu_To_Gpu,
-            true
-        );
+        vertex_staging = Vulkan_Buffer_Utils::Create_buffer( allocator, vertex_buffer_size,VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                                             Vulkan_Buffer_Utils::Buffer_Access::Cpu_To_Gpu, true );
 
         // Copy vertex data into the staging buffer.
-        Vulkan_Buffer_Utils::Upload_to_buffer(
-            allocator,
-            vertex_staging,
-            _mesh_data.vertices.data(),
-            vertex_buffer_size
-        );
+        Vulkan_Buffer_Utils::Upload_to_buffer(allocator,vertex_staging, packed_vertices.data(),vertex_buffer_size);
 
         // Final: GPU-local, destination of the transfer.
-        vertex_buffer = Vulkan_Buffer_Utils::Create_buffer(
-            allocator,
-            vertex_buffer_size,
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-            Vulkan_Buffer_Utils::Buffer_Access::Gpu_Only
-        );
+        vertex_buffer = Vulkan_Buffer_Utils::Create_buffer(allocator, vertex_buffer_size,
+                                                           VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                                           Vulkan_Buffer_Utils::Buffer_Access::Gpu_Only);
 
         // Record the copy — does NOT submit or wait.
         VkBufferCopy vertex_copy{};
