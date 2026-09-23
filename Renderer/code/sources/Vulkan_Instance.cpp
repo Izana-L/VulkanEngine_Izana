@@ -21,15 +21,25 @@ namespace Renderer_System
             "VK_LAYER_KHRONOS_validation"
         };
 
-        // Every instance extension the loader exposes, by name.
-        std::unordered_set<std::string> Enumerate_instance_extensions()
+        // Every instance extension exposed, by name.
+         //   _layer_name == nullptr - the extensions of the loader, the
+         //                            drivers and the implicit layers.
+         //   _layer_name == a layer - only the extensions that explicit layer
+         //                            provides itself, which the nullptr
+         //                            query does not list. VK_EXT_layer_settings
+         //                            and VK_EXT_validation_features are
+         //                            obtained this way from
+         //                            VK_LAYER_KHRONOS_validation.
+         // The layer must be available (see Check_validation_layer_support);
+         // otherwise the query fails with VK_ERROR_LAYER_NOT_PRESENT.
+        std::unordered_set<std::string> Enumerate_instance_extensions(const char* _layer_name = nullptr)
         {
             uint32_t count = 0;
-            VK_CHECK(vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr),
+            VK_CHECK(vkEnumerateInstanceExtensionProperties(_layer_name, &count, nullptr),
                 "Vulkan_Instance: enumerate instance extensions");
 
             std::vector<VkExtensionProperties> properties(count);
-            VK_CHECK(vkEnumerateInstanceExtensionProperties(nullptr, &count, properties.data()),
+            VK_CHECK(vkEnumerateInstanceExtensionProperties(_layer_name, &count, properties.data()),
                 "Vulkan_Instance: enumerate instance extensions");
 
             std::unordered_set<std::string> names;
@@ -78,7 +88,7 @@ namespace Renderer_System
 
     // ---------- Constructor ----------
     Vulkan_Instance::Vulkan_Instance(
-        bool _enable_validation,
+        Validation_Mode _validation_mode,
         const std::string& _application_name,
         const std::string& _engine_name)
 
@@ -87,7 +97,8 @@ namespace Renderer_System
         // created" and correctly skip trying to destroy them.
         : instance(VK_NULL_HANDLE),
         debug_messenger(VK_NULL_HANDLE),
-        validation_enabled(_enable_validation),
+        validation_enabled(_validation_mode != Validation_Mode::Off),
+        gpu_assisted_enabled(_validation_mode == Validation_Mode::Gpu_Assisted),
         surface_maintenance1_enabled(false),
         api_version(0) {
 
@@ -99,6 +110,8 @@ namespace Renderer_System
         if (validation_enabled && !Check_validation_layer_support(required_layers)) {
             std::cerr << "[Vulkan_instance] Validation layers requested but not available - disabling.\n";
             validation_enabled = false;
+            // GPU-AV runs inside the validation layer: it degrades with it.
+            gpu_assisted_enabled = false;
         }
 
         // Cap the requested API version to whatever this system's driver
@@ -131,7 +144,42 @@ namespace Renderer_System
         // and vkDestroyInstance themselves - a window of time where the
         // "real" messenger (created via Setup_debug_messenger) doesn't exist yet.
         VkDebugUtilsMessengerCreateInfoEXT debug_create_info{};
+        // GPU-AV configuration, chained via pNext below when
+        // gpu_assisted_enabled. Declared at this scope because pNext only
+        // stores pointers: every struct in the chain must stay alive until
+        // vkCreateInstance returns. Only one of the two is chained, the one
+        // matching the extension Select_extensions enabled:
+        //   - VK_EXT_layer_settings: layer setting "gpuav_enable". Setting
+        //     names have changed between SDK releases; the reference is the
+        //     khronos_validation documentation of the installed SDK.
+        //   - VK_EXT_validation_features (deprecated): the equivalent flag,
+        //     plus RESERVE_BINDING_SLOT, which makes the layer report
+        //     maxBoundDescriptorSets minus one, so the slot GPU-AV takes
+        //     for itself is never offered to the application.
+        const VkBool32 gpu_av_enable = VK_TRUE;
 
+        VkLayerSettingEXT gpu_av_setting{};
+        gpu_av_setting.pLayerName = validation_layers.front();
+        gpu_av_setting.pSettingName = "gpuav_enable";
+        gpu_av_setting.type = VK_LAYER_SETTING_TYPE_BOOL32_EXT;
+        gpu_av_setting.valueCount = 1;
+        gpu_av_setting.pValues = &gpu_av_enable;
+
+        VkLayerSettingsCreateInfoEXT layer_settings_info{};
+        layer_settings_info.sType = VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT;
+        layer_settings_info.settingCount = 1;
+        layer_settings_info.pSettings = &gpu_av_setting;
+
+        const VkValidationFeatureEnableEXT gpu_av_features[] =
+        {
+            VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT,
+            VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_RESERVE_BINDING_SLOT_EXT
+        };
+
+        VkValidationFeaturesEXT validation_features{};
+        validation_features.sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT;
+        validation_features.enabledValidationFeatureCount = static_cast<uint32_t>(std::size(gpu_av_features));
+        validation_features.pEnabledValidationFeatures = gpu_av_features;
         if (validation_enabled) {
             create_info.enabledLayerCount = static_cast<uint32_t>(required_layers.size());
             create_info.ppEnabledLayerNames = required_layers.data();
@@ -152,8 +200,26 @@ namespace Renderer_System
             // Only chained when the debug utils extension was enabled.
             if (Is_extension_enabled(VK_EXT_DEBUG_UTILS_EXTENSION_NAME))
                 create_info.pNext = &debug_create_info;
+
+            // GPU-AV settings are prepended to the chain: whatever was
+            // already linked (the debug messenger info) stays linked behind
+            // them instead of being replaced.
+            if (gpu_assisted_enabled) 
+            {
+                if (Is_extension_enabled(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME)) 
+                {
+                    layer_settings_info.pNext = create_info.pNext;
+                    create_info.pNext = &layer_settings_info;
+                }
+                else if (Is_extension_enabled(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME)) 
+                {
+                    validation_features.pNext = create_info.pNext;
+                    create_info.pNext = &validation_features;
+                }
+            }
         }
-        else {
+        else 
+        {
             create_info.enabledLayerCount = 0;
             create_info.pNext = nullptr;
         }
@@ -164,6 +230,13 @@ namespace Renderer_System
         VK_CHECK(vkCreateInstance(&create_info, nullptr, &instance), "Failed to create Vulkan instance");
 
         Log_activated_extensions_and_layers(extensions, validation_enabled ? required_layers : std::vector<const char*>{});
+
+        if (gpu_assisted_enabled) 
+        {
+            std::cout << "[Vulkan_instance] GPU-assisted validation ENABLED (slow), configured through "
+                      << (Is_extension_enabled(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME) ? VK_EXT_LAYER_SETTINGS_EXTENSION_NAME : VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME)
+                      << ".\n";
+        }
 
         // Only now create the "permanent" debug messenger, active for the
         // rest of this Vulkan_instance's lifetime.
@@ -199,6 +272,7 @@ namespace Renderer_System
         : instance(_other.instance),
         debug_messenger(_other.debug_messenger),
         validation_enabled(_other.validation_enabled),
+        gpu_assisted_enabled(_other.gpu_assisted_enabled),
         surface_maintenance1_enabled(_other.surface_maintenance1_enabled),
         api_version(_other.api_version),
         enabled_extensions(std::move(_other.enabled_extensions)) {
@@ -219,6 +293,7 @@ namespace Renderer_System
             instance = _other.instance;
             debug_messenger = _other.debug_messenger;
             validation_enabled = _other.validation_enabled;
+            gpu_assisted_enabled = _other.gpu_assisted_enabled;
             surface_maintenance1_enabled = _other.surface_maintenance1_enabled;
             api_version = _other.api_version;
             enabled_extensions = std::move(_other.enabled_extensions);
@@ -241,7 +316,11 @@ namespace Renderer_System
     {
         return validation_enabled;
     }
-
+    // ---------- Is_gpu_assisted_validation_enabled ----------
+    bool Vulkan_Instance::Is_gpu_assisted_validation_enabled() const
+    {
+        return gpu_assisted_enabled;
+    }
     bool Vulkan_Instance::Is_surface_maintenance1_enabled() const
     {
         return surface_maintenance1_enabled;
@@ -336,11 +415,35 @@ namespace Renderer_System
                 return true;
             };
 
-        // VK_EXT_debug_utils is required to use the debug messenger system
-        // (vkCreateDebugUtilsMessengerEXT etc.) - only needed if validation is on.
         if (validation_enabled && !try_enable(VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) {
             std::cerr << "[Vulkan_instance] VK_EXT_debug_utils not available - validation messages "
                 "will not be reported through the debug messenger.\n";
+        }
+
+        // GPU-AV is configured through an extension the validation layer
+        // provides itself, so it is looked up in the layer's own list, not
+        // in `available`. VK_EXT_layer_settings is preferred;
+        // VK_EXT_validation_features is deprecated and only kept as a
+        // fallback for SDKs that predate the former. Without either, the
+        // mode degrades to standard validation.
+        if (gpu_assisted_enabled) 
+        {
+            const std::unordered_set<std::string> layer_extensions = Enumerate_instance_extensions(validation_layers.front());
+
+            if (layer_extensions.count(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME) != 0) 
+            {
+                extensions.push_back(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME);
+            }
+            else if (layer_extensions.count(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME) != 0) 
+            {
+                extensions.push_back(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
+            }
+            else 
+            {
+                std::cerr << "[Vulkan_instance] GPU-assisted validation requested but the validation layer exposes "
+                    "neither VK_EXT_layer_settings nor VK_EXT_validation_features - falling back to standard validation.\n";
+                gpu_assisted_enabled = false;
+            }
         }
 
         // Instance half of swapchain maintenance1. It is independent of

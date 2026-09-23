@@ -45,24 +45,48 @@ namespace Renderer_System
         return sampler;
     }
 
-    // ---------- Get_default_sampler ----------
-    VkSampler Sampler_Cache::Get_default_sampler()
+    // ---------- Get_preset_desc ----------
+    Sampler_Desc Sampler_Cache::Get_preset_desc(CoreTypes::Sampler_Preset _preset)
     {
+        using CoreTypes::Sampler_Preset;
+
+        // Anisotropy requested by the linear presets. Create_sampler clamps
+        // it to maxSamplerAnisotropy and drops it without the feature.
+        constexpr float LINEAR_ANISOTROPY = 16.0f;
+
+        bool nearest = false;
+        bool clamp = false;
+
+        switch (_preset)
+        {
+        case Sampler_Preset::Linear_Repeat:  nearest = false; clamp = false; break;
+        case Sampler_Preset::Linear_Clamp:   nearest = false; clamp = true;  break;
+        case Sampler_Preset::Nearest_Repeat: nearest = true;  clamp = false; break;
+        case Sampler_Preset::Nearest_Clamp:  nearest = true;  clamp = true;  break;
+        default:
+            throw std::invalid_argument("Sampler_Cache::Get_preset_desc: value is not a sampler preset");
+        }
+
+        const VkFilter             filter = nearest ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
+        const VkSamplerAddressMode address = clamp ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE : VK_SAMPLER_ADDRESS_MODE_REPEAT;
+
         Sampler_Desc desc;
-        desc.mag_filter = VK_FILTER_LINEAR;
-        desc.min_filter = VK_FILTER_LINEAR;
-        desc.mipmap_mode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-        desc.address_mode_u = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        desc.address_mode_v = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        desc.anisotropy = 16.0f;
+        desc.mag_filter = filter;
+        desc.min_filter = filter;
+        desc.mipmap_mode = nearest ? VK_SAMPLER_MIPMAP_MODE_NEAREST : VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        desc.address_mode_u = address;
+        desc.address_mode_v = address;
 
-        // 16 mip levels covers textures up to 32768px on a side —
-        // far beyond MAX_TEXTURE_SIZE (8192) from MathConstants, so this
-        // single default sampler is valid for every texture the engine
-        // can load without per-texture max_lod tuning.
-        desc.max_lod = 16.0f;
+        // Anisotropic filtering blends several texels along the view
+        // direction, which undoes the hard texel edges a nearest preset is
+        // chosen for: 0 disables it.
+        desc.anisotropy = nearest ? 0.0f : LINEAR_ANISOTROPY;
 
-        return Get_sampler(desc);
+        // The image view bounds the mip chain of each texture (see
+        // Sampler_Desc::max_lod).
+        desc.max_lod = VK_LOD_CLAMP_NONE;
+
+        return desc;
     }
 
     // ---------- Create_sampler ----------

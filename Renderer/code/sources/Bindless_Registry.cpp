@@ -1,16 +1,20 @@
 #include <Bindless_Registry.hpp>
+#include <Descriptor_Sets.hpp>
 #include <Vulkan_Utils.hpp>
 
+#include <array>
 #include <stdexcept>
+#include <string>
 #include <cassert>
 
 namespace Renderer_System
 {
 
     // ---------- Constructor ----------
-    Bindless_Registry::Bindless_Registry(const Vulkan_Device& _device, uint32_t _max_textures)
+    Bindless_Registry::Bindless_Registry(const Vulkan_Device& _device, uint32_t _max_textures, uint32_t _max_samplers)
         : device_handle(_device.Get_logical_device_handle()),
         max_textures(_max_textures),
+        max_samplers(_max_samplers),
         next_free_index(0),
         layout(VK_NULL_HANDLE),
         pool(VK_NULL_HANDLE),
@@ -34,6 +38,9 @@ namespace Renderer_System
 
         if (max_textures == 0)
             throw std::invalid_argument("Bindless_Registry: _max_textures must be greater than zero");
+
+        if (max_samplers == 0)
+            throw std::invalid_argument("Bindless_Registry: _max_samplers must be greater than zero");
 
         try
         {
@@ -66,10 +73,10 @@ namespace Renderer_System
     }
 
     // ---------- Register_texture ----------
-    uint32_t Bindless_Registry::Register_texture(VkImageView _image_view, VkSampler _sampler)
+    uint32_t Bindless_Registry::Register_texture(VkImageView _image_view)
     {
-        if (_image_view == VK_NULL_HANDLE || _sampler == VK_NULL_HANDLE)
-            throw std::invalid_argument("Bindless_Registry::Register_texture: null image view or sampler");
+        if (_image_view == VK_NULL_HANDLE)
+            throw std::invalid_argument("Bindless_Registry::Register_texture: null image view");
 
         if (next_free_index >= max_textures) {
             throw std::runtime_error(
@@ -85,14 +92,13 @@ namespace Renderer_System
         VkDescriptorImageInfo image_info{};
         image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         image_info.imageView = _image_view;
-        image_info.sampler = _sampler;
 
         VkWriteDescriptorSet write{};
         write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         write.dstSet = set;
-        write.dstBinding = 0;
+        write.dstBinding = Binding_Bindless::Textures;
         write.dstArrayElement = index;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
         write.descriptorCount = 1;
         write.pImageInfo = &image_info;
 
@@ -104,10 +110,46 @@ namespace Renderer_System
         return index;
     }
 
+    // ---------- Set_sampler ----------
+    void Bindless_Registry::Set_sampler(uint32_t _index, VkSampler _sampler)
+    {
+        if (_sampler == VK_NULL_HANDLE)
+            throw std::invalid_argument("Bindless_Registry::Set_sampler: null sampler");
+
+        if (_index >= max_samplers) {
+            throw std::invalid_argument(
+                "Bindless_Registry::Set_sampler: index " + std::to_string(_index) +
+                " is outside the sampler array (" + std::to_string(max_samplers) + " slots)"
+            );
+        }
+
+        // A SAMPLER descriptor only reads the sampler field; imageView and
+        // imageLayout are ignored.
+        VkDescriptorImageInfo sampler_info{};
+        sampler_info.sampler = _sampler;
+
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = set;
+        write.dstBinding = Binding_Bindless::Samplers;
+        write.dstArrayElement = _index;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+        write.descriptorCount = 1;
+        write.pImageInfo = &sampler_info;
+
+        vkUpdateDescriptorSets(device_handle, 1, &write, 0, nullptr);
+    }
+
     // ---------- Get_registered_count ----------
     uint32_t Bindless_Registry::Get_registered_count() const
     {
         return next_free_index;
+    }
+
+    // ---------- Get_max_samplers ----------
+    uint32_t Bindless_Registry::Get_max_samplers() const
+    {
+        return max_samplers;
     }
 
     // ---------- Get_layout / Get_set ----------
@@ -128,37 +170,51 @@ namespace Renderer_System
     // ---------- Create_layout ----------
     void Bindless_Registry::Create_layout()
     {
-        VkDescriptorSetLayoutBinding binding{};
-        binding.binding = 0;
-        binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        binding.descriptorCount = max_textures;
-        binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        // Two arrays in the same set, both read only by the fragment stage
+        // (nothing else samples textures yet).
+        std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
 
-        // Per-binding flags required for bindless:
+        bindings[0].binding = Binding_Bindless::Textures;
+        bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        bindings[0].descriptorCount = max_textures;
+        bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+        bindings[1].binding = Binding_Bindless::Samplers;
+        bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+        bindings[1].descriptorCount = max_samplers;
+        bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+        // Per-binding flags required for bindless, the same for both arrays:
         //   PARTIALLY_BOUND   — slots that were never written are legal to
         //                       leave in the descriptor set, as long as the
         //                       shader never reads them. Essential since most
-        //                       of the 1024 slots start empty.
-        //   UPDATE_AFTER_BIND — allows writing new slots (Register_texture)
-        //                       even after this set has already been bound
-        //                       in a previously-recorded command buffer.
-        //   VARIABLE_DESCRIPTOR_COUNT is intentionally NOT used here — the
-        //   array size is fixed at max_textures, simpler than a runtime-sized
-        //   array and sufficient for this engine's needs.
-        VkDescriptorBindingFlags binding_flags =
+        //                       texture slots start empty, and sampler slots
+        //                       past Sampler_Preset::Count are never written.
+        //   UPDATE_AFTER_BIND — allows writing new slots (Register_texture,
+        //                       Set_sampler) even after this set has already
+        //                       been bound in a previously-recorded command
+        //                       buffer.
+        //   VARIABLE_DESCRIPTOR_COUNT is intentionally NOT used here — only
+        //   the binding with the highest number in a set may use it, and a
+        //   fixed size for both arrays is simpler and sufficient for this
+        //   engine's needs.
+        constexpr VkDescriptorBindingFlags bindless_flags =
             VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
             VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+
+        // One entry per binding, in the same order as `bindings`.
+        const std::array<VkDescriptorBindingFlags, 2> binding_flags = { bindless_flags, bindless_flags };
 
         VkDescriptorSetLayoutBindingFlagsCreateInfo binding_flags_info{};
         binding_flags_info.sType =
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
-        binding_flags_info.bindingCount = 1;
-        binding_flags_info.pBindingFlags = &binding_flags;
+        binding_flags_info.bindingCount = static_cast<uint32_t>(binding_flags.size());
+        binding_flags_info.pBindingFlags = binding_flags.data();
 
         VkDescriptorSetLayoutCreateInfo layout_info{};
         layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        layout_info.bindingCount = 1;
-        layout_info.pBindings = &binding;
+        layout_info.bindingCount = static_cast<uint32_t>(bindings.size());
+        layout_info.pBindings = bindings.data();
 
         // The set itself must also opt in to update-after-bind, in addition
         // to the per-binding flag above.
@@ -172,9 +228,13 @@ namespace Renderer_System
     // ---------- Create_pool ----------
     void Bindless_Registry::Create_pool()
     {
-        VkDescriptorPoolSize pool_size{};
-        pool_size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        pool_size.descriptorCount = max_textures;
+        std::array<VkDescriptorPoolSize, 2> pool_sizes{};
+
+        pool_sizes[0].type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        pool_sizes[0].descriptorCount = max_textures;
+
+        pool_sizes[1].type = VK_DESCRIPTOR_TYPE_SAMPLER;
+        pool_sizes[1].descriptorCount = max_samplers;
 
         VkDescriptorPoolCreateInfo pool_info{};
         pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -182,8 +242,8 @@ namespace Renderer_System
         // UPDATE_AFTER_BIND_BIT on the pool is required to allocate sets
         // from a layout that uses UPDATE_AFTER_BIND bindings.
         pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
-        pool_info.poolSizeCount = 1;
-        pool_info.pPoolSizes = &pool_size;
+        pool_info.poolSizeCount = static_cast<uint32_t>(pool_sizes.size());
+        pool_info.pPoolSizes = pool_sizes.data();
 
         // Only one descriptor set is ever allocated from this pool — the
         // single global bindless set.

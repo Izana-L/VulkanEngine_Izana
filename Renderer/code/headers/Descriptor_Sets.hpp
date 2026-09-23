@@ -40,8 +40,12 @@ namespace Renderer_System
         inline constexpr uint32_t Lights = 1;   // SSBO con el array de luces
     }
 
+    // Bindings dentro del set 3. Imagen y muestreador van en arrays
+    // separados y el shader los combina en el punto de uso: asi el
+    // material elige el filtrado sin depender de la textura.
     namespace Binding_Bindless
     {
-        inline constexpr uint32_t Textures = 0;
+        inline constexpr uint32_t Textures = 0;   // array de SAMPLED_IMAGE, una ranura por textura
+        inline constexpr uint32_t Samplers = 1;   // array de SAMPLER, ranura = valor de CoreTypes::Sampler_Preset
     }
 }

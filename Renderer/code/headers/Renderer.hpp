@@ -59,7 +59,7 @@ namespace Renderer_System
         // ResourceManager stores through Register_gpu_id().
         std::vector<uint32_t> mesh_gpu_ids;
 
-        // Index into the global bindless sampler array (set 3, binding 0):
+        // Index into the global bindless texture array (set 3, binding 0):
         // what shaders use, NOT the internal texture registry index.
         std::vector<uint32_t> texture_bindless_indices;
     };
@@ -164,6 +164,19 @@ namespace Renderer_System
         // =========================================================
 
         static constexpr uint32_t FRAMES_IN_FLIGHT = 2;
+
+        // Requested sizes of the two bindless arrays (set 3). 1024 textures
+        // is generous for a single-scene development workload; raise it if
+        // a scene's unique texture count approaches the limit. 16 samplers
+        // leave room for the presets still to come (shadow comparison,
+        // mirrored wrap...) without touching the layout.
+        static constexpr uint32_t BINDLESS_DESIRED_TEXTURES = 1024;
+        static constexpr uint32_t BINDLESS_DESIRED_SAMPLERS = 16;
+
+        // Slot i of the sampler array holds Sampler_Preset i, so every
+        // preset needs a slot of its own.
+        static_assert(static_cast<uint32_t>(CoreTypes::Sampler_Preset::Count) <= BINDLESS_DESIRED_SAMPLERS,
+            "The bindless sampler array needs one slot per CoreTypes::Sampler_Preset");
 
         std::vector<Frame_Data> frames;
         uint32_t                current_frame = 0;
@@ -270,18 +283,12 @@ namespace Renderer_System
 
         // Records all render commands for one frame into the command
         // buffer of the given frame slot.
-        void Record_command_buffer(Frame_Data& _frame,
-            const CoreTypes::RenderPacket& _packet,
-            uint32_t                       _image_index);
+        void Record_command_buffer(Frame_Data& _frame, const CoreTypes::RenderPacket& _packet, uint32_t _image_index);
 
         // Records the draws of one item list for one pass. Items whose
         // pass_mask lacks _pass_bit are skipped.
-        void Draw_items(VkCommandBuffer _command_buffer,
-            const std::vector<CoreTypes::Draw_Item>& _items,
-            uint8_t _pass_bit,
-            const CoreTypes::RenderPacket& _packet,
-            uint8_t& _bound_pipeline_id,
-            uint32_t& _bind_count);
+        void Draw_items(VkCommandBuffer _command_buffer,const std::vector<CoreTypes::Draw_Item>& _items,uint8_t _pass_bit,
+                        const CoreTypes::RenderPacket& _packet, uint8_t& _bound_pipeline_id, uint32_t& _bind_count);
 
         // Recreates the swapchain, depth resources, framebuffers and
         // per-image synchronization after a resize or OUT_OF_DATE error.
@@ -290,7 +297,9 @@ namespace Renderer_System
 
     public:
 
-        Renderer(const Platform::Window& _window, bool _enable_validation);
+        // _validation_mode is forwarded to Vulkan_Instance; see
+         // Validation_Mode for what each level checks and what it costs.
+        Renderer(const Platform::Window& _window, Validation_Mode _validation_mode);
         ~Renderer();
 
         Renderer(const Renderer&) = delete;
@@ -302,12 +311,13 @@ namespace Renderer_System
         // Asset upload
         // =========================================================
 
-        // Uploads a mesh to the GPU and returns its gpu_id.
-        // The gpu_id is an index into the internal mesh registry and
-        // must be stored by the ResourceManager as the resolution of
-        // the corresponding Asset_Handle.
-        // Thread-safety: not thread-safe; call from the main thread
-        // during loading, not during rendering.
+        // Uploads a texture (with a full mip chain) to the GPU, registers
+        // it in the global bindless texture array, and returns its
+        // BINDLESS INDEX: the value shaders use to index into the texture
+        // array (set 3, binding 0). The texture carries no sampler: the
+        // shader pairs it with the slot of the sampler array (set 3,
+        // binding 1) that the material selects, e.g.:
+        //   Sample_bindless(push.albedo_texture_index, push.albedo_sampler_index, uv)
         uint32_t Upload_mesh(const CoreTypes::MeshData& _mesh_data);
 
         // Uploads a texture (with a full mip chain) to the GPU, registers

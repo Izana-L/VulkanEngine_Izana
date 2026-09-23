@@ -44,5 +44,8 @@
     <ClInclude Include="..\code\headers\Vertex_Packing.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\code\headers\Sampler_Preset.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

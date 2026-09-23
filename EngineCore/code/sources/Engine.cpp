@@ -10,10 +10,43 @@
 
 #include <iostream>
 #include <stdexcept>
+#include <cstdlib>
+#include <cstring>
 
 namespace EngineCore
 {
+    namespace
+    {
+        // Environment variable that turns GPU-assisted validation on:
+        // ENGINE_GPU_AV=1. Any other value, or its absence, keeps standard
+        // validation.
+        constexpr const char* GPU_AV_ENV_VAR = "ENGINE_GPU_AV";
 
+        // Validation level for the Renderer: Standard by default,
+        // Gpu_Assisted only when GPU_AV_ENV_VAR equals "1". GPU-AV slows
+        // every draw noticeably, so it is never enabled without that
+        // explicit opt-in.
+        Renderer_System::Validation_Mode Select_validation_mode()
+        {
+#ifdef _MSC_VER
+            // MSVC flags std::getenv as unsafe (C4996, an error with SDL
+            // checks enabled). _dupenv_s is its checked replacement; it
+            // returns a heap copy that has to be released with free().
+            char* value = nullptr;
+            size_t length = 0;
+            const bool requested = _dupenv_s(&value, &length, GPU_AV_ENV_VAR) == 0
+                && value != nullptr
+                && std::strcmp(value, "1") == 0;
+            std::free(value);
+#else
+            const char* value = std::getenv(GPU_AV_ENV_VAR);
+            const bool requested = value != nullptr && std::strcmp(value, "1") == 0;
+#endif
+            return requested
+                ? Renderer_System::Validation_Mode::Gpu_Assisted
+                : Renderer_System::Validation_Mode::Standard;
+        }
+    }
     // =========================================================
     // Constructor: builds subsystems in dependency order
     // =========================================================
@@ -27,7 +60,7 @@ namespace EngineCore
         , resources()
 
         // Layer 2: GPU
-        , renderer(window, true)   // true = request validation layers (disabled if unavailable)
+        , renderer(window, Select_validation_mode())   // Standard, or Gpu_Assisted with ENGINE_GPU_AV=1; degrades if unavailable
 
         // Layer 3: Simulation (no constructor args needed)
         , world()

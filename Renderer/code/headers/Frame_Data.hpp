@@ -71,21 +71,22 @@ namespace Renderer_System
 
     // Mirror of `Push_Constants` in push_constants.glsl. One block for
     // both stages: the vertex shader reads `model`, the fragment shader
-    // reads `base_color` and `albedo_texture_index`. 96 bytes, inside the
-    // 128-byte minimum every Vulkan implementation guarantees.
+    // reads `base_color`, `albedo_texture_index` and
+    // `albedo_sampler_index`. 96 bytes, inside the 128-byte minimum every
+    // Vulkan implementation guarantees.
     struct Push_Constants
     {
         MathLib::Matrix4 model;
         MathLib::Vector4 base_color;
         uint32_t         albedo_texture_index;   // INVALID_TEXTURE_INDEX = untextured
-        uint32_t         _padding0;
+        uint32_t         albedo_sampler_index;   // slot in the bindless sampler array (a CoreTypes::Sampler_Preset value)
         uint32_t         _padding1;
         uint32_t         _padding2;
     };
-
     static_assert(sizeof(Push_Constants) == 96, "Push_Constants breaks the layout of push_constants.glsl");
     static_assert(offsetof(Push_Constants, base_color) == 64, "Push_Constants breaks the layout of push_constants.glsl");
     static_assert(offsetof(Push_Constants, albedo_texture_index) == 80, "Push_Constants breaks the layout of push_constants.glsl");
+    static_assert(offsetof(Push_Constants, albedo_sampler_index) == 84, "Push_Constants breaks the layout of push_constants.glsl");
 
     // =========================================================
     // Frame_Data

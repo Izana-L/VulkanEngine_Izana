@@ -123,16 +123,22 @@ namespace EngineCore
 
                 if (gpu_id == ResourceManager::Resource_Manager::INVALID_GPU_ID) return;
 
-                // Optional material: per-draw tint and albedo texture. Without
-                // one the item draws white and untextured.
+                // Optional material: per-draw tint, albedo texture and the
+                // sampler preset it is read with. Without one the item draws
+                // white, untextured, with the default sampler.
                 CoreTypes::Draw_Item item{};
                 item.mesh_gpu_id = gpu_id;
                 item.base_color = { 1.0f, 1.0f, 1.0f, 1.0f };
                 item.albedo_texture_index = CoreTypes::INVALID_TEXTURE_INDEX;
+                item.albedo_sampler_index = static_cast<uint32_t>(CoreTypes::Sampler_Preset::Linear_Repeat);
 
                 if (const ECS::Material_Component* material = _world.Try_get_component<ECS::Material_Component>(entity))
                 {
                     item.base_color = material->base_color_factor;
+
+                    // The preset value is already the slot in the bindless
+                    // sampler array; no translation is needed.
+                    item.albedo_sampler_index = static_cast<uint32_t>(material->sampler);
 
                     if (material->albedo.Is_valid())
                     {

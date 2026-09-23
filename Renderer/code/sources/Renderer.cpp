@@ -58,9 +58,9 @@ namespace Renderer_System
     // Constructor
     // =========================================================
 
-    Renderer::Renderer(const Platform::Window& _window, bool _enable_validation)
+    Renderer::Renderer(const Platform::Window& _window, Validation_Mode _validation_mode)
                         : window(_window),
-                        instance(_enable_validation, "Game", "Engine"),
+                        instance(_validation_mode, "Game", "Engine"),
                         surface(instance, _window),
                         device(instance, surface),
                         allocator(instance, device),
@@ -70,13 +70,11 @@ namespace Renderer_System
                         // depth image must use exactly that one.
                         depth_resources(device, allocator.Get_handle(), render_pass.Get_depth_format(), swapchain.Get_extent()),
                         framebuffers(device, render_pass, swapchain, depth_resources),
-                        bindless_registry(device, 1024),
+                        bindless_registry(device, BINDLESS_DESIRED_TEXTURES, BINDLESS_DESIRED_SAMPLERS),
                         pipeline_cache(device),
                         descriptor_layouts(device, bindless_registry.Get_layout()),
                         pipeline_layout(device, descriptor_layouts),
-                        pipeline_registry(device, render_pass,
-                            pipeline_cache.Get_handle(),
-                            pipeline_layout.Get_handle()),
+                        pipeline_registry(device, render_pass,pipeline_cache.Get_handle(),pipeline_layout.Get_handle()),
                         opaque_config(Make_opaque_config()),
                         transparent_config(Make_transparent_config()),
                         sampler_cache(device),
@@ -84,6 +82,18 @@ namespace Renderer_System
     {
         try
         {
+            // ── Bindless samplers ──────────────────────────────────────
+            // Slot i of the sampler array receives the sampler of
+            // Sampler_Preset i, so the preset a material stores is already
+            // its bindless index. Written once, before any frame is
+            // recorded: the only moment a slot can be written without
+            // racing a frame in flight.
+            for (uint32_t i = 0; i < static_cast<uint32_t>(CoreTypes::Sampler_Preset::Count); ++i)
+            {
+                const auto preset = static_cast<CoreTypes::Sampler_Preset>(i);
+                bindless_registry.Set_sampler(i, sampler_cache.Get_sampler(Sampler_Cache::Get_preset_desc(preset)));
+            }
+
             pipeline_registry.Warm_up(Build_pipeline_manifest());
 
             // Pure lookups: both pipelines already exist after the warm-up.
@@ -416,15 +426,12 @@ namespace Renderer_System
         {
             textures[i].Release_staging_buffers();
 
-            // Register in the global bindless array with the cache's default
-            // sampler. The bindless index, not the registry index i, is
-            // what callers store and what shaders use.
-            result.texture_bindless_indices.push_back(
-                bindless_registry.Register_texture(
-                    textures[i].Get_image_view(),
-                    sampler_cache.Get_default_sampler()
-                )
-            );
+            // Register in the global bindless texture array. Only the view
+            // is registered: the sampler is chosen per draw, from the
+            // sampler array, by the material's preset. The bindless index,
+            // not the registry index i, is what callers store and what
+            // shaders use.
+            result.texture_bindless_indices.push_back( bindless_registry.Register_texture(textures[i].Get_image_view()));
         }
 
         std::cout << "[Renderer] Batch uploaded: "
@@ -758,8 +765,7 @@ namespace Renderer_System
         uint32_t bind_count = 0;
 
         // ── Opaque pass: depth write on ───────────────────────────
-        Draw_items(command_buffer, _packet.opaque_items, CoreTypes::Render_Pass_Bit::Opaque, _packet,
-            bound_pipeline_id, bind_count);
+        Draw_items(command_buffer, _packet.opaque_items, CoreTypes::Render_Pass_Bit::Opaque, _packet, bound_pipeline_id, bind_count);
 
         // ── Transparent pass: depth test only, back-to-front ──────
         // The list arrives sorted back-to-front by the extract; blending
@@ -768,15 +774,14 @@ namespace Renderer_System
         {
             vkCmdSetDepthWriteEnable(command_buffer, VK_FALSE);
 
-            Draw_items(command_buffer, _packet.transparent_items, CoreTypes::Render_Pass_Bit::Transparent, _packet,
-                bound_pipeline_id, bind_count);
+            Draw_items(command_buffer, _packet.transparent_items, CoreTypes::Render_Pass_Bit::Transparent, _packet, bound_pipeline_id, bind_count);
         }
 
         if (bind_count != last_reported_binds)
         {
             std::cout << "[Renderer] " << bind_count << " pipeline bind(s) for "
-                << _packet.opaque_items.size() << " opaque + "
-                << _packet.transparent_items.size() << " transparent item(s).\n";
+                      << _packet.opaque_items.size() << " opaque + "
+                      << _packet.transparent_items.size() << " transparent item(s).\n";
             last_reported_binds = bind_count;
         }
 
@@ -834,12 +839,13 @@ namespace Renderer_System
                 ++_bind_count;
             }
 
-            // Per-draw data: model matrix (vertex stage), tint and texture
-            // index (fragment stage), all in one push.
+            // Per-draw data: model matrix (vertex stage), tint, texture
+// index and sampler index (fragment stage), all in one push.
             Push_Constants push{};
             push.model = _packet.transforms[item.transform_idx];
             push.base_color = item.base_color;
             push.albedo_texture_index = item.albedo_texture_index;
+            push.albedo_sampler_index = item.albedo_sampler_index;
 
             vkCmdPushConstants(_command_buffer, pipeline_layout.Get_handle(),
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,

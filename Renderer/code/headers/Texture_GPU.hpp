@@ -16,10 +16,11 @@ namespace Renderer_System
     // Texture_GPU: owns the GPU-side resources for a single texture —
     // VkImage, its backing memory, and a VkImageView with a full mip chain.
     //
-    // Does NOT own a VkSampler — samplers are shared across textures via
-    // Sampler_Cache (different textures with the same filtering settings
-    // reuse the same sampler handle, which also matters for bindless:
-    // fewer unique samplers means fewer descriptor writes).
+    // Does NOT own a VkSampler, and is not tied to one. Samplers are
+    // shared across textures via Sampler_Cache and live in their own
+    // bindless array (set 3, binding 1): the texture is registered alone
+    // (set 3, binding 0) and the shader pairs it, at the point of use,
+    // with whichever sampler preset the material selects.
     //
     // Follows the same staging pattern as Mesh_GPU (Option B): the
     // constructor records commands into a VkCommandBuffer that is already

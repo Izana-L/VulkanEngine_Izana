@@ -2,6 +2,7 @@
 
 #include <Vector.hpp>
 #include <Matrix.hpp>
+#include <Sampler_Preset.hpp>
 #include <bit>
 #include <cstdint>
 #include <vector>
@@ -88,6 +89,11 @@ namespace CoreTypes
         // Bindless index of the albedo texture, or INVALID_TEXTURE_INDEX.
         // Travels to the fragment shader through the push constant block.
         uint32_t         albedo_texture_index = INVALID_TEXTURE_INDEX;
+
+        // Bindless index of the sampler the albedo texture is read with:
+        // the material's Sampler_Preset, whose value is its slot in the
+        // sampler array. Travels next to albedo_texture_index.
+        uint32_t         albedo_sampler_index = static_cast<uint32_t>(Sampler_Preset::Linear_Repeat);
 
         // Which passes draw this item (Render_Pass_Bit).
         uint8_t          pass_mask = Render_Pass_Bit::Opaque;

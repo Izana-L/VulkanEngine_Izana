@@ -1,7 +1,9 @@
 #pragma once
 
 #include <Asset_Handle.hpp>
+#include <Sampler_Preset.hpp>
 #include <Vector.hpp>
+
 
 namespace ECS
 {
@@ -47,6 +49,15 @@ namespace ECS
 
         // Emissive map (sRGB). Multiplied by emissive_factor.
         CoreTypes::Asset_Handle emissive = CoreTypes::INVALID_ASSET_HANDLE;
+
+        // =========================================================
+        // Sampling
+        // =========================================================
+
+        // Filtering and wrapping applied to every texture slot above. One
+        // preset per material for now; per-slot samplers, as glTF allows,
+        // are reconsidered together with the glTF loader.
+        CoreTypes::Sampler_Preset sampler = CoreTypes::Sampler_Preset::Linear_Repeat;
 
         // =========================================================
         // Scalar factors

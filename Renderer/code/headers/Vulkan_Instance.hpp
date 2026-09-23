@@ -8,6 +8,24 @@
 
 namespace Renderer_System 
 {
+    // Validation level requested at instance creation.
+    //   Off          - no layers. The only option on machines without the
+    //                  Vulkan SDK.
+    //   Standard     - VK_LAYER_KHRONOS_validation: every API call is
+    //                  checked on the CPU.
+    //   Gpu_Assisted - Standard plus GPU-assisted validation (GPU-AV): the
+    //                  layer instruments the shaders and checks on the GPU
+    //                  what the CPU cannot see, such as out-of-range indices
+    //                  into descriptor arrays or reads of descriptors that
+    //                  were never written. Much slower; opt-in only.
+    // A level the system cannot provide degrades to the previous one with
+    // a warning; it never makes construction fail.
+    enum class Validation_Mode : uint8_t
+    {
+        Off,
+        Standard,
+        Gpu_Assisted
+    };
     // Vulkan_instance: owns the VkInstance, the root object of Vulkan.
     // Also manages validation layers and the debug messenger, which report
     // Vulkan API misuse (invalid parameters, resource leaks, etc.) directly
@@ -21,6 +39,10 @@ namespace Renderer_System
     //   - the surface extensions GLFW needs are mandatory;
     //   - VK_EXT_debug_utils is enabled when validation is on and the
     //     extension exists;
+    //   - with Validation_Mode::Gpu_Assisted, the extension that carries
+    //     the GPU-AV setting is taken from the validation layer itself
+    //     (it is not listed by the loader): VK_EXT_layer_settings when
+    //     present, VK_EXT_validation_features (deprecated) otherwise;
     //   - VK_KHR_get_surface_capabilities2 + VK_KHR_surface_maintenance1
     //     (the instance half of VK_KHR_swapchain_maintenance1, whose
     //     device half Vulkan_Device enables) are enabled whenever the
@@ -33,6 +55,9 @@ namespace Renderer_System
         VkDebugUtilsMessengerEXT debug_messenger;
         bool validation_enabled;
         bool surface_maintenance1_enabled;
+        // True only when validation is on and the validation layer exposes
+        // an extension able to carry the GPU-AV setting.
+        bool gpu_assisted_enabled;
         uint32_t api_version;
 
         // Names of the instance extensions actually enabled, kept for
@@ -41,16 +66,14 @@ namespace Renderer_System
 
     public:
         // Creates the VkInstance.
-        // _enable_validation should be true in Debug builds and false in
+        // _validation_mode should be Standard in Debug builds and Off in
         // Release (validation layers add CPU overhead and require the
         // Vulkan SDK to be installed on the machine running the app).
+        // Gpu_Assisted is reserved for targeted debugging sessions: it
+        // slows every draw noticeably (see Validation_Mode).
         // _application_name / _engine_name are passed to the driver and
         // may be used by some drivers to apply known per-engine optimizations.
-        explicit Vulkan_Instance(
-            bool _enable_validation,
-            const std::string& _application_name = "Vulkan Engine",
-            const std::string& _engine_name = "No Engine Name Yet"
-        );
+        explicit Vulkan_Instance(Validation_Mode _validation_mode,const std::string& _application_name = "Vulkan Engine", const std::string& _engine_name = "No Engine Name Yet");
 
         ~Vulkan_Instance();
 
@@ -68,9 +91,19 @@ namespace Renderer_System
         VkInstance Get_handle() const;
 
         // Whether validation layers ended up active on this instance.
-        // Note this can be false even if you requested true, if the layers
-        // weren't available on the system (see Check_validation_layer_support).
+        // Can be false even when Standard or Gpu_Assisted was requested, if
+        // the layers weren't available on the system (see
+        // Check_validation_layer_support).
         bool Is_validation_enabled() const;
+
+        // Whether GPU-assisted validation ended up active. Always false when
+        // Is_validation_enabled() is false; also false when Gpu_Assisted was
+        // requested but the validation layer exposes neither
+        // VK_EXT_layer_settings nor VK_EXT_validation_features.
+        // GPU-AV reserves one descriptor set slot for its own use: a device
+        // whose maxBoundDescriptorSets equals the number of sets the engine
+        // binds leaves it without room.
+        bool Is_gpu_assisted_validation_enabled() const;
 
         // Whether VK_KHR_get_surface_capabilities2 and
         // VK_KHR_surface_maintenance1 were enabled. This is the
@@ -131,12 +164,10 @@ namespace Renderer_System
         // something to report. The signature (parameter types, calling
         // convention, return type) is fixed by the Vulkan API - it must
         // match exactly or the function pointer won't be accepted.
-        static VKAPI_ATTR VkBool32 VKAPI_CALL Debug_callback(
-            VkDebugUtilsMessageSeverityFlagBitsEXT _severity,
-            VkDebugUtilsMessageTypeFlagsEXT _type,
-            const VkDebugUtilsMessengerCallbackDataEXT* _callback_data,
-            void* _user_data
-        );
+        static VKAPI_ATTR VkBool32 VKAPI_CALL Debug_callback( VkDebugUtilsMessageSeverityFlagBitsEXT _severity,
+                                                              VkDebugUtilsMessageTypeFlagsEXT _type,
+                                                              const VkDebugUtilsMessengerCallbackDataEXT* _callback_data,
+                                                              void* _user_data);
 
         
     };

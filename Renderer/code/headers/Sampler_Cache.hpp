@@ -5,6 +5,7 @@
 
 #include <Vulkan_Device.hpp>
 #include <Hash.hpp>
+#include <Sampler_Preset.hpp>
 
 #include <cstdint>
 #include <unordered_map>
@@ -16,10 +17,11 @@ namespace Renderer_System
     // actually vary across textures in this engine. Used as a hashable,
     // comparable key into Sampler_Cache.
     //
-    // Kept deliberately small — only fields we actually configure
-    // differently per texture. If a new sampling need arises (e.g.
-    // VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT for a specific effect),
-    // add the field here rather than creating samplers ad-hoc elsewhere.
+    // Kept deliberately small — only fields that actually differ between
+    // the sampler presets (see Sampler_Cache::Get_preset_desc). If a new
+    // sampling need arises (e.g. VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT
+    // for a specific effect), add the field here and a preset for it,
+    // rather than creating samplers ad-hoc elsewhere.
     struct Sampler_Desc
     {
         VkFilter             mag_filter = VK_FILTER_LINEAR;
@@ -33,11 +35,14 @@ namespace Renderer_System
         // sampler is actually created.
         float anisotropy = 16.0f;
 
-        // Number of mip levels this sampler can address (maxLod).
-        // Must match (or exceed) the highest mip count of any texture
-        // that will use this sampler — set to the texture's mip_levels
-        // when requesting a sampler for it.
-        float max_lod = 0.0f;
+        // Highest mip level this sampler may select (maxLod).
+        // VK_LOD_CLAMP_NONE leaves the limit to the image view, which
+        // already exposes exactly the mip levels each texture has: one
+        // sampler then serves textures of any size, and per-texture values
+        // (which would defeat the deduplication of Sampler_Cache) are
+        // never needed. A finite value only makes sense to cap detail on
+        // purpose.
+        float max_lod = VK_LOD_CLAMP_NONE;
 
         bool operator==(const Sampler_Desc& _other) const
         {
@@ -107,11 +112,19 @@ namespace Renderer_System
         // is owned by the cache — never call vkDestroySampler on it directly.
         VkSampler Get_sampler(const Sampler_Desc& _desc);
 
-        // Convenience: returns the cache's default sampler — linear
-        // filtering, repeat wrap, full anisotropy, max_lod set high enough
-        // for any reasonable texture (16 levels covers up to 32768px).
-        // This is what most PBR textures (albedo, normal, etc.) should use.
-        VkSampler Get_default_sampler();
+        // Vulkan parameters of a CoreTypes::Sampler_Preset: the only place
+        // where a preset becomes a Sampler_Desc.
+        //   Linear_*  - linear mag/min and mip filtering, anisotropy 16.
+        //   Nearest_* - nearest mag/min and mip filtering, no anisotropy.
+        //   *_Repeat  - REPEAT on U and V.
+        //   *_Clamp   - CLAMP_TO_EDGE on U and V.
+        // Every preset uses max_lod = VK_LOD_CLAMP_NONE. The requested
+        // anisotropy is clamped to the device when the sampler is created,
+        // not here, which is why this function needs no instance.
+        //
+        // Throws std::invalid_argument for Sampler_Preset::Count or any
+        // value outside the enum.
+        static Sampler_Desc Get_preset_desc(CoreTypes::Sampler_Preset _preset);
 
     private:
 

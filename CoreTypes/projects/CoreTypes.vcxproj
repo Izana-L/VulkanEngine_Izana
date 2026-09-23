@@ -158,6 +158,7 @@
     <ClInclude Include="..\code\headers\Id_Provider.hpp" />
     <ClInclude Include="..\code\headers\ImageData.hpp" />
     <ClInclude Include="..\code\headers\MeshData.hpp" />
+    <ClInclude Include="..\code\headers\Sampler_Preset.hpp" />
     <ClInclude Include="..\code\headers\Vertex.hpp" />
     <ClInclude Include="..\code\headers\Vertex_Packing.hpp" />
   </ItemGroup>
