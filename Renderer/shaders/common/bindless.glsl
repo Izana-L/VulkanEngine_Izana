@@ -35,8 +35,7 @@ layout(set = 3, binding = 1) uniform sampler   samplers[];
 // be enough.
 vec4 Sample_bindless(uint texture_index, uint sampler_index, vec2 uv)
 {
-    return texture(nonuniformEXT(sampler2D(textures[nonuniformEXT(texture_index)],
-                                           samplers[nonuniformEXT(sampler_index)])), uv);
+    return texture(nonuniformEXT(sampler2D(textures[nonuniformEXT(texture_index)], samplers[nonuniformEXT(sampler_index)])), uv);
 }
 
 #endif

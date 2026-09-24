@@ -11,11 +11,9 @@ layout(push_constant) uniform Push_Constants
 {
     mat4 model;                 // offset 0
     vec4 base_color;            // offset 64: per-draw tint, alpha < 1 = transparent pass
-    uint albedo_texture_index;  // offset 80: bindless index, or INVALID_TEXTURE_INDEX
+   uint albedo_texture_index;  // offset 80: bindless index, always a written slot (CoreTypes::Default_Texture)
     uint albedo_sampler_index;  // offset 84: slot in samplers[] (a CoreTypes::Sampler_Preset value)
 } push;
 
-// Mirror of CoreTypes::INVALID_TEXTURE_INDEX.
-const uint INVALID_TEXTURE_INDEX = 0xFFFFFFFFu;
 
 #endif

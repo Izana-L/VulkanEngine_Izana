@@ -1,7 +1,7 @@
 #include <Vulkan_Device.hpp>
 #include <Vulkan_Utils.hpp>
 #include <Vulkan_Vertex_Layout.hpp>
-
+#include <Descriptor_Sets.hpp>
 #include <stdexcept>
 #include <iostream>
 #include <set>
@@ -71,8 +71,8 @@ namespace Renderer_System {
 
         if (best_device == VK_NULL_HANDLE)
             throw std::runtime_error("No suitable GPU found (Vulkan 1.3, a present-capable queue, "
-                "VK_KHR_swapchain, descriptor indexing features and A2B10G10R10_SNORM vertex "
-                "attributes are required)");
+                "VK_KHR_swapchain, descriptor indexing features and at least " +
+                std::to_string(Descriptor_Set::Count) + " bindable descriptor sets are required)");
                 
         physical_device = best_device;
         queue_family_indices = best_support.queue_families;
@@ -109,6 +109,30 @@ namespace Renderer_System {
         std::cout << "[Vulkan_Device] Sampler anisotropy "
             << (sampler_anisotropy_enabled ? "enabled (max " + std::to_string(max_sampler_anisotropy) + ")" : "not available")
             << ".\n";
+
+        // ── Descriptor limits ─────────────────────────────────────
+        bindless_limits = best_support.bindless_limits;
+
+        std::cout << "[Vulkan_Device] Bindless limits (update-after-bind): sampled images "
+            << bindless_limits.max_per_stage_sampled_images << "/stage, "
+            << bindless_limits.max_per_set_sampled_images << "/set; samplers "
+            << bindless_limits.max_per_stage_samplers << "/stage, "
+            << bindless_limits.max_per_set_samplers << "/set; resources "
+            << bindless_limits.max_per_stage_resources << "/stage; descriptors in all pools "
+            << bindless_limits.max_descriptors_in_all_pools << ".\n";
+
+        std::cout << "[Vulkan_Device] Bindable descriptor sets: " << best_support.max_bound_descriptor_sets
+            << " (the engine uses " << Descriptor_Set::Count << ").\n";
+
+        // GPU-AV binds a descriptor set of its own in the highest slot the
+        // device reports. With exactly Descriptor_Set::Count slots that
+        // slot may be the bindless set; the layer's own messages then say
+        // whether it could instrument the shaders.
+        if (_instance.Is_gpu_assisted_validation_enabled() &&
+            best_support.max_bound_descriptor_sets == Descriptor_Set::Count) {
+            std::cerr << "[Vulkan_Device] GPU-assisted validation is on, but maxBoundDescriptorSets equals the "
+                << Descriptor_Set::Count << " sets the engine uses: GPU-AV may have no free slot.\n";
+        }
 
         // ── Extensions ────────────────────────────────────────────
         std::vector<const char*> device_extensions = required_device_extensions;
@@ -210,8 +234,10 @@ namespace Renderer_System {
         device_name(std::move(_other.device_name)),
         swapchain_maintenance1_enabled(_other.swapchain_maintenance1_enabled),
         sampler_anisotropy_enabled(_other.sampler_anisotropy_enabled),
-        max_sampler_anisotropy(_other.max_sampler_anisotropy)
+        max_sampler_anisotropy(_other.max_sampler_anisotropy),
+        bindless_limits(_other.bindless_limits)
     {
+    
         _other.physical_device = VK_NULL_HANDLE;
         _other.logical_device = VK_NULL_HANDLE;
         _other.graphics_queue = VK_NULL_HANDLE;
@@ -232,6 +258,7 @@ namespace Renderer_System {
             swapchain_maintenance1_enabled = _other.swapchain_maintenance1_enabled;
             sampler_anisotropy_enabled = _other.sampler_anisotropy_enabled;
             max_sampler_anisotropy = _other.max_sampler_anisotropy;
+            bindless_limits = _other.bindless_limits;
 
             _other.physical_device = VK_NULL_HANDLE;
             _other.logical_device = VK_NULL_HANDLE;
@@ -287,6 +314,10 @@ namespace Renderer_System {
         return max_sampler_anisotropy;
     }
 
+    const Bindless_Limits& Vulkan_Device::Get_bindless_limits() const {
+        return bindless_limits;
+    }
+
     // ---------- Enumerate_physical_devices ----------
     std::vector<VkPhysicalDevice> Vulkan_Device::Enumerate_physical_devices(
         VkInstance _instance) const
@@ -338,9 +369,7 @@ namespace Renderer_System {
     }
 
     // ---------- Query_device_support ----------
-    Device_Support Vulkan_Device::Query_device_support(VkPhysicalDevice _device,
-        VkSurfaceKHR _surface,
-        const Vulkan_Instance& _instance) const
+    Device_Support Vulkan_Device::Query_device_support(VkPhysicalDevice _device,VkSurfaceKHR _surface,const Vulkan_Instance& _instance) const
     {
         assert(_device != VK_NULL_HANDLE);
         assert(_surface != VK_NULL_HANDLE);
@@ -352,6 +381,29 @@ namespace Renderer_System {
         vkGetPhysicalDeviceProperties(_device, &properties);
         support.api_version = properties.apiVersion;
         support.max_sampler_anisotropy = properties.limits.maxSamplerAnisotropy;
+        support.max_bound_descriptor_sets = properties.limits.maxBoundDescriptorSets;
+
+        // Descriptor indexing limits. The properties struct is core only
+        // from Vulkan 1.2, and chaining it on an older device is invalid;
+        // such devices keep all-zero limits and are rejected anyway.
+        if (properties.apiVersion >= VK_API_VERSION_1_2) {
+            VkPhysicalDeviceDescriptorIndexingProperties indexing_properties{};
+            indexing_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES;
+
+            VkPhysicalDeviceProperties2 properties2{};
+            properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+            properties2.pNext = &indexing_properties;
+
+            vkGetPhysicalDeviceProperties2(_device, &properties2);
+
+            Bindless_Limits& limits = support.bindless_limits;
+            limits.max_per_stage_sampled_images = indexing_properties.maxPerStageDescriptorUpdateAfterBindSampledImages;
+            limits.max_per_set_sampled_images = indexing_properties.maxDescriptorSetUpdateAfterBindSampledImages;
+            limits.max_per_stage_samplers = indexing_properties.maxPerStageDescriptorUpdateAfterBindSamplers;
+            limits.max_per_set_samplers = indexing_properties.maxDescriptorSetUpdateAfterBindSamplers;
+            limits.max_per_stage_resources = indexing_properties.maxPerStageUpdateAfterBindResources;
+            limits.max_descriptors_in_all_pools = indexing_properties.maxUpdateAfterBindDescriptorsInAllPools;
+        }
 
         // Extensions.
         const std::unordered_set<std::string> extensions = Enumerate_device_extensions(_device);
@@ -431,12 +483,17 @@ namespace Renderer_System {
         // entry points.
         const bool api_1_3_supported = _support.api_version >= VK_API_VERSION_1_3;
 
+        // Every pipeline layout declares Descriptor_Set::Count sets (0-3).
+        // The spec guarantees at least 4, so this only rejects devices
+        // that report fewer, e.g. when a validation layer reserves a slot.
+        const bool enough_descriptor_sets = _support.max_bound_descriptor_sets >= Descriptor_Set::Count;
+
         // Bindless textures are not optional in this renderer: every
         // pipeline layout carries the bindless set and the fragment shader
         // indexes it. A device that cannot do it is not selected, so
         // Bindless_Registry never has to run on a device without support.
-        return api_1_3_supported&& _support.queue_families.Is_complete()&& _support.swapchain_extension&& 
-                                   _support.surface_adequate && _support.bindless && _support.vertex_formats;
+        return api_1_3_supported && _support.queue_families.Is_complete()&& _support.swapchain_extension && 
+                                   _support.surface_adequate && _support.bindless && _support.vertex_formats && enough_descriptor_sets;
             
             
             

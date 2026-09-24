@@ -26,14 +26,11 @@ void main()
     vec3 N = normalize(frag_world_normal);
     vec3 V = normalize(frame.camera_position - frag_world_pos);
 
-    // Base color: vertex tint * per-draw tint * albedo texture (if any).
-    // nonuniformEXT is required: the index is per-draw data.
-    vec4 base = frag_color * push.base_color;
-
-    if (push.albedo_texture_index != INVALID_TEXTURE_INDEX)
-    {
-        base *= texture(textures[nonuniformEXT(push.albedo_texture_index)], frag_uv);
-    }
+    // Base color: vertex tint * per-draw tint * albedo texture, read with
+    // the sampler preset the material selected. Every draw carries a
+    // written texture slot: an untextured draw samples the white default
+    // texture, which leaves the tint unchanged.
+    vec4 base = frag_color * push.base_color * Sample_bindless(push.albedo_texture_index, push.albedo_sampler_index, frag_uv);
 
     vec3 diffuse  = vec3(0.0);
     vec3 specular = vec3(0.0);

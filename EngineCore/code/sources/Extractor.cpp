@@ -125,11 +125,12 @@ namespace EngineCore
 
                 // Optional material: per-draw tint, albedo texture and the
                 // sampler preset it is read with. Without one the item draws
-                // white, untextured, with the default sampler.
+                // with the white default texture and the default sampler,
+                // which looks exactly like an untextured draw.
                 CoreTypes::Draw_Item item{};
                 item.mesh_gpu_id = gpu_id;
                 item.base_color = { 1.0f, 1.0f, 1.0f, 1.0f };
-                item.albedo_texture_index = CoreTypes::INVALID_TEXTURE_INDEX;
+                item.albedo_texture_index = CoreTypes::Default_Texture::White;
                 item.albedo_sampler_index = static_cast<uint32_t>(CoreTypes::Sampler_Preset::Linear_Repeat);
 
                 if (const ECS::Material_Component* material = _world.Try_get_component<ECS::Material_Component>(entity))
@@ -140,12 +141,16 @@ namespace EngineCore
                     // sampler array; no translation is needed.
                     item.albedo_sampler_index = static_cast<uint32_t>(material->sampler);
 
+                    // Albedo not assigned: stays White. Assigned but with no
+                    // GPU index (never uploaded, or a stale handle): Error,
+                    // so the mistake shows up magenta instead of silently
+                    // white.
                     if (material->albedo.Is_valid())
                     {
                         const uint32_t texture_index = _resources.Get_image_gpu_id(material->albedo);
 
-                        if (texture_index != ResourceManager::Resource_Manager::INVALID_GPU_ID)
-                            item.albedo_texture_index = texture_index;
+                        item.albedo_texture_index = texture_index != ResourceManager::Resource_Manager::INVALID_GPU_ID
+                                                                    ? texture_index: CoreTypes::Default_Texture::Error;
                     }
                 }
 

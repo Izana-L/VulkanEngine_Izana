@@ -33,6 +33,24 @@ namespace Renderer_System {
         }
     };
 
+    // Device limits that bound the size of the bindless arrays. The
+    // bindless set is created with UPDATE_AFTER_BIND_POOL, so the
+    // update-after-bind variants are the ones that apply. The per-stage
+    // and per-set limits count every descriptor of the pipeline layout,
+    // update-after-bind or not; the pool limit counts only pools created
+    // with UPDATE_AFTER_BIND. Read from
+    // VkPhysicalDeviceDescriptorIndexingProperties (core in Vulkan 1.2);
+    // all zero on older devices, which are never selected.
+    struct Bindless_Limits
+    {
+        uint32_t max_per_stage_sampled_images = 0;   // maxPerStageDescriptorUpdateAfterBindSampledImages
+        uint32_t max_per_set_sampled_images = 0;   // maxDescriptorSetUpdateAfterBindSampledImages
+        uint32_t max_per_stage_samplers = 0;   // maxPerStageDescriptorUpdateAfterBindSamplers
+        uint32_t max_per_set_samplers = 0;   // maxDescriptorSetUpdateAfterBindSamplers
+        uint32_t max_per_stage_resources = 0;   // maxPerStageUpdateAfterBindResources
+        uint32_t max_descriptors_in_all_pools = 0;   // maxUpdateAfterBindDescriptorsInAllPools
+    };
+
     // Everything Vulkan_Device needs to know about a candidate GPU before
     // deciding whether to use it and what to enable on it. Filled by
     // Query_device_support(), read by Is_device_suitable() and by the
@@ -52,6 +70,12 @@ namespace Renderer_System {
         bool sampler_anisotropy = false;
         float max_sampler_anisotropy = 1.0f;
 
+        // Descriptor set slots a pipeline layout may use
+        // (VkPhysicalDeviceLimits::maxBoundDescriptorSets). REQUIRED to be
+        // at least Descriptor_Set::Count.
+        uint32_t max_bound_descriptor_sets = 0;
+
+        Bindless_Limits bindless_limits;
         // Every format in Vulkan_Vertex_Layout::OPTIONAL_VERTEX_FORMATS
         // can be read from a vertex buffer. REQUIRED: the mesh pipeline
         // cannot be created without it.
@@ -96,6 +120,7 @@ namespace Renderer_System {
         bool  sampler_anisotropy_enabled;
         float max_sampler_anisotropy;
 
+        Bindless_Limits bindless_limits;
     public:
 
         Vulkan_Device(const Vulkan_Instance& _instance, const Vulkan_Surface& _surface);
@@ -129,6 +154,9 @@ namespace Renderer_System {
         bool  Is_sampler_anisotropy_enabled() const;
         float Get_max_sampler_anisotropy() const;
 
+        // Update-after-bind descriptor limits of the selected device.
+        // Bindless_Registry clamps its array sizes to them.
+        const Bindless_Limits& Get_bindless_limits() const;
         VkFormat  Find_supported_depth_format()   const;
 
     private:

@@ -78,7 +78,7 @@ namespace Renderer_System
     {
         MathLib::Matrix4 model;
         MathLib::Vector4 base_color;
-        uint32_t         albedo_texture_index;   // INVALID_TEXTURE_INDEX = untextured
+        uint32_t         albedo_texture_index;   // bindless texture slot; untextured = CoreTypes::Default_Texture::White
         uint32_t         albedo_sampler_index;   // slot in the bindless sampler array (a CoreTypes::Sampler_Preset value)
         uint32_t         _padding1;
         uint32_t         _padding2;

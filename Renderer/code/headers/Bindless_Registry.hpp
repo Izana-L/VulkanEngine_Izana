@@ -51,12 +51,22 @@ namespace Renderer_System
     {
     public:
 
-        // _max_textures: fixed size of the descriptor array. Must be known
-        // at layout creation time even though most slots start empty
-        // (VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT allows that). 1024 is
-        // generous for a single-scene development workload; raise if a
-        // scene's unique texture count approaches this limit.
-        explicit Bindless_Registry(const Vulkan_Device& _device,uint32_t  _max_textures, uint32_t   _max_samplers);
+        // _desired_textures: requested size of the texture array (binding 0).
+        // _desired_samplers: requested size of the sampler array (binding 1).
+        // The effective sizes are the requests clamped to the device
+        // limits (Vulkan_Device::Get_bindless_limits); both are logged at
+        // startup. They are fixed at layout creation even though most
+        // slots start empty (VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT
+        // allows that, as long as the shader never reads an empty slot).
+        // No default values: the Renderer passes its named constants
+        // (BINDLESS_DESIRED_TEXTURES, BINDLESS_DESIRED_SAMPLERS).
+        //
+        // Throws std::invalid_argument if a request is zero, and
+        // std::runtime_error if the device cannot offer one sampler slot
+        // per CoreTypes::Sampler_Preset or a minimum of texture slots.
+        explicit Bindless_Registry(const Vulkan_Device& _device,
+            uint32_t              _desired_textures,
+            uint32_t              _desired_samplers);
 
         ~Bindless_Registry();
 
@@ -77,7 +87,7 @@ namespace Renderer_System
         // Thread-safety: not thread-safe — call from the main thread
         // during loading, same as Renderer::Upload_texture/Upload_mesh.
         //
-        // Throws if _max_textures slots are already in use.
+        // Throws if every slot of the texture array is already in use.
         uint32_t Register_texture(VkImageView _image_view);
 
         // Writes _sampler into slot _index of the sampler array. Slots are

@@ -11,12 +11,18 @@ namespace ECS
     // Material_Component: PBR metallic-roughness material data for an entity.
     //
     // Each texture slot holds an Asset_Handle. INVALID_ASSET_HANDLE means
-    // "not assigned" — the Extractor/shader falls back to a default:
-    //   albedo            → white (1,1,1,1)
-    //   normal            → flat normal (0.5, 0.5, 1.0) in tangent space
-    //   metallic_roughness→ metallic=metallic_factor, roughness=roughness_factor
-    //   ambient_occlusion → 1.0 (no occlusion)
-    //   emissive          → black (0,0,0)
+    // "not assigned": the Extractor substitutes one of the default
+    // textures the Renderer uploads at startup (CoreTypes::Default_Texture),
+    // real 1x1 textures with a neutral value:
+    //   albedo            → White (1,1,1,1)
+    //   normal            → Flat_Normal (0.5, 0.5, 1.0) in tangent space
+    //   metallic_roughness→ White: metallic=metallic_factor, roughness=roughness_factor
+    //   ambient_occlusion → White: 1.0 (no occlusion)
+    //   emissive          → Black (0,0,0)
+    // A slot that IS assigned but whose image has no GPU index (never
+    // uploaded, or a stale handle) resolves to Error, magenta.
+    // Today only albedo reaches the shader; the other slots follow the
+    // same rules when PBR starts reading them.
     //
     // Scalar factors are always applied, even when the corresponding texture
     // is present (they multiply the texture sample, matching glTF spec).

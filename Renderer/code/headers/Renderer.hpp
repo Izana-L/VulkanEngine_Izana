@@ -165,7 +165,8 @@ namespace Renderer_System
 
         static constexpr uint32_t FRAMES_IN_FLIGHT = 2;
 
-        // Requested sizes of the two bindless arrays (set 3). 1024 textures
+        // Requested sizes of the two bindless arrays (set 3); the registry
+       // clamps them to the device limits and logs both. 1024 textures
         // is generous for a single-scene development workload; raise it if
         // a scene's unique texture count approaches the limit. 16 samplers
         // leave room for the presets still to come (shadow comparison,
@@ -251,6 +252,12 @@ namespace Renderer_System
 
         void Init_descriptor_pool();
         void Init_descriptor_sets();
+
+        // Uploads the CoreTypes::Default_Texture set in a single batch and
+        // checks that each texture landed in its reserved bindless slot.
+        // Called once from the constructor, before any other upload.
+        void Upload_default_textures();
+
         std::vector<Pipeline_Config> Build_pipeline_manifest() const;
 
         // Creates one Image_Sync per swapchain image of the CURRENT swapchain.

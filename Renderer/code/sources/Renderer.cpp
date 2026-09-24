@@ -9,7 +9,7 @@
 #include <iostream>
 #include <cstring>
 #include <array>
-
+#include <cassert>
 namespace Renderer_System
 {
 
@@ -119,6 +119,11 @@ namespace Renderer_System
 
             VK_CHECK(vkCreateFence(device.Get_logical_device_handle(), &transfer_fence_info, nullptr, &transfer_fence),
                 "Renderer: failed to create transfer fence");
+
+            // ── Default textures ───────────────────────────────────────
+            // Needs the transfer fence above. First upload of the session,
+            // so the defaults take the reserved bindless slots.
+            Upload_default_textures();
         }
         catch (...)
         {
@@ -471,7 +476,51 @@ namespace Renderer_System
     {
         return Upload_texture(_image_data, Vulkan_Image_Utils::To_vk_format(_image_data.format));
     }
+    void Renderer::Upload_default_textures()
+    {
+        namespace Default = CoreTypes::Default_Texture;
 
+        // One opaque texel. Mip generation is skipped for 1x1 images
+        // (Compute_mip_levels(1, 1) == 1).
+        const auto make_texel = [](uint8_t _r, uint8_t _g, uint8_t _b, CoreTypes::Pixel_Format _format)
+            {
+                CoreTypes::ImageData image;
+                image.pixels = { _r, _g, _b, 255 };
+                image.width = 1;
+                image.height = 1;
+                image.mip_levels = 1;
+                image.format = _format;
+                return image;
+            };
+
+        // Indexed by slot, so each texel stays tied to its constant even
+        // if the Default_Texture values are ever reordered.
+        std::array<CoreTypes::ImageData, Default::Count> defaults;
+        defaults[Default::Error] = make_texel(255, 0, 255, CoreTypes::Pixel_Format::RGBA8_SRGB);
+        defaults[Default::White] = make_texel(255, 255, 255, CoreTypes::Pixel_Format::RGBA8_SRGB);
+        defaults[Default::Black] = make_texel(0, 0, 0, CoreTypes::Pixel_Format::RGBA8_SRGB);
+        // A normal is data, not color: UNORM, so 128 stays 0.5 when sampled.
+        defaults[Default::Flat_Normal] = make_texel(128, 128, 255, CoreTypes::Pixel_Format::RGBA8_UNORM);
+
+        Upload_Batch batch;
+        for (const CoreTypes::ImageData& image : defaults)
+            batch.textures.push_back({ &image, Vulkan_Image_Utils::To_vk_format(image.format) });
+
+        const Upload_Batch_Result result = Upload_batch(batch);
+
+        // The slots are a contract with every Draw_Item. A mismatch means
+        // something was registered before this call.
+        bool in_place = result.texture_bindless_indices.size() == Default::Count;
+        for (uint32_t i = 0; in_place && i < Default::Count; ++i)
+            in_place = result.texture_bindless_indices[i] == i;
+
+        if (!in_place)
+            throw std::logic_error("Renderer: the default textures did not land in bindless slots 0.."
+                + std::to_string(Default::Count - 1) + "; something was registered before them");
+
+        std::cout << "[Renderer] Default textures in bindless slots 0-" << (Default::Count - 1)
+                  << " (Error, White, Black, Flat_Normal).\n";
+    }
     // =========================================================
     // Surface size
     // =========================================================
@@ -846,6 +895,12 @@ namespace Renderer_System
             push.base_color = item.base_color;
             push.albedo_texture_index = item.albedo_texture_index;
             push.albedo_sampler_index = item.albedo_sampler_index;
+
+            // Debug-only safety net. An index past the written slots reads
+            // an unwritten descriptor, which PARTIALLY_BOUND turns into
+            // undefined behaviour rather than a validation error.
+            assert(push.albedo_texture_index < bindless_registry.Get_registered_count() && "Draw_Item::albedo_texture_index points past the registered textures");
+            assert(push.albedo_sampler_index < static_cast<uint32_t>(CoreTypes::Sampler_Preset::Count) && "Draw_Item::albedo_sampler_index is not a Sampler_Preset value");
 
             vkCmdPushConstants(_command_buffer, pipeline_layout.Get_handle(),
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,

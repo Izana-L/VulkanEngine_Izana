@@ -1,8 +1,12 @@
 #include <Bindless_Registry.hpp>
 #include <Descriptor_Sets.hpp>
 #include <Vulkan_Utils.hpp>
+#include <Sampler_Preset.hpp>
+#include <RenderPacket.hpp>
 
+#include <algorithm>
 #include <array>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <cassert>
@@ -10,11 +14,56 @@
 namespace Renderer_System
 {
 
+    namespace
+    {
+        // Descriptors of the fragment stage outside the bindless set that
+        // also count against maxPerStageUpdateAfterBindResources: set 0
+        // (frame UBO, light SSBO) and the color attachments. A small
+        // margin rather than an exact count, so a new per-frame binding
+        // does not silently push the stage over the limit.
+        constexpr uint32_t OTHER_STAGE_RESOURCES_MARGIN = 16;
+
+        // Fewest texture slots the engine accepts; a device that cannot
+        // offer them is treated as unsupported. The default textures take
+        // the first slots, so the minimum must leave room beyond them.
+        constexpr uint32_t MIN_BINDLESS_TEXTURES = 64;
+
+        static_assert(MIN_BINDLESS_TEXTURES > CoreTypes::Default_Texture::Count,"MIN_BINDLESS_TEXTURES must leave room for real textures after the default ones");
+
+        struct Array_Sizes
+        {
+            uint32_t textures = 0;
+            uint32_t samplers = 0;
+        };
+
+        // Clamps the requested sizes to the device limits. Each array is
+        // first capped by its own per-stage and per-set limits. The shared
+        // budgets (resources per stage, descriptors in all pools) are then
+        // enforced by shrinking only the texture array: the sampler array
+        // is tiny and its slots are fixed by the presets.
+        Array_Sizes Fit_to_device_limits(const Array_Sizes& _desired, const Bindless_Limits& _limits)
+        {
+            Array_Sizes sizes;
+            sizes.textures = std::min({ _desired.textures, _limits.max_per_stage_sampled_images, _limits.max_per_set_sampled_images });
+            sizes.samplers = std::min({ _desired.samplers, _limits.max_per_stage_samplers, _limits.max_per_set_samplers });
+
+            const uint32_t stage_budget = _limits.max_per_stage_resources > OTHER_STAGE_RESOURCES_MARGIN
+                                        ? _limits.max_per_stage_resources - OTHER_STAGE_RESOURCES_MARGIN: 0;
+
+            const uint32_t shared_budget = std::min(stage_budget, _limits.max_descriptors_in_all_pools);
+
+            if (sizes.textures + sizes.samplers > shared_budget)
+                sizes.textures = shared_budget > sizes.samplers ? shared_budget - sizes.samplers : 0;
+
+            return sizes;
+        }
+    }
+
     // ---------- Constructor ----------
-    Bindless_Registry::Bindless_Registry(const Vulkan_Device& _device, uint32_t _max_textures, uint32_t _max_samplers)
+    Bindless_Registry::Bindless_Registry(const Vulkan_Device& _device, uint32_t _desired_textures, uint32_t _desired_samplers)
         : device_handle(_device.Get_logical_device_handle()),
-        max_textures(_max_textures),
-        max_samplers(_max_samplers),
+        max_textures(_desired_textures),
+        max_samplers(_desired_samplers),
         next_free_index(0),
         layout(VK_NULL_HANDLE),
         pool(VK_NULL_HANDLE),
@@ -37,10 +86,40 @@ namespace Renderer_System
         }
 
         if (max_textures == 0)
-            throw std::invalid_argument("Bindless_Registry: _max_textures must be greater than zero");
+            throw std::invalid_argument("Bindless_Registry: _desired_textures must be greater than zero");
 
         if (max_samplers == 0)
-            throw std::invalid_argument("Bindless_Registry: _max_samplers must be greater than zero");
+            throw std::invalid_argument("Bindless_Registry: _desired_samplers must be greater than zero");
+
+        // ── Effective sizes ────────────────────────────────────────
+        // Up to here max_textures / max_samplers hold the requests; from
+        // here on they hold what the device can actually offer.
+        const Array_Sizes effective = Fit_to_device_limits({ max_textures, max_samplers }, _device.Get_bindless_limits());
+
+        const bool clamped = effective.textures != max_textures || effective.samplers != max_samplers;
+
+        std::ostream& log = clamped ? std::cerr : std::cout;
+        log << "[Bindless_Registry] Textures: desired " << max_textures << ", effective " << effective.textures
+            << ". Samplers: desired " << max_samplers << ", effective " << effective.samplers
+            << (clamped ? ". Clamped to the device limits.\n" : ".\n");
+
+        const uint32_t preset_count = static_cast<uint32_t>(CoreTypes::Sampler_Preset::Count);
+
+        if (effective.samplers < preset_count) 
+        {
+            throw std::runtime_error("Bindless_Registry: the device allows " + std::to_string(effective.samplers) +
+                                     " bindless samplers, but the " + std::to_string(preset_count) + " sampler presets need one slot each");
+                
+        }
+
+        if (effective.textures < MIN_BINDLESS_TEXTURES) 
+        {
+            throw std::runtime_error("Bindless_Registry: the device allows " + std::to_string(effective.textures) +
+                                     " bindless textures, fewer than the minimum of " + std::to_string(MIN_BINDLESS_TEXTURES));
+        }
+
+        max_textures = effective.textures;
+        max_samplers = effective.samplers;
 
         try
         {
@@ -78,12 +157,10 @@ namespace Renderer_System
         if (_image_view == VK_NULL_HANDLE)
             throw std::invalid_argument("Bindless_Registry::Register_texture: null image view");
 
-        if (next_free_index >= max_textures) {
-            throw std::runtime_error(
-                "Bindless_Registry: exceeded max_textures (" +
-                std::to_string(max_textures) +
-                ") — increase the limit passed to the constructor."
-            );
+        if (next_free_index >= max_textures) 
+        {
+            throw std::runtime_error( "Bindless_Registry: the texture array is full (" + std::to_string(max_textures) + 
+                                      " slots) — raise BINDLESS_DESIRED_TEXTURES, within the device limits logged at startup." );
         }
 
         const uint32_t index = next_free_index;
@@ -198,9 +275,7 @@ namespace Renderer_System
         //   the binding with the highest number in a set may use it, and a
         //   fixed size for both arrays is simpler and sufficient for this
         //   engine's needs.
-        constexpr VkDescriptorBindingFlags bindless_flags =
-            VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
-            VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+        constexpr VkDescriptorBindingFlags bindless_flags = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
 
         // One entry per binding, in the same order as `bindings`.
         const std::array<VkDescriptorBindingFlags, 2> binding_flags = { bindless_flags, bindless_flags };
@@ -221,8 +296,21 @@ namespace Renderer_System
         layout_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
         layout_info.pNext = &binding_flags_info;
 
-        VK_CHECK(vkCreateDescriptorSetLayout(device_handle, &layout_info, nullptr, &layout),
-            "Bindless_Registry: failed to create descriptor set layout");
+        // Final word from the driver. The limits used to size the arrays
+        // are per category; a layout can still be rejected as a whole.
+        // Asking first makes the failure carry the sizes instead of a
+        // bare VkResult from vkCreateDescriptorSetLayout.
+        VkDescriptorSetLayoutSupport layout_support{};
+        layout_support.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_SUPPORT;
+        vkGetDescriptorSetLayoutSupport(device_handle, &layout_info, &layout_support);
+
+        if (layout_support.supported != VK_TRUE) 
+        {
+            throw std::runtime_error( "Bindless_Registry: the device does not support a bindless layout with " +
+                                      std::to_string(max_textures) + " textures and " + std::to_string(max_samplers) + " samplers");
+        }
+
+        VK_CHECK(vkCreateDescriptorSetLayout(device_handle, &layout_info, nullptr, &layout),"Bindless_Registry: failed to create descriptor set layout");
     }
 
     // ---------- Create_pool ----------

@@ -51,9 +51,27 @@ namespace CoreTypes
         inline constexpr uint8_t All = 0xFFu;
     }
 
-    // Value of Draw_Item::albedo_texture_index when the item has no
-    // texture. Mirrors INVALID_TEXTURE_INDEX in the fragment shader.
-    inline constexpr uint32_t INVALID_TEXTURE_INDEX = 0xFFFFFFFFu;
+    // Bindless texture slots reserved for the default textures. The
+    // Renderer uploads them at startup, before any other texture, so each
+    // value below IS its slot. They make every texture index a Draw_Item
+    // carries point to a written slot:
+    //   Error       - magenta (255, 0, 255): the material references an
+    //                 image with no GPU index. Meant to be noticed.
+    //   White       - (255, 255, 255): legitimate absence of albedo (with
+    //                 PBR, also of metallic-roughness and AO, so the
+    //                 scalar factors decide).
+    //   Black       - (0, 0, 0): absent emissive.
+    //   Flat_Normal - (128, 128, 255), UNORM rather than sRGB: flat
+    //                 tangent-space normal for an absent normal map.
+    // All four are 1x1 and opaque.
+    namespace Default_Texture
+    {
+        inline constexpr uint32_t Error = 0;
+        inline constexpr uint32_t White = 1;
+        inline constexpr uint32_t Black = 2;
+        inline constexpr uint32_t Flat_Normal = 3;
+        inline constexpr uint32_t Count = 4;
+    }
 
     // =========================================================
     // Draw_Item
@@ -86,9 +104,11 @@ namespace CoreTypes
         uint32_t         mesh_gpu_id = 0;
         uint32_t         transform_idx = 0;
 
-        // Bindless index of the albedo texture, or INVALID_TEXTURE_INDEX.
-        // Travels to the fragment shader through the push constant block.
-        uint32_t         albedo_texture_index = INVALID_TEXTURE_INDEX;
+        // Bindless index of the albedo texture. Never an empty slot: an
+        // untextured item uses Default_Texture::White and a missing image
+        // Default_Texture::Error. Travels to the fragment shader through
+        // the push constant block.
+        uint32_t         albedo_texture_index = Default_Texture::White;
 
         // Bindless index of the sampler the albedo texture is read with:
         // the material's Sampler_Preset, whose value is its slot in the
@@ -100,9 +120,9 @@ namespace CoreTypes
 
         uint64_t         sort_key = 0;
 
-        // Per-draw tint multiplied with the vertex color (and the albedo
-        // texture when present). Alpha below 1.0 is what routes an item to
-        // the transparent list.
+        // Per-draw tint multiplied with the vertex color and the albedo
+        // texture. Alpha below 1.0 is what routes an item to the
+        // transparent list.
         MathLib::Vector4 base_color = { 1.0f, 1.0f, 1.0f, 1.0f };
     };
 
