@@ -744,6 +744,22 @@ namespace Renderer_System
 
         VK_CHECK(vkBeginCommandBuffer(command_buffer, &begin_info), "Record_command_buffer: begin");
 
+        // ── Compute work: always before the render pass ───────────
+        // Every compute pass that writes an image registered in the
+        // bindless set is recorded here, with its two barriers
+        // (Storage_Image::Begin_write / End_write), before
+        // vkCmdBeginRenderPass:
+        //   - a pipeline barrier inside the render pass requires a
+        //     subpass self-dependency, and the render pass declares none
+        //     (Vulkan_Render_Pass only declares EXTERNAL -> 0);
+        //   - End_write must execute before any draw that may read the
+        //     bindless set (declared layout rule,
+        //     Bindless_Registry::Register_texture).
+        // Compute passes bind their pipeline and descriptor sets at
+        // VK_PIPELINE_BIND_POINT_COMPUTE: the sets bound below for
+        // GRAPHICS are not visible to dispatches, and binding compute sets
+        // does not disturb them.
+
         // ── Render pass ───────────────────────────────────────────
         std::array<VkClearValue, 2> clear_values{};
         clear_values[0].color = { { _packet.clear_color.r, _packet.clear_color.g, _packet.clear_color.b, _packet.clear_color.a } };

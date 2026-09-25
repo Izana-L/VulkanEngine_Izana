@@ -318,6 +318,15 @@ namespace Renderer_System
         // Asset upload
         // =========================================================
 
+        // Uploads a mesh (vertex and index buffers) to the GPU and returns
+        // its gpu_id: the index into the Renderer's internal mesh registry,
+        // which ResourceManager stores through Register_gpu_id() and
+        // Draw_Item::mesh_gpu_id references.
+        //
+        // Throws std::invalid_argument if _mesh_data has no vertices or no
+        // indices.
+        uint32_t Upload_mesh(const CoreTypes::MeshData& _mesh_data);
+
         // Uploads a texture (with a full mip chain) to the GPU, registers
         // it in the global bindless texture array, and returns its
         // BINDLESS INDEX: the value shaders use to index into the texture
@@ -325,13 +334,6 @@ namespace Renderer_System
         // shader pairs it with the slot of the sampler array (set 3,
         // binding 1) that the material selects, e.g.:
         //   Sample_bindless(push.albedo_texture_index, push.albedo_sampler_index, uv)
-        uint32_t Upload_mesh(const CoreTypes::MeshData& _mesh_data);
-
-        // Uploads a texture (with a full mip chain) to the GPU, registers
-        // it in the global bindless descriptor array, and returns its
-        // BINDLESS INDEX: the value shaders use to index into the
-        // sampler array (set 3, binding 0), e.g.:
-        //   texture(textures[nonuniformEXT(push.albedo_texture_index)], uv)
         //
         // This is distinct from the internal Texture_GPU registry index
         // (used only to keep the Texture_GPU object alive); callers

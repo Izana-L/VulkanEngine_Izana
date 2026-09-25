@@ -81,8 +81,41 @@ namespace Renderer_System
         // involved: the shader pairs the texture with a slot of the
         // sampler array at the point of use.
         //
-        // The descriptor records VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-        // the image must be in that layout whenever a shader reads it.
+        // Declared layout: the descriptor of every slot records
+        // VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL. The following rule
+        // keeps that valid for images the GPU rewrites (compute outputs,
+        // render targets), not only for uploaded textures:
+        //
+        //   While any draw or dispatch that may read a slot can execute,
+        //   the image of that slot is in its declared layout and its last
+        //   writes are visible to Bindless_Reader_Pipeline_Stages
+        //   (Shader_Stages.hpp). Whoever writes a registered image takes it
+        //   out of the declared layout and returns it there before any
+        //   reader executes.
+        //
+        // With PARTIALLY_BOUND only the slots actually read matter, but no
+        // command can prove which slots it reads, so any command that may
+        // index the arrays counts as a reader of every slot.
+        //
+        // How each kind of writer complies:
+        //   uploads (Texture_GPU)  - written once; the upload barriers leave
+        //                            the image in the declared layout and it
+        //                            never leaves it again.
+        //   compute passes         - UNDEFINED -> GENERAL before the dispatch
+        //                            and GENERAL -> SHADER_READ_ONLY_OPTIMAL
+        //                            after it (Vulkan_Image_Utils::
+        //                            Transition_image_layout), both recorded
+        //                            before vkCmdBeginRenderPass.
+        //   render passes (future) - finalLayout SHADER_READ_ONLY_OPTIMAL
+        //                            plus external subpass dependencies from
+        //                            and towards the reader stages; no
+        //                            explicit barrier.
+        //
+        // Policy: a single declared layout for every slot, so all bindless
+        // reads use SHADER_READ_ONLY_OPTIMAL and this function takes no
+        // layout. The alternative, keeping written images permanently in
+        // GENERAL, would add a layout parameter here and can disable image
+        // compression on some hardware.
         //
         // Thread-safety: not thread-safe — call from the main thread
         // during loading, same as Renderer::Upload_texture/Upload_mesh.

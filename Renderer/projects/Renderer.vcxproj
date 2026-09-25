@@ -113,6 +113,7 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
     <ClCompile Include="..\code\sources\Pipeline_Registry.cpp" />
     <ClCompile Include="..\code\sources\Renderer.cpp" />
     <ClCompile Include="..\code\sources\Sampler_Cache.cpp" />
+    <ClCompile Include="..\code\sources\Storage_Image.cpp" />
     <ClCompile Include="..\code\sources\Texture_GPU.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Allocator.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Buffer_Utils.cpp" />
@@ -139,6 +140,8 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
     <ClInclude Include="..\code\headers\Pipeline_Registry.hpp" />
     <ClInclude Include="..\code\headers\Renderer.hpp" />
     <ClInclude Include="..\code\headers\Sampler_Cache.hpp" />
+    <ClInclude Include="..\code\headers\Shader_Stages.hpp" />
+    <ClInclude Include="..\code\headers\Storage_Image.hpp" />
     <ClInclude Include="..\code\headers\Texture_GPU.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Allocator.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Buffer_Utils.hpp" />

@@ -24,7 +24,7 @@ namespace Renderer_System {
     // at index 0", which a plain uint32_t with a sentinel value wouldn't.
     struct Queue_Family_Indices 
     {
-        std::optional<uint32_t> graphics_family;
+        std::optional<uint32_t> graphics_family;   // supports GRAPHICS and COMPUTE
         std::optional<uint32_t> present_family;
 
         bool Is_complete() const 

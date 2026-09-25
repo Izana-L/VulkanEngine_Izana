@@ -61,24 +61,26 @@ namespace Renderer_System
     {
         std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
 
-        // binding 0 — Frame_UBO: vista, proyeccion, sus inversas, posicion
-        // de camara, tiempo. Visible en AMBAS etapas: el vertex usa las
-        // matrices, el fragment usa camera_position y light_count.
-        // (Hoy el layout declara solo VERTEX y mesh.frag lee este binding
-        //  igualmente — ese mismatch se corrige justo aqui.)
+        // binding 0 — Frame_UBO: vista, proyeccion, view_projection,
+        // posicion de camara y numero de luces (espejo de frame_set.glsl).
+        // Visible en las tres etapas: el vertex usa las matrices, el
+        // fragment usa camera_position y light_count, y el compute queda
+        // disponible para pasadas que dependan de la camara (culling,
+        // iluminacion por tiles).
         bindings[0].binding = Binding_Per_Frame::Frame_UBO;
         bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         bindings[0].descriptorCount = 1;
-        bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT |
-            VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
 
         // binding 1 — array de luces. STORAGE_BUFFER, no UNIFORM_BUFFER:
         // maxUniformBufferRange garantiza solo 16 KB, maxStorageBufferRange
         // al menos 128 MB, y un SSBO admite array de tamano no declarado.
+        // Visible en fragment (sombreado) y en compute (pasadas que
+        // recorren las luces, p. ej. su asignacion por tiles).
         bindings[1].binding = Binding_Per_Frame::Lights;
         bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[1].descriptorCount = 1;
-        bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
 
         VkDescriptorSetLayoutCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;

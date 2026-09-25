@@ -516,8 +516,18 @@ namespace Renderer_System {
         vkGetPhysicalDeviceQueueFamilyProperties(
             _device, &queue_family_count, queue_families.data());
 
-        for (uint32_t i = 0; i < queue_family_count; ++i) {
-            if (queue_families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+        // The graphics queue also records every compute dispatch, so its
+        // family must support both kinds of work. Desktop GPUs always
+        // expose such a family, but the specification only guarantees
+        // that one family of one device of the implementation supports
+        // graphics and compute together, not that every graphics family
+        // does. A device without such a family ends up without
+        // graphics_family and is rejected as incomplete.
+        constexpr VkQueueFlags required_graphics_flags = VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT;
+
+        for (uint32_t i = 0; i < queue_family_count; ++i) 
+        {
+            if ((queue_families[i].queueFlags & required_graphics_flags) == required_graphics_flags)
                 indices.graphics_family = i;
 
             VkBool32 present_support = VK_FALSE;

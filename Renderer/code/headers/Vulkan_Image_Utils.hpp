@@ -75,15 +75,28 @@ namespace Renderer_System
 
         // Records a pipeline barrier that transitions an image between layouts
         // and inserts the correct access masks and pipeline stages for the
-        // transition. Only the transitions actually used by the texture upload
-        // pipeline are supported — extend this function if new transitions
-        // are needed rather than calling vkCmdPipelineBarrier directly elsewhere.
+         // transition. Only the transitions listed below are supported; any
+        // other pair throws std::runtime_error. Extend this function if new
+        // transitions are needed rather than calling vkCmdPipelineBarrier
+        // directly elsewhere.
+        //
+        // Every transition that ends in SHADER_READ_ONLY_OPTIMAL (the declared
+        // layout of the bindless slots) makes the image readable by all
+        // Bindless_Reader_Pipeline_Stages (Shader_Stages.hpp).
         //
         // Supported transitions:
-        //   UNDEFINED            -> TRANSFER_DST_OPTIMAL   (before buffer copy)
-        //   TRANSFER_DST_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL (after copy, no mips)
-        //   TRANSFER_DST_OPTIMAL -> TRANSFER_SRC_OPTIMAL   (before mip generation)
-        //   TRANSFER_SRC_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL (after mip generation)
+        //   Texture upload:
+        //     UNDEFINED            -> TRANSFER_DST_OPTIMAL     (before buffer copy)
+        //     TRANSFER_DST_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL (after copy, no mips)
+        //     TRANSFER_DST_OPTIMAL -> TRANSFER_SRC_OPTIMAL     (before mip generation)
+        //     TRANSFER_SRC_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL (after mip generation)
+        //   Compute write to an image registered in the bindless set
+        //   (rule in Bindless_Registry::Register_texture):
+        //     UNDEFINED            -> GENERAL                  (before the dispatch;
+        //                                                       waits for the readers
+        //                                                       of previous frames)
+        //     GENERAL              -> SHADER_READ_ONLY_OPTIMAL (after the dispatch)
+        //
         //
         // _command_buffer: must already be in the recording state
         // _mip_levels: number of mip levels affected by this transition

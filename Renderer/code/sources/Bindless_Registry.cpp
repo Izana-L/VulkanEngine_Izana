@@ -1,5 +1,6 @@
 #include <Bindless_Registry.hpp>
 #include <Descriptor_Sets.hpp>
+#include <Shader_Stages.hpp>
 #include <Vulkan_Utils.hpp>
 #include <Sampler_Preset.hpp>
 #include <RenderPacket.hpp>
@@ -16,11 +17,18 @@ namespace Renderer_System
 
     namespace
     {
-        // Descriptors of the fragment stage outside the bindless set that
-        // also count against maxPerStageUpdateAfterBindResources: set 0
-        // (frame UBO, light SSBO) and the color attachments. A small
-        // margin rather than an exact count, so a new per-frame binding
-        // does not silently push the stage over the limit.
+        // Descriptors outside the bindless set that also count against
+        // maxPerStageUpdateAfterBindResources. The limit applies to each
+        // stage of Bindless_Reader_Stages separately, so the margin covers
+        // the most loaded one:
+        //   fragment - set 0 (frame UBO, light SSBO) and the color
+        //              attachments;
+        //   compute  - set 0 and the descriptors of the pass's own set 1
+        //              (e.g. the storage image it writes).
+        // A small margin rather than an exact count, so a new per-frame or
+        // per-pass binding does not silently push a stage over the limit.
+        // The per-stage limits are the same numbers for every stage, so
+        // Fit_to_device_limits needs no distinction between stages.
         constexpr uint32_t OTHER_STAGE_RESOURCES_MARGIN = 16;
 
         // Fewest texture slots the engine accepts; a device that cannot
@@ -247,19 +255,22 @@ namespace Renderer_System
     // ---------- Create_layout ----------
     void Bindless_Registry::Create_layout()
     {
-        // Two arrays in the same set, both read only by the fragment stage
-        // (nothing else samples textures yet).
+        // Two arrays in the same set, both visible to every stage in
+        // Bindless_Reader_Stages (Shader_Stages.hpp). The barriers that
+        // leave an image readable through this set wait on the matching
+        // Bindless_Reader_Pipeline_Stages, so a stage added there is
+        // covered by the layout and by the barriers at once.
         std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
 
         bindings[0].binding = Binding_Bindless::Textures;
         bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
         bindings[0].descriptorCount = max_textures;
-        bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings[0].stageFlags = Bindless_Reader_Stages;
 
         bindings[1].binding = Binding_Bindless::Samplers;
         bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
         bindings[1].descriptorCount = max_samplers;
-        bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings[1].stageFlags = Bindless_Reader_Stages;
 
         // Per-binding flags required for bindless, the same for both arrays:
         //   PARTIALLY_BOUND   — slots that were never written are legal to

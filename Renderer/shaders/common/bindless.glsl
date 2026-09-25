@@ -11,8 +11,24 @@
 // Image and sampler are combined at the point of use, so the material
 // chooses the filtering independently of the texture.
 //
+// Visibility: both arrays are visible to the fragment and compute stages
+// (Bindless_Reader_Stages, Shader_Stages.hpp). Reading them from any
+// other stage requires adding that stage there first.
+//
 // The including shader must declare, BEFORE this include:
 //   #extension GL_EXT_nonuniform_qualifier : require
+// and, to read exact texels with texelFetch / textureSize directly on
+// textures[i] (no sampler involved), also:
+//   #extension GL_EXT_samplerless_texture_functions : require
+// A direct access to textures[] does not go through the helpers below,
+// so the index needs its own nonuniformEXT at the call site.
+//
+// Level of detail outside the fragment stage: there are no derivatives,
+// so the implicit level of detail of texture() (and of Sample_bindless)
+// is 0 and the base mip level is always read. glslang compiles it as an
+// explicit Lod 0 in those stages. Sample_bindless_lod selects the level
+// explicitly and is the one to use from compute.
+//
 //
 // On nonuniformEXT: today both indices come from push constants, which
 // are dynamically uniform within a draw, so the qualifier is not strictly
@@ -37,5 +53,17 @@ vec4 Sample_bindless(uint texture_index, uint sampler_index, vec2 uv)
 {
     return texture(nonuniformEXT(sampler2D(textures[nonuniformEXT(texture_index)], samplers[nonuniformEXT(sampler_index)])), uv);
 }
+
+// Same as Sample_bindless with an explicit level of detail: `lod` selects
+// the mip level, and a fractional value blends two levels when the
+// sampler uses linear mipmap filtering. Valid in every stage; required
+// outside the fragment stage to read any level other than the base one.
+// nonuniformEXT is applied on the same three places, for the same reason.
+vec4 Sample_bindless_lod(uint texture_index, uint sampler_index, vec2 uv, float lod)
+{
+    return textureLod(nonuniformEXT(sampler2D(textures[nonuniformEXT(texture_index)], samplers[nonuniformEXT(sampler_index)])), uv, lod);
+}
+
+
 
 #endif
