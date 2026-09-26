@@ -7,9 +7,9 @@
 // last row and column of groups may extend past the image: the bounds
 // check below discards those invocations.
 //
-// Milestone 1.1: no output yet. The dispatch only exercises the compute
-// pipeline, its layout and the COMPUTE bind point. The storage image
-// (set 1, binding 0) and the write are added in milestone 1.2.
+// Milestone 1.2: every texel is written with a fixed color. The image is
+// read by the graphics pipelines through its bindless slot (set 3) after
+// Storage_Image::End_write.
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 // EXACT mirror of Renderer_System::Procedural_Push_Constants (C++), 16
@@ -22,6 +22,18 @@ layout(push_constant) uniform Procedural_Push_Constants
     float _pad0;                // offset 12: keeps the block at 16 bytes
 } push;
 
+// Set 1 (Per_Pass), binding 0 (Binding_Per_Pass::Procedural_Output).
+// The format qualifier must match the VkFormat of the Storage_Image
+// (VK_FORMAT_R8G8B8A8_UNORM): with it, writing does not require the
+// shaderStorageImageWriteWithoutFormat feature. writeonly: the pass
+// never reads the previous contents, which Begin_write discards.
+layout(set = 1, binding = 0, rgba8) uniform writeonly image2D procedural_output;
+
+// Fixed output of milestone 1.2. The image is UNORM, so this value is
+// stored and sampled as linear color: the same bytes in an SRGB texture
+// would look darker.
+const vec4 FIXED_COLOR = vec4(1.0, 0.5, 0.0, 1.0);
+
 void main()
 {
     const uvec2 texel = gl_GlobalInvocationID.xy;
@@ -29,4 +41,6 @@ void main()
     // Invocations outside the image come from rounding the dispatch up.
     if (texel.x >= push.image_size.x || texel.y >= push.image_size.y)
         return;
+
+    imageStore(procedural_output, ivec2(texel), FIXED_COLOR);
 }

@@ -20,6 +20,7 @@
 #include <Pipeline_Layout.hpp>
 #include <Mesh_GPU.hpp>
 #include <Texture_GPU.hpp>
+#include <Storage_Image.hpp>
 #include <Sampler_Cache.hpp>
 #include <Bindless_Registry.hpp>
 #include <RenderPacket.hpp>
@@ -27,6 +28,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace Platform { class Window; }
@@ -243,6 +245,39 @@ namespace Renderer_System
         VkDescriptorPool                                  descriptor_pool = VK_NULL_HANDLE;
         std::array<VkDescriptorSet, FRAMES_IN_FLIGHT>     descriptor_sets{};
 
+        // Set 1 of the procedural pass: its storage image descriptor
+        // (Binding_Per_Pass::Procedural_Output). One set, not one per frame
+        // in flight: the descriptor never changes, and the image itself is
+        // shared by both frame slots (see procedural_image).
+        VkDescriptorSet                                   per_pass_set = VK_NULL_HANDLE;
+
+        // =========================================================
+        // Compute pass resources
+        // =========================================================
+
+        // Output of procedural.comp, sampled by the draws through its
+        // bindless slot. Fixed size, independent of the swapchain, so it is
+        // never recreated on resize.
+        //
+        // One image for both frames in flight: frame N+1 may write it while
+        // frame N still reads it. Storage_Image::Begin_write waits for the
+        // reader stages of earlier submissions before the write, which
+        // orders that write-after-read.
+        //
+        // std::optional because the constructor records the initial clear
+        // into a command buffer: it is emplaced by Init_procedural_pass(),
+        // after the transfer pool and fence exist, and reset in
+        // Destroy_owned_handles(). Declared after the allocator, so it is
+        // always destroyed before it.
+        std::optional<Storage_Image>                      procedural_image;
+
+        // Bindless slot of procedural_image (set 3, binding 0): the value a
+        // material stores as its albedo texture index. Starts at the Error
+        // default texture, so a read before Init_procedural_pass() shows
+        // magenta instead of an unregistered slot.
+        uint32_t                                          procedural_texture_index = CoreTypes::Default_Texture::Error;
+
+
         // =========================================================
         // Asset registries
         // =========================================================
@@ -281,6 +316,15 @@ namespace Renderer_System
         // checks that each texture landed in its reserved bindless slot.
         // Called once from the constructor, before any other upload.
         void Upload_default_textures();
+
+        // Creates procedural_image and records its initial clear in a
+        // one-off transfer submission, registers its view in the bindless
+        // set (procedural_texture_index) and allocates and writes
+        // per_pass_set with the same view as a storage image. Called once
+        // from the constructor, after Upload_default_textures (the default
+        // textures keep their reserved slots) and after the descriptor pool
+        // and the transfer fence exist.
+        void Init_procedural_pass();
 
         std::vector<Pipeline_Config> Build_pipeline_manifest() const;
 
@@ -399,6 +443,17 @@ namespace Renderer_System
         // std::runtime_error if the bindless texture array does not have a
         // free slot for every texture of the batch.
         Upload_Batch_Result Upload_batch(const Upload_Batch& _batch);
+
+        // =========================================================
+        // Compute pass outputs
+        // =========================================================
+
+        // Bindless index of the texture generated every frame by
+        // procedural.comp. Used like the index returned by Upload_texture:
+        // stored as a material's albedo texture index and sampled with any
+        // sampler preset. The image is UNORM, so it is read as linear color.
+        // Valid for the whole lifetime of the Renderer.
+        uint32_t Get_procedural_texture_index() const { return procedural_texture_index; }
 
         // =========================================================
         // Pipelines

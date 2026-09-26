@@ -367,8 +367,7 @@ namespace Renderer_System
     // ---------- Get_free_texture_count ----------
     uint32_t Bindless_Registry::Get_free_texture_count() const
     {
-        const uint32_t never_used = max_textures - static_cast<uint32_t>(slot_views.size());
-        return never_used + static_cast<uint32_t>(released_slots.size());
+        return max_textures - Get_registered_count();
     }
 
     // ---------- Get_max_samplers ----------

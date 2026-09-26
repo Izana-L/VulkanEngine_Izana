@@ -26,11 +26,11 @@ namespace Renderer_System
     // ahora, con los huecos reservados, para no volver a tocarlos.
     namespace Descriptor_Set
     {
-        inline constexpr uint32_t Per_Frame    = 0;
-        inline constexpr uint32_t Per_Pass     = 1;   // reservado, vacio
+        inline constexpr uint32_t Per_Frame = 0;
+        inline constexpr uint32_t Per_Pass = 1;   // resources written by a compute pass
         inline constexpr uint32_t Per_Material = 2;   // reservado, vacio
-        inline constexpr uint32_t Bindless     = 3;
-        inline constexpr uint32_t Count        = 4;
+        inline constexpr uint32_t Bindless = 3;
+        inline constexpr uint32_t Count = 4;
     }
 
     // Bindings dentro del set 0.
@@ -39,6 +39,15 @@ namespace Renderer_System
         inline constexpr uint32_t Frame_UBO = 0;   // camara, inversas, tiempo
         inline constexpr uint32_t Lights = 1;   // SSBO con el array de luces
     }
+
+    // Bindings inside set 1. Visible to the compute stage only: graphics
+    // pipelines read the outputs of a pass through the bindless set, never
+    // through this one.
+    namespace Binding_Per_Pass
+    {
+        inline constexpr uint32_t Procedural_Output = 0;   // STORAGE_IMAGE written by procedural.comp (layout GENERAL)
+    }
+
 
     // Bindings dentro del set 3. Imagen y muestreador van en arrays
     // separados y el shader los combina en el punto de uso: asi el

@@ -212,10 +212,18 @@ namespace EngineCore
         // ── Cube primitive ─────────────────────────────────────
         // Second primitive family (flat faces), so both winding groups of
         // Primitive_Builder are on screen at once.
-        const CoreTypes::Asset_Handle cube_handle =
-            resources.Create_primitive(ResourceManager::Primitive_Desc::Make_cube());
+        const CoreTypes::Asset_Handle cube_handle =  resources.Create_primitive(ResourceManager::Primitive_Desc::Make_cube());
 
         const ECS::Entity cube_entity = Spawn_mesh_entity(cube_handle, { -1.5f, 0.0f, 0.0f });
+
+        // Material with the compute-generated texture as albedo. The image
+        // is written every frame by procedural.comp and registered as an
+        // external image: it follows the same path as the UV checker from
+        // Material_Component onwards, with no CPU pixels to upload.
+        ECS::Material_Component cube_material;
+        cube_material.albedo = resources.Register_external_image("procedural", renderer.Get_procedural_texture_index());
+
+        world.Add_component<ECS::Material_Component>(cube_entity, cube_material);
 
         std::cout << "[Engine] Cube entity created (id=" << cube_entity << ").\n";
 

@@ -10,18 +10,12 @@
 
 namespace Renderer_System
 {
-    // Descriptor_Layout_Cache: duena de los VkDescriptorSetLayout de los
-    // conjuntos 0, 1 y 2, y portadora (NO duena) del 3.
-    //
-    // El 3 lo fabrica Bindless_Registry, que necesita flags propios
-    // (PARTIALLY_BOUND, UPDATE_AFTER_BIND) y su propio pool. Aqui solo se
-    // guarda el handle para poder entregar los cuatro seguidos a
-    // vkCreatePipelineLayout — por eso el destructor destruye 0..2 y deja
-    // el 3 en paz.
-    //
-    // Los conjuntos 1 y 2 se crean con bindingCount = 0. Un layout vacio
-    // es legal, no reserva descriptores y no cuesta memoria: su unica
-    // funcion es ocupar la ranura para que el 3 este SIEMPRE en el 3.
+    // Set 1 holds the resources written by compute passes
+   // (Binding_Per_Pass), visible to the compute stage only.
+   //
+   // Set 2 is created with bindingCount = 0. An empty layout is legal,
+   // reserves no descriptors and costs no memory: its only purpose is to
+   // occupy the slot so that set 3 is ALWAYS set 3.
     class Descriptor_Layout_Cache
     {
         VkDevice device_handle;
@@ -47,6 +41,7 @@ namespace Renderer_System
     private:
 
         VkDescriptorSetLayout Create_per_frame_layout();
+        VkDescriptorSetLayout Create_per_pass_layout();
         VkDescriptorSetLayout Create_empty_layout();
     };
 }

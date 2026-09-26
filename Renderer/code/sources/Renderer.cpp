@@ -128,6 +128,11 @@ namespace Renderer_System
             // Needs the transfer fence above. First upload of the session,
             // so the defaults take the reserved bindless slots.
             Upload_default_textures();
+
+            // ── Compute pass resources ─────────────────────────────────
+            // After the defaults (its bindless slot comes after theirs) and
+            // after the descriptor pool (per_pass_set is allocated from it).
+            Init_procedural_pass();
         }
         catch (...)
         {
@@ -176,6 +181,8 @@ namespace Renderer_System
         // referenced by in-flight command buffers otherwise.
         meshes.clear();
         textures.clear();
+        procedural_image.reset();
+
 
         if (transfer_fence != VK_NULL_HANDLE) {
             vkDestroyFence(dev, transfer_fence, nullptr);
@@ -544,6 +551,98 @@ namespace Renderer_System
         std::cout << "[Renderer] Default textures in bindless slots 0-" << (Default::Count - 1)
                   << " (Error, White, Black, Flat_Normal).\n";
     }
+
+    // =========================================================
+    // Init_procedural_pass
+    // =========================================================
+
+    void Renderer::Init_procedural_pass()
+    {
+        // Fixed size: independent of the swapchain, so the image is never
+        // recreated on resize and its bindless slot never changes.
+        constexpr uint32_t PROCEDURAL_TEXTURE_SIZE = 256;
+
+        // Storage image support for R8G8B8A8_UNORM with optimal tiling is
+        // mandatory in Vulkan. Must match the rgba8 qualifier of
+        // procedural.comp. SRGB formats rarely support storage.
+        constexpr VkFormat PROCEDURAL_TEXTURE_FORMAT = VK_FORMAT_R8G8B8A8_UNORM;
+
+        VkDevice dev = device.Get_logical_device_handle();
+
+        // ── Image and initial clear ────────────────────────────────
+        // The constructor records the clear that leaves every texel at zero
+        // in SHADER_READ_ONLY_OPTIMAL. It is submitted and waited for here,
+        // before the first frame, so the slot is valid from its first read.
+        VkCommandBuffer transfer_cmd = transfer_command_pool.Allocate_primary();
+
+        try
+        {
+            VkCommandBufferBeginInfo begin_info{};
+            begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            VK_CHECK(vkBeginCommandBuffer(transfer_cmd, &begin_info), "Init_procedural_pass: begin transfer command buffer");
+
+            procedural_image.emplace(device, allocator.Get_handle(), transfer_cmd,
+                PROCEDURAL_TEXTURE_SIZE, PROCEDURAL_TEXTURE_SIZE, PROCEDURAL_TEXTURE_FORMAT);
+
+            Submit_and_wait_transfer(transfer_cmd);
+        }
+        catch (...)
+        {
+            // Same recovery as Upload_batch: the clear either never ran or
+            // was waited for, so the image can be destroyed right away.
+            vkDeviceWaitIdle(dev);
+            procedural_image.reset();
+            transfer_command_pool.Free(transfer_cmd);
+            throw;
+        }
+
+        transfer_command_pool.Free(transfer_cmd);
+
+        // ── Bindless slot (set 3) ──────────────────────────────────
+        // Read by the draws as a sampled image. The declared layout of the
+        // slot (SHADER_READ_ONLY_OPTIMAL) holds after the initial clear and
+        // after every Storage_Image::End_write.
+        procedural_texture_index = bindless_registry.Register_texture(procedural_image->Get_image_view());
+
+        // ── Set 1: storage image descriptor ────────────────────────
+        const VkDescriptorSetLayout per_pass_layout = descriptor_layouts.Get(Descriptor_Set::Per_Pass);
+
+        VkDescriptorSetAllocateInfo alloc_info{};
+        alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        alloc_info.descriptorPool = descriptor_pool;
+        alloc_info.descriptorSetCount = 1;
+        alloc_info.pSetLayouts = &per_pass_layout;
+
+        VK_CHECK(vkAllocateDescriptorSets(dev, &alloc_info, &per_pass_set),
+            "Init_procedural_pass: failed to allocate the set 1 descriptor set");
+
+        // GENERAL: the layout the image is in while the dispatch writes it
+        // (between Begin_write and End_write), not the layout it rests in.
+        VkDescriptorImageInfo image_info{};
+        image_info.sampler = VK_NULL_HANDLE;
+        image_info.imageView = procedural_image->Get_image_view();
+        image_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = per_pass_set;
+        write.dstBinding = Binding_Per_Pass::Procedural_Output;
+        write.dstArrayElement = 0;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        write.descriptorCount = 1;
+        write.pImageInfo = &image_info;
+
+        // Written once, before any frame is recorded: the only moment the
+        // set can be updated without racing a frame in flight.
+        vkUpdateDescriptorSets(dev, 1, &write, 0, nullptr);
+
+        std::cout << "[Renderer] Procedural texture " << PROCEDURAL_TEXTURE_SIZE << "x" << PROCEDURAL_TEXTURE_SIZE
+            << " (" << Vulkan_Utils::Vk_format_to_string(PROCEDURAL_TEXTURE_FORMAT)
+            << ") in bindless slot " << procedural_texture_index << ".\n";
+    }
+
+
     // =========================================================
     // Surface size
     // =========================================================
@@ -799,29 +898,32 @@ namespace Renderer_System
         // GRAPHICS are not visible to dispatches, and binding compute sets
         // does not disturb them.
 
-        // ── Procedural texture pass (milestone 1.1: empty dispatch) ─
-        // Fixed size, independent of the swapchain: no recreation on
-        // resize. Replaced by the extent of the target Storage_Image once
-        // the pass writes one (milestone 1.2).
-        constexpr uint32_t PROCEDURAL_SIZE = 256;
+                // ── Procedural texture pass ───────────────────────────────
+        // Writes every texel of procedural_image; the draws below sample it
+        // through its bindless slot.
         constexpr uint32_t PROCEDURAL_GROUP_SIZE = 8;   // local_size_x / local_size_y of procedural.comp
         {
+            assert(procedural_image.has_value() && "Record_command_buffer: Init_procedural_pass() has not run");
+
+            const VkExtent2D procedural_extent = procedural_image->Get_extent();
+
             vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, procedural_pipeline.Get_handle());
 
-            // Same set handles as the graphics pass: compute_pipeline_layout
-            // uses the same set layouts, so they are compatible. Set 1 is
-            // left unbound until the pass declares its storage image.
-            const VkDescriptorSet compute_per_frame_set = descriptor_sets[current_frame];
+            // Sets 0 and 1 are consecutive, so both go in one call. Set 0
+            // uses the same handle as the graphics pass (same set layout in
+            // both pipeline layouts); set 1 holds the storage image.
+            const std::array<VkDescriptorSet, 2> compute_low_sets = { descriptor_sets[current_frame], per_pass_set };
             vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pipeline_layout.Get_handle(),
-                Descriptor_Set::Per_Frame, 1, &compute_per_frame_set, 0, nullptr);
+                Descriptor_Set::Per_Frame, static_cast<uint32_t>(compute_low_sets.size()),
+                compute_low_sets.data(), 0, nullptr);
 
             const VkDescriptorSet compute_bindless_set = bindless_registry.Get_set();
             vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pipeline_layout.Get_handle(),
                 Descriptor_Set::Bindless, 1, &compute_bindless_set, 0, nullptr);
 
             Procedural_Push_Constants procedural_push{};
-            procedural_push.image_width = PROCEDURAL_SIZE;
-            procedural_push.image_height = PROCEDURAL_SIZE;
+            procedural_push.image_width = procedural_extent.width;
+            procedural_push.image_height = procedural_extent.height;
             procedural_push.time = 0.0f;   // animated in milestone 1.3
 
             // Stage flags must match the range of compute_pipeline_layout
@@ -829,11 +931,19 @@ namespace Renderer_System
             vkCmdPushConstants(command_buffer, compute_pipeline_layout.Get_handle(), VK_SHADER_STAGE_COMPUTE_BIT,
                 0, sizeof(Procedural_Push_Constants), &procedural_push);
 
+            // UNDEFINED -> GENERAL (contents discarded), after the reads of
+            // the previous frame that shares this image (write-after-read).
+            procedural_image->Begin_write(command_buffer);
+
             // Rounded up: a size that is not a multiple of the group size
             // still covers every texel; the shader discards the excess.
-            const uint32_t group_count_x = (PROCEDURAL_SIZE + PROCEDURAL_GROUP_SIZE - 1) / PROCEDURAL_GROUP_SIZE;
-            const uint32_t group_count_y = (PROCEDURAL_SIZE + PROCEDURAL_GROUP_SIZE - 1) / PROCEDURAL_GROUP_SIZE;
+            const uint32_t group_count_x = (procedural_extent.width + PROCEDURAL_GROUP_SIZE - 1) / PROCEDURAL_GROUP_SIZE;
+            const uint32_t group_count_y = (procedural_extent.height + PROCEDURAL_GROUP_SIZE - 1) / PROCEDURAL_GROUP_SIZE;
             vkCmdDispatch(command_buffer, group_count_x, group_count_y, 1);
+
+            // GENERAL -> SHADER_READ_ONLY_OPTIMAL, compute writes made
+            // visible to the fragment stage before the render pass begins.
+            procedural_image->End_write(command_buffer);
         }
 
         // ── Render pass ───────────────────────────────────────────
@@ -1102,8 +1212,10 @@ namespace Renderer_System
 
     void Renderer::Init_descriptor_pool()
     {
-        // One uniform buffer and one storage buffer descriptor per frame-in-flight.
-        std::array<VkDescriptorPoolSize, 2> pool_sizes{};
+        // Set 0: one uniform buffer and one storage buffer descriptor per
+        // frame-in-flight. Set 1: one storage image descriptor for the
+        // procedural pass (per_pass_set, shared by every frame slot).
+        std::array<VkDescriptorPoolSize, 3> pool_sizes{};
 
         pool_sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         pool_sizes[0].descriptorCount = FRAMES_IN_FLIGHT;
@@ -1111,11 +1223,14 @@ namespace Renderer_System
         pool_sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         pool_sizes[1].descriptorCount = FRAMES_IN_FLIGHT;
 
+        pool_sizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        pool_sizes[2].descriptorCount = 1;
+
         VkDescriptorPoolCreateInfo pool_info{};
         pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pool_info.poolSizeCount = static_cast<uint32_t>(pool_sizes.size());
         pool_info.pPoolSizes = pool_sizes.data();
-        pool_info.maxSets = FRAMES_IN_FLIGHT;   // one set 0 per frame slot
+        pool_info.maxSets = FRAMES_IN_FLIGHT + 1;   // one set 0 per frame slot + one set 1
 
         VK_CHECK(vkCreateDescriptorPool(device.Get_logical_device_handle(), &pool_info, nullptr, &descriptor_pool),
             "Renderer: failed to create descriptor pool");

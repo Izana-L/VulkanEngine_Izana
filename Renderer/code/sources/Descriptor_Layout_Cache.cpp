@@ -18,7 +18,7 @@ namespace Renderer_System
         try
         {
             layouts[Descriptor_Set::Per_Frame] = Create_per_frame_layout();
-            layouts[Descriptor_Set::Per_Pass] = Create_empty_layout();
+            layouts[Descriptor_Set::Per_Pass] = Create_per_pass_layout();
             layouts[Descriptor_Set::Per_Material] = Create_empty_layout();
         }
         catch (...)
@@ -36,8 +36,7 @@ namespace Renderer_System
 
     Descriptor_Layout_Cache::~Descriptor_Layout_Cache()
     {
-        // 0..2 son nuestros. El 3 es de Bindless_Registry: destruirlo aqui
-        // seria un doble-destroy cuando el registro corra su destructor.
+       
         for (uint32_t set = 0; set < Descriptor_Set::Bindless; ++set)
         {
             if (layouts[set] != VK_NULL_HANDLE)
@@ -61,22 +60,13 @@ namespace Renderer_System
     {
         std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
 
-        // binding 0 — Frame_UBO: vista, proyeccion, view_projection,
-        // posicion de camara y numero de luces (espejo de frame_set.glsl).
-        // Visible en las tres etapas: el vertex usa las matrices, el
-        // fragment usa camera_position y light_count, y el compute queda
-        // disponible para pasadas que dependan de la camara (culling,
-        // iluminacion por tiles).
+       
         bindings[0].binding = Binding_Per_Frame::Frame_UBO;
         bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         bindings[0].descriptorCount = 1;
         bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
 
-        // binding 1 — array de luces. STORAGE_BUFFER, no UNIFORM_BUFFER:
-        // maxUniformBufferRange garantiza solo 16 KB, maxStorageBufferRange
-        // al menos 128 MB, y un SSBO admite array de tamano no declarado.
-        // Visible en fragment (sombreado) y en compute (pasadas que
-        // recorren las luces, p. ej. su asignacion por tiles).
+        
         bindings[1].binding = Binding_Per_Frame::Lights;
         bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[1].descriptorCount = 1;
@@ -93,7 +83,32 @@ namespace Renderer_System
         return layout;
     }
 
-    // ---------- sets 1 y 2 : reservados ----------
+    // ---------- set 1 : per pass ----------
+    VkDescriptorSetLayout Descriptor_Layout_Cache::Create_per_pass_layout()
+    {
+        std::array<VkDescriptorSetLayoutBinding, 1> bindings{};
+
+        // binding 0 — output of procedural.comp. STORAGE_IMAGE, accessed in
+        // layout GENERAL between Storage_Image::Begin_write and End_write.
+        // Compute stage only: the graphics pipelines read the same image
+        // through its bindless slot (set 3), as a sampled image.
+        bindings[0].binding = Binding_Per_Pass::Procedural_Output;
+        bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        bindings[0].descriptorCount = 1;
+        bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+        VkDescriptorSetLayoutCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        info.bindingCount = static_cast<uint32_t>(bindings.size());
+        info.pBindings = bindings.data();
+
+        VkDescriptorSetLayout layout = VK_NULL_HANDLE;
+        VK_CHECK(vkCreateDescriptorSetLayout(device_handle, &info, nullptr, &layout),
+            "Descriptor_Layout_Cache: failed to create the set 1 layout");
+        return layout;
+    }
+
+    // ---------- set 2 : reserved ----------
     VkDescriptorSetLayout Descriptor_Layout_Cache::Create_empty_layout()
     {
         VkDescriptorSetLayoutCreateInfo info{};

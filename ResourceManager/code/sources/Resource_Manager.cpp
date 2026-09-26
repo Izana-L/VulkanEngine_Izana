@@ -266,6 +266,25 @@ namespace ResourceManager
         return Get_image_entry(_handle, "Get_image_data").data;
     }
 
+    CoreTypes::Asset_Handle Resource_Manager::Register_external_image(const std::string& _name, uint32_t _gpu_id)
+    {
+        // Validated before any entry is created, so a rejected call leaves
+        // no image without a gpu id behind.
+        if (_gpu_id == INVALID_GPU_ID)
+            throw std::invalid_argument("Resource_Manager::Register_external_image: INVALID_GPU_ID is not a valid gpu id");
+
+        // Empty ImageData: the pixels exist only on the GPU. The source
+        // carries a prefix so logs and errors never mistake it for a path.
+        const CoreTypes::Asset_Handle handle = Register_image(CoreTypes::ImageData{}, "external:" + _name);
+
+        Register_image_gpu_id(handle, _gpu_id);
+
+        std::cout << "[Resource_Manager] External image '" << _name << "' registered as image id "
+            << handle.id << " (gpu_id " << _gpu_id << ")\n";
+
+        return handle;
+    }
+
     // =========================================================
     // Internal helpers
     // =========================================================
