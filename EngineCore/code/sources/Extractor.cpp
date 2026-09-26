@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <iostream>
 #include <limits>
 
 namespace EngineCore
@@ -138,8 +139,26 @@ namespace EngineCore
                     item.base_color = material->base_color_factor;
 
                     // The preset value is already the slot in the bindless
-                    // sampler array; no translation is needed.
-                    item.albedo_sampler_index = static_cast<uint32_t>(material->sampler);
+                    // sampler array; no translation is needed. A value that
+                    // is not a preset (Count itself, or corrupt material
+                    // data) would index a sampler slot that was never
+                    // written, which is undefined behaviour on the GPU:
+                    // such a material keeps the default preset, and the
+                    // first one is reported.
+                    const uint32_t sampler_index = static_cast<uint32_t>(material->sampler);
+
+                    if (sampler_index < static_cast<uint32_t>(CoreTypes::Sampler_Preset::Count))
+                    {
+                        item.albedo_sampler_index = sampler_index;
+                    }
+                    else if (!warned_invalid_sampler)
+                    {
+                        std::cerr << "[Extractor] Material of entity " << ECS::Entity_index(entity)
+                                  << " selects sampler preset " << sampler_index << ", which does not exist ("
+                                  << static_cast<uint32_t>(CoreTypes::Sampler_Preset::Count)
+                                  << " presets); Linear_Repeat is used instead. Further occurrences are not reported.\n";
+                        warned_invalid_sampler = true;
+                    }
 
                     // Albedo not assigned: stays White. Assigned but with no
                     // GPU index (never uploaded, or a stale handle): Error,

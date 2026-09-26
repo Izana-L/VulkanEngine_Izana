@@ -1,8 +1,11 @@
 #include <Vulkan_Instance.hpp>
+#include <Descriptor_Sets.hpp>
+#include <array>
 #include <stdexcept>
 #include <iostream>
 #include <cstring>
 #include <cassert>
+#include <string_view>
 #include <unordered_set>
 
 namespace Renderer_System 
@@ -47,6 +50,198 @@ namespace Renderer_System
                 names.insert(extension.extensionName);
 
             return names;
+        }
+
+        // maxBoundDescriptorSets of one physical device, with the UUID that
+        // identifies the same device across different instances.
+        struct Device_Set_Limit
+        {
+            std::array<uint8_t, VK_UUID_SIZE> uuid{};
+            uint32_t                          max_bound_descriptor_sets = 0;
+        };
+
+        // Reads Device_Set_Limit for every physical device of _instance,
+        // which must have been created with API version 1.1 or later
+        // (vkGetPhysicalDeviceProperties2 and the device UUID are core in
+        // 1.1). Devices below 1.1 are skipped: the engine requires 1.3 and
+        // never selects them. The limit comes from
+        // vkGetPhysicalDeviceProperties, the same query Vulkan_Device uses,
+        // so it is the value device selection sees.
+        std::vector<Device_Set_Limit> Query_descriptor_set_limits(VkInstance _instance)
+        {
+            uint32_t device_count = 0;
+            VK_CHECK(vkEnumeratePhysicalDevices(_instance, &device_count, nullptr),
+                "Vulkan_Instance: enumerate physical devices");
+
+            std::vector<VkPhysicalDevice> devices(device_count);
+            VK_CHECK(vkEnumeratePhysicalDevices(_instance, &device_count, devices.data()),
+                "Vulkan_Instance: enumerate physical devices");
+
+            std::vector<Device_Set_Limit> limits;
+            limits.reserve(device_count);
+
+            for (VkPhysicalDevice device : devices)
+            {
+                VkPhysicalDeviceProperties properties{};
+                vkGetPhysicalDeviceProperties(device, &properties);
+
+                if (properties.apiVersion < VK_API_VERSION_1_1)
+                    continue;
+
+                VkPhysicalDeviceIDProperties id_properties{};
+                id_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
+
+                VkPhysicalDeviceProperties2 properties2{};
+                properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+                properties2.pNext = &id_properties;
+
+                vkGetPhysicalDeviceProperties2(device, &properties2);
+
+                Device_Set_Limit limit;
+                std::memcpy(limit.uuid.data(), id_properties.deviceUUID, VK_UUID_SIZE);
+                limit.max_bound_descriptor_sets = properties.limits.maxBoundDescriptorSets;
+                limits.push_back(limit);
+            }
+
+            return limits;
+        }
+
+        // Reads the real limits of every physical device through a
+        // temporary instance created without layers or extensions, so no
+        // validation layer can adjust them. Returns false if that instance
+        // cannot be created or queried. A layer forced on from outside the
+        // engine (Vulkan Configurator, VK_INSTANCE_LAYERS) also loads into
+        // this instance; its limits are then not the real ones.
+        bool Query_layerless_descriptor_set_limits(uint32_t _api_version, std::vector<Device_Set_Limit>& _out_limits)
+        {
+            VkApplicationInfo app_info{};
+            app_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+            app_info.apiVersion = _api_version;
+
+            VkInstanceCreateInfo create_info{};
+            create_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+            create_info.pApplicationInfo = &app_info;
+
+            VkInstance probe = VK_NULL_HANDLE;
+            if (vkCreateInstance(&create_info, nullptr, &probe) != VK_SUCCESS)
+                return false;
+
+            bool queried = true;
+
+            try
+            {
+                _out_limits = Query_descriptor_set_limits(probe);
+            }
+            catch (const std::exception&)
+            {
+                queried = false;
+            }
+
+            vkDestroyInstance(probe, nullptr);
+            return queried;
+        }
+
+        // Decides, before the real instance is created, whether GPU-AV can
+        // be requested without changing which GPUs are usable. GPU-AV
+        // reserves the highest descriptor set slot of every device, and
+        // the layer reports maxBoundDescriptorSets minus one. A device with
+        // exactly Descriptor_Set::Count slots would then report fewer than
+        // the engine binds and be rejected by Vulkan_Device, turning a
+        // validation option into "no suitable GPU". Such a device, or
+        // limits that cannot be read, degrade the mode to standard
+        // validation, with the reason logged. _out_layerless_limits keeps
+        // the real limits for Confirm_gpu_av_applied.
+        bool Gpu_av_has_descriptor_set_room(uint32_t _api_version, std::vector<Device_Set_Limit>& _out_layerless_limits)
+        {
+            if (_api_version < VK_API_VERSION_1_1)
+            {
+                std::cerr << "[Vulkan_instance] GPU-assisted validation requested, but the real descriptor set limits "
+                    "cannot be read below Vulkan 1.1 - falling back to standard validation.\n";
+                return false;
+            }
+
+            if (!Query_layerless_descriptor_set_limits(_api_version, _out_layerless_limits))
+            {
+                std::cerr << "[Vulkan_instance] GPU-assisted validation requested, but a temporary instance to read the "
+                    "real descriptor set limits could not be created - falling back to standard validation.\n";
+                return false;
+            }
+
+            for (const Device_Set_Limit& limit : _out_layerless_limits)
+            {
+                if (limit.max_bound_descriptor_sets == Descriptor_Set::Count)
+                {
+                    std::cerr << "[Vulkan_instance] GPU-assisted validation requested, but a GPU has exactly "
+                        << Descriptor_Set::Count << " descriptor set slots (maxBoundDescriptorSets), all of them bound by "
+                        "the engine: the slot GPU-AV reserves would make that GPU unsuitable - falling back to standard "
+                        "validation.\n";
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        // Verifies, once the real instance exists, that the validation
+        // layer applied the GPU-AV settings. The layer ignores settings it
+        // does not recognize without any error (their names have changed
+        // between SDK releases), so the request alone proves nothing. The
+        // reserved descriptor set slot is an observable effect: with GPU-AV
+        // active, maxBoundDescriptorSets read through the layer is lower
+        // than the real value read in Gpu_av_has_descriptor_set_room.
+        //   lower on any device    -> applied: returns true;
+        //   equal on every device  -> ignored: returns false;
+        //   no device to compare   -> unknown: returns true, and says so.
+        bool Confirm_gpu_av_applied(VkInstance _instance, const std::vector<Device_Set_Limit>& _layerless_limits,
+                                    const std::string& _configured_through)
+        {
+            std::vector<Device_Set_Limit> layered_limits;
+
+            try
+            {
+                layered_limits = Query_descriptor_set_limits(_instance);
+            }
+            catch (const std::exception& _error)
+            {
+                std::cout << "[Vulkan_instance] GPU-assisted validation requested through " << _configured_through
+                    << "; not confirmed, the limits could not be read through the layer (" << _error.what() << ").\n";
+                return true;
+            }
+
+            bool compared = false;
+
+            for (const Device_Set_Limit& layered : layered_limits)
+            {
+                for (const Device_Set_Limit& layerless : _layerless_limits)
+                {
+                    if (layered.uuid != layerless.uuid)
+                        continue;
+
+                    compared = true;
+
+                    if (layered.max_bound_descriptor_sets < layerless.max_bound_descriptor_sets)
+                    {
+                        std::cout << "[Vulkan_instance] GPU-assisted validation ENABLED (slow), configured through "
+                            << _configured_through << ". Confirmed: the layer reserves descriptor set slot "
+                            << layered.max_bound_descriptor_sets << ".\n";
+                        return true;
+                    }
+                }
+            }
+
+            if (!compared)
+            {
+                std::cout << "[Vulkan_instance] GPU-assisted validation requested through " << _configured_through
+                    << "; not confirmed, no GPU could be matched between the instance with and without layers.\n";
+                return true;
+            }
+
+            std::cerr << "[Vulkan_instance] GPU-assisted validation requested through " << _configured_through
+                << ", but the validation layer ignored the settings (maxBoundDescriptorSets has no reserved slot) - "
+                "only standard validation is active. The setting names are those of the khronos_validation "
+                "documentation of the installed SDK. A validation layer forced on from outside the engine (Vulkan "
+                "Configurator, VK_INSTANCE_LAYERS) also makes this comparison impossible.\n";
+            return false;
         }
     }
 
@@ -98,9 +293,11 @@ namespace Renderer_System
         : instance(VK_NULL_HANDLE),
         debug_messenger(VK_NULL_HANDLE),
         validation_enabled(_validation_mode != Validation_Mode::Off),
-        gpu_assisted_enabled(_validation_mode == Validation_Mode::Gpu_Assisted),
         surface_maintenance1_enabled(false),
-        api_version(0) {
+        gpu_assisted_enabled(_validation_mode == Validation_Mode::Gpu_Assisted),
+        api_version(0),
+        enabled_extensions(),
+        debug_state(std::make_unique<Debug_Report_State>()) {
 
         std::vector<const char*> required_layers = Get_required_validation_layers();
 
@@ -118,6 +315,14 @@ namespace Renderer_System
         // actually supports, instead of blindly requesting 1.3 and letting
         // vkCreateInstance fail on older drivers.
         api_version = Determine_api_version(VK_API_VERSION_1_3);
+
+        // Real descriptor set limits, read before any layer is involved.
+        // Decides whether GPU-AV can be requested at all, and is the
+        // reference the confirmation after vkCreateInstance compares with.
+        std::vector<Device_Set_Limit> layerless_limits;
+
+        if (gpu_assisted_enabled)
+            gpu_assisted_enabled = Gpu_av_has_descriptor_set_room(api_version, layerless_limits);
 
         // VkApplicationInfo: descriptive metadata about this application.
         // Some drivers use the engine/app name+version to apply known,
@@ -147,28 +352,42 @@ namespace Renderer_System
         // GPU-AV configuration, chained via pNext below when
         // gpu_assisted_enabled. Declared at this scope because pNext only
         // stores pointers: every struct in the chain must stay alive until
-        // vkCreateInstance returns. Only one of the two is chained, the one
-        // matching the extension Select_extensions enabled:
-        //   - VK_EXT_layer_settings: layer setting "gpuav_enable". Setting
-        //     names have changed between SDK releases; the reference is the
-        //     khronos_validation documentation of the installed SDK.
-        //   - VK_EXT_validation_features (deprecated): the equivalent flag,
-        //     plus RESERVE_BINDING_SLOT, which makes the layer report
-        //     maxBoundDescriptorSets minus one, so the slot GPU-AV takes
-        //     for itself is never offered to the application.
+        // vkCreateInstance returns. Each of the two is chained when
+        // Select_extensions enabled its extension, both when both are
+        // available, so GPU-AV is requested through whichever mechanism
+        // the installed layer honours:
+        //   - VK_EXT_layer_settings: settings "gpuav_enable" and
+        //     "gpuav_reserve_binding_slot". Setting names have changed
+        //     between SDK releases and the layer ignores the ones it does
+        //     not know; the reference is the khronos_validation
+        //     documentation of the installed SDK. The reserved slot is
+        //     requested explicitly, not left to the default, because
+        //     Confirm_gpu_av_applied detects GPU-AV through it.
+        //   - VK_EXT_validation_features (deprecated): the GPU-AV flag plus
+        //     RESERVE_BINDING_SLOT, with the same meaning.
+        // With the reserved slot the layer reports maxBoundDescriptorSets
+        // minus one, so the slot GPU-AV takes for itself is never offered
+        // to the application.
         const VkBool32 gpu_av_enable = VK_TRUE;
 
-        VkLayerSettingEXT gpu_av_setting{};
-        gpu_av_setting.pLayerName = validation_layers.front();
-        gpu_av_setting.pSettingName = "gpuav_enable";
-        gpu_av_setting.type = VK_LAYER_SETTING_TYPE_BOOL32_EXT;
-        gpu_av_setting.valueCount = 1;
-        gpu_av_setting.pValues = &gpu_av_enable;
+        std::array<VkLayerSettingEXT, 2> gpu_av_settings{};
+
+        gpu_av_settings[0].pLayerName = validation_layers.front();
+        gpu_av_settings[0].pSettingName = "gpuav_enable";
+        gpu_av_settings[0].type = VK_LAYER_SETTING_TYPE_BOOL32_EXT;
+        gpu_av_settings[0].valueCount = 1;
+        gpu_av_settings[0].pValues = &gpu_av_enable;
+
+        gpu_av_settings[1].pLayerName = validation_layers.front();
+        gpu_av_settings[1].pSettingName = "gpuav_reserve_binding_slot";
+        gpu_av_settings[1].type = VK_LAYER_SETTING_TYPE_BOOL32_EXT;
+        gpu_av_settings[1].valueCount = 1;
+        gpu_av_settings[1].pValues = &gpu_av_enable;
 
         VkLayerSettingsCreateInfoEXT layer_settings_info{};
         layer_settings_info.sType = VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT;
-        layer_settings_info.settingCount = 1;
-        layer_settings_info.pSettings = &gpu_av_setting;
+        layer_settings_info.settingCount = static_cast<uint32_t>(gpu_av_settings.size());
+        layer_settings_info.pSettings = gpu_av_settings.data();
 
         const VkValidationFeatureEnableEXT gpu_av_features[] =
         {
@@ -194,6 +413,7 @@ namespace Renderer_System
                 VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
                 VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
             debug_create_info.pfnUserCallback = Debug_callback;
+            debug_create_info.pUserData = debug_state.get();
 
             // pNext is Vulkan's mechanism for "extending" a struct with
             // additional data without changing its original definition.
@@ -211,7 +431,8 @@ namespace Renderer_System
                     layer_settings_info.pNext = create_info.pNext;
                     create_info.pNext = &layer_settings_info;
                 }
-                else if (Is_extension_enabled(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME)) 
+
+                if (Is_extension_enabled(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME)) 
                 {
                     validation_features.pNext = create_info.pNext;
                     create_info.pNext = &validation_features;
@@ -231,11 +452,24 @@ namespace Renderer_System
 
         Log_activated_extensions_and_layers(extensions, validation_enabled ? required_layers : std::vector<const char*>{});
 
+        // The request alone does not prove GPU-AV is active: the layer
+        // ignores settings it does not recognize. Confirm_gpu_av_applied
+        // checks its observable effect and logs the outcome. From here on
+        // the constructor must not throw: the destructor would not run and
+        // the instance would leak, so the check reports failures instead of
+        // propagating them.
         if (gpu_assisted_enabled) 
         {
-            std::cout << "[Vulkan_instance] GPU-assisted validation ENABLED (slow), configured through "
-                      << (Is_extension_enabled(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME) ? VK_EXT_LAYER_SETTINGS_EXTENSION_NAME : VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME)
-                      << ".\n";
+            std::string configured_through;
+
+            for (const char* name : { VK_EXT_LAYER_SETTINGS_EXTENSION_NAME, VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME })
+            {
+                if (!Is_extension_enabled(name)) continue;
+                configured_through += configured_through.empty() ? "" : " and ";
+                configured_through += name;
+            }
+
+            gpu_assisted_enabled = Confirm_gpu_av_applied(instance, layerless_limits, configured_through);
         }
 
         // Only now create the "permanent" debug messenger, active for the
@@ -272,10 +506,11 @@ namespace Renderer_System
         : instance(_other.instance),
         debug_messenger(_other.debug_messenger),
         validation_enabled(_other.validation_enabled),
-        gpu_assisted_enabled(_other.gpu_assisted_enabled),
         surface_maintenance1_enabled(_other.surface_maintenance1_enabled),
+        gpu_assisted_enabled(_other.gpu_assisted_enabled),
         api_version(_other.api_version),
-        enabled_extensions(std::move(_other.enabled_extensions)) {
+        enabled_extensions(std::move(_other.enabled_extensions)),
+        debug_state(std::move(_other.debug_state)) {
 
         // Leave the moved-from object in a valid empty state so its
         // destructor doesn't try to destroy handles "this" now owns.
@@ -298,6 +533,10 @@ namespace Renderer_System
             api_version = _other.api_version;
             enabled_extensions = std::move(_other.enabled_extensions);
 
+            // After Destroy(): the messenger that pointed at the previous
+            // state is already gone when that state is freed here.
+            debug_state = std::move(_other.debug_state);
+
             _other.instance = VK_NULL_HANDLE;
             _other.debug_messenger = VK_NULL_HANDLE;
         }
@@ -319,7 +558,9 @@ namespace Renderer_System
     // ---------- Is_gpu_assisted_validation_enabled ----------
     bool Vulkan_Instance::Is_gpu_assisted_validation_enabled() const
     {
-        return gpu_assisted_enabled;
+        return gpu_assisted_enabled &&
+               debug_state != nullptr &&
+               !debug_state->gpu_av_problem_reported.load(std::memory_order_relaxed);
     }
     bool Vulkan_Instance::Is_surface_maintenance1_enabled() const
     {
@@ -420,25 +661,29 @@ namespace Renderer_System
                 "will not be reported through the debug messenger.\n";
         }
 
-        // GPU-AV is configured through an extension the validation layer
-        // provides itself, so it is looked up in the layer's own list, not
-        // in `available`. VK_EXT_layer_settings is preferred;
-        // VK_EXT_validation_features is deprecated and only kept as a
-        // fallback for SDKs that predate the former. Without either, the
-        // mode degrades to standard validation.
+        // GPU-AV is configured through extensions the validation layer
+        // provides itself, so they are looked up in the layer's own list,
+        // not in `available`. Every one the layer exposes is enabled:
+        // VK_EXT_layer_settings carries named settings whose names have
+        // changed between SDK releases, VK_EXT_validation_features
+        // (deprecated) carries fixed enum values that every layer version
+        // that exposes it understands. Requesting through both covers
+        // either kind of SDK. Without either, the mode degrades to
+        // standard validation.
         if (gpu_assisted_enabled) 
         {
             const std::unordered_set<std::string> layer_extensions = Enumerate_instance_extensions(validation_layers.front());
 
-            if (layer_extensions.count(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME) != 0) 
-            {
+            const bool layer_settings = layer_extensions.count(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME) != 0;
+            const bool validation_features = layer_extensions.count(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME) != 0;
+
+            if (layer_settings)
                 extensions.push_back(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME);
-            }
-            else if (layer_extensions.count(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME) != 0) 
-            {
+
+            if (validation_features)
                 extensions.push_back(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
-            }
-            else 
+
+            if (!layer_settings && !validation_features) 
             {
                 std::cerr << "[Vulkan_instance] GPU-assisted validation requested but the validation layer exposes "
                     "neither VK_EXT_layer_settings nor VK_EXT_validation_features - falling back to standard validation.\n";
@@ -543,6 +788,7 @@ namespace Renderer_System
             VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
             VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
         create_info.pfnUserCallback = Debug_callback;
+        create_info.pUserData = debug_state.get();
 
         VkResult result = Create_debug_utils_messenger_ext(instance, &create_info, nullptr, &debug_messenger);
         if (result != VK_SUCCESS) {
@@ -556,12 +802,29 @@ namespace Renderer_System
         VkDebugUtilsMessageSeverityFlagBitsEXT _severity,
         VkDebugUtilsMessageTypeFlagsEXT /*_type*/,
         const VkDebugUtilsMessengerCallbackDataEXT* _callback_data,
-        void* /*_user_data*/) {
+        void* _user_data) {
 
         // Only print warnings and errors - verbose/info messages are
         // extremely noisy (internal layer logging) and rarely useful day-to-day.
         if (_severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
             std::cerr << "[Vulkan Validation] " << _callback_data->pMessage << "\n";
+
+            // GPU-AV setup problems (a missing device feature, no free
+            // descriptor set slot, an internal error that makes GPU-AV
+            // disable itself) carry an identifier naming GPU-assisted
+            // validation; the findings of the checks themselves carry the
+            // VUID of the rule they break. Recording the former is how
+            // Is_gpu_assisted_validation_enabled() learns that GPU-AV is
+            // no longer active.
+            Debug_Report_State* state = static_cast<Debug_Report_State*>(_user_data);
+            const char* id_name = _callback_data->pMessageIdName;
+
+            if (state != nullptr && id_name != nullptr) {
+                const std::string_view id(id_name);
+
+                if (id.find("GPU-Assisted") != std::string_view::npos || id.find("GPU-AV") != std::string_view::npos)
+                    state->gpu_av_problem_reported.store(true, std::memory_order_relaxed);
+            }
         }
 
         // VK_FALSE means "don't abort the Vulkan call that triggered this

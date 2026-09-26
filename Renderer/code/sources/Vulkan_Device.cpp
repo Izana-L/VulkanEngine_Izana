@@ -34,6 +34,57 @@ namespace Renderer_System {
 
             return names;
         }
+
+        // Every requirement of Is_device_suitable that _support fails, in
+        // words, for the error raised when no GPU qualifies. Empty when the
+        // device is suitable; Is_device_suitable is defined as exactly that,
+        // so the message and the decision cannot disagree.
+        std::vector<std::string> Find_missing_requirements(const Device_Support& _support)
+        {
+            std::vector<std::string> missing;
+
+            // Extended dynamic state (vkCmdSetCullMode, vkCmdSetDepthTestEnable, ...)
+            // is core AND required in Vulkan 1.3 - no feature bit, no extension.
+            // Vulkan_Instance::Determine_api_version caps the *instance* version;
+            // this is the *device* version, which is what actually gates those
+            // entry points.
+            if (_support.api_version < VK_API_VERSION_1_3)
+                missing.push_back("Vulkan 1.3");
+
+            if (!_support.queue_families.graphics_family.has_value())
+                missing.push_back("a queue family with graphics and compute");
+
+            if (!_support.queue_families.present_family.has_value())
+                missing.push_back("a queue family that can present to the window surface");
+
+            if (!_support.swapchain_extension)
+                missing.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+            else if (!_support.surface_adequate)
+                missing.push_back("a surface format and a present mode for the window");
+
+            // Bindless textures are not optional in this renderer: every
+            // pipeline layout carries the bindless set and the fragment
+            // shader indexes it. A device that cannot do it is not
+            // selected, so Bindless_Registry never has to run on a device
+            // without support.
+            if (!_support.bindless)
+                missing.push_back("the descriptor indexing features of bindless textures");
+
+            if (!_support.vertex_formats)
+                missing.push_back("the vertex buffer formats of Vulkan_Vertex_Layout");
+
+            // Every pipeline layout declares Descriptor_Set::Count sets
+            // (0-3). The specification guarantees at least 4. The value is
+            // the one the instance reports: with GPU-assisted validation,
+            // the layer reports one slot less than the device has, but
+            // Vulkan_Instance only enables GPU-AV when no device would drop
+            // below Descriptor_Set::Count because of it.
+            if (_support.max_bound_descriptor_sets < Descriptor_Set::Count)
+                missing.push_back(std::to_string(Descriptor_Set::Count) + " bindable descriptor sets (reports " +
+                                  std::to_string(_support.max_bound_descriptor_sets) + ")");
+
+            return missing;
+        }
     }
 
     // ---------- Constructor ----------
@@ -60,6 +111,10 @@ namespace Renderer_System {
         VkPhysicalDevice best_device = VK_NULL_HANDLE;
         Device_Support best_support;
 
+        // What each rejected GPU lacks, so the error names the actual cause
+        // instead of listing every requirement.
+        std::string rejections;
+
         for (VkPhysicalDevice candidate : available_devices) {
             const Device_Support support = Query_device_support(candidate, surface_handle, _instance);
             const uint32_t score = Rate_device_suitability(candidate, support);
@@ -68,12 +123,20 @@ namespace Renderer_System {
                 best_device = candidate;
                 best_support = support;
             }
+
+            const std::vector<std::string> missing = Find_missing_requirements(support);
+            if (!missing.empty()) {
+                VkPhysicalDeviceProperties properties{};
+                vkGetPhysicalDeviceProperties(candidate, &properties);
+
+                rejections += "\n  " + std::string(properties.deviceName) + " lacks: ";
+                for (size_t i = 0; i < missing.size(); ++i)
+                    rejections += (i == 0 ? "" : ", ") + missing[i];
+            }
         }
 
         if (best_device == VK_NULL_HANDLE)
-            throw std::runtime_error("No suitable GPU found (Vulkan 1.3, a present-capable queue, "
-                "VK_KHR_swapchain, descriptor indexing features and at least " +
-                std::to_string(Descriptor_Set::Count) + " bindable descriptor sets are required)");
+            throw std::runtime_error("No suitable GPU found." + rejections);
                 
         physical_device = best_device;
         queue_family_indices = best_support.queue_families;
@@ -122,18 +185,14 @@ namespace Renderer_System {
             << bindless_limits.max_per_stage_resources << "/stage; descriptors in all pools "
             << bindless_limits.max_descriptors_in_all_pools << ".\n";
 
+        // With GPU-assisted validation the reported value already excludes
+        // the slot the layer reserves for itself (it sits right above the
+        // reported ones), so any value accepted by device selection leaves
+        // GPU-AV its own slot; Vulkan_Instance guarantees no device drops
+        // below Descriptor_Set::Count because of it.
         std::cout << "[Vulkan_Device] Bindable descriptor sets: " << best_support.max_bound_descriptor_sets
+            << (_instance.Is_gpu_assisted_validation_enabled() ? " (after the slot reserved by GPU-assisted validation)" : "")
             << " (the engine uses " << Descriptor_Set::Count << ").\n";
-
-        // GPU-AV binds a descriptor set of its own in the highest slot the
-        // device reports. With exactly Descriptor_Set::Count slots that
-        // slot may be the bindless set; the layer's own messages then say
-        // whether it could instrument the shaders.
-        if (_instance.Is_gpu_assisted_validation_enabled() &&
-            best_support.max_bound_descriptor_sets == Descriptor_Set::Count) {
-            std::cerr << "[Vulkan_Device] GPU-assisted validation is on, but maxBoundDescriptorSets equals the "
-                << Descriptor_Set::Count << " sets the engine uses: GPU-AV may have no free slot.\n";
-        }
 
         // ── Extensions ────────────────────────────────────────────
         std::vector<const char*> device_extensions = required_device_extensions;
@@ -219,8 +278,18 @@ namespace Renderer_System {
         device_create_info.enabledExtensionCount = static_cast<uint32_t>(device_extensions.size());
         device_create_info.ppEnabledExtensionNames = device_extensions.data();
 
+        // GPU-AV checks the device features it needs during vkCreateDevice
+        // and disables itself, with a message, when one is missing; the
+        // instance records that message (Vulkan_Instance::Debug_callback).
+        const bool gpu_av_before_device = _instance.Is_gpu_assisted_validation_enabled();
+
         VK_CHECK(vkCreateDevice(physical_device, &device_create_info, nullptr, &logical_device),
             "Failed to create logical device");
+
+        if (gpu_av_before_device && !_instance.Is_gpu_assisted_validation_enabled()) {
+            std::cerr << "[Vulkan_Device] The validation layer reported a GPU-assisted validation problem while "
+                "creating the device (see its message above): GPU-AV checks may be inactive.\n";
+        }
 
         vkGetDeviceQueue(logical_device,
             queue_family_indices.graphics_family.value(), 0, &graphics_queue);
@@ -498,27 +567,10 @@ namespace Renderer_System {
     // ---------- Is_device_suitable ----------
     bool Vulkan_Device::Is_device_suitable(const Device_Support& _support) const
     {
-        // Extended dynamic state (vkCmdSetCullMode, vkCmdSetDepthTestEnable, ...)
-        // is core AND required in Vulkan 1.3 - no feature bit, no extension.
-        // Vulkan_Instance::Determine_api_version caps the *instance* version;
-        // this is the *device* version, which is what actually gates those
-        // entry points.
-        const bool api_1_3_supported = _support.api_version >= VK_API_VERSION_1_3;
-
-        // Every pipeline layout declares Descriptor_Set::Count sets (0-3).
-        // The spec guarantees at least 4, so this only rejects devices
-        // that report fewer, e.g. when a validation layer reserves a slot.
-        const bool enough_descriptor_sets = _support.max_bound_descriptor_sets >= Descriptor_Set::Count;
-
-        // Bindless textures are not optional in this renderer: every
-        // pipeline layout carries the bindless set and the fragment shader
-        // indexes it. A device that cannot do it is not selected, so
-        // Bindless_Registry never has to run on a device without support.
-        return api_1_3_supported && _support.queue_families.Is_complete()&& _support.swapchain_extension && 
-                                   _support.surface_adequate && _support.bindless && _support.vertex_formats && enough_descriptor_sets;
-            
-            
-            
+        // The requirements and their reasons live in
+        // Find_missing_requirements, which also words the error raised
+        // when no device qualifies.
+        return Find_missing_requirements(_support).empty();
     }
 
     // ---------- Find_queue_families ----------

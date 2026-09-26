@@ -10,6 +10,8 @@
 #include <cstring>
 #include <array>
 #include <cassert>
+#include <string>
+
 namespace Renderer_System
 {
 
@@ -74,7 +76,9 @@ namespace Renderer_System
                         pipeline_cache(device),
                         descriptor_layouts(device, bindless_registry.Get_layout()),
                         pipeline_layout(device, descriptor_layouts),
-                        pipeline_registry(device, render_pass,pipeline_cache.Get_handle(),pipeline_layout.Get_handle()),
+                        pipeline_registry(device, render_pass, pipeline_cache.Get_handle(), pipeline_layout.Get_handle()),
+                        compute_pipeline_layout(device, descriptor_layouts, VK_SHADER_STAGE_COMPUTE_BIT, static_cast<uint32_t>(sizeof(Procedural_Push_Constants))),
+                        procedural_pipeline(device, pipeline_cache.Get_handle(), compute_pipeline_layout.Get_handle(),"..\\..\\Renderer\\shaders\\compiled\\procedural.comp.spv"),
                         opaque_config(Make_opaque_config()),
                         transparent_config(Make_transparent_config()),
                         sampler_cache(device),
@@ -359,6 +363,19 @@ namespace Renderer_System
                 throw std::invalid_argument("Upload_batch: ImageData has no pixel data or zero dimensions");
         }
 
+        // Every texture of the batch needs a bindless slot after the
+        // submit. Checked here, before recording, so a full array rejects
+        // the batch while nothing has been created yet.
+        const uint32_t free_texture_slots = bindless_registry.Get_free_texture_count();
+
+        if (texture_count > free_texture_slots)
+        {
+            throw std::runtime_error("Upload_batch: the batch holds " + std::to_string(texture_count) +
+                                     " texture(s) but the bindless texture array has only " + std::to_string(free_texture_slots) +
+                                     " free slot(s); release unused slots or raise BINDLESS_DESIRED_TEXTURES, "
+                                     "within the device limits logged at startup");
+        }
+
         // Reserve before recording. Otherwise emplace_back can reallocate
         // mid-batch and move every Mesh_GPU / Texture_GPU already recorded.
         // Those moves are safe (both null out the source), but reserving
@@ -436,6 +453,12 @@ namespace Renderer_System
             // sampler array, by the material's preset. The bindless index,
             // not the registry index i, is what callers store and what
             // shaders use.
+            //
+            // Cannot throw, which keeps the strong guarantee although it
+            // runs after the submit: the free slots were checked before
+            // recording, the registry reserves storage for every slot at
+            // construction, the view of a constructed Texture_GPU is never
+            // null, and result.texture_bindless_indices was reserved above.
             result.texture_bindless_indices.push_back( bindless_registry.Register_texture(textures[i].Get_image_view()));
         }
 
@@ -610,12 +633,17 @@ namespace Renderer_System
         // ── Update per-frame buffers ──────────────────────────────
         Write_frame_uniforms(frame, _packet);
 
-        // ── Reset fence just before submit (not before acquire) ───
-        VK_CHECK(vkResetFences(dev, 1, &frame.in_flight_fence), "Render: reset frame fence");
-
         // ── Record commands ───────────────────────────────────────
         frame.command_pool.Reset_command_buffer(0);
         Record_command_buffer(frame, _packet, image_index);
+
+        // ── Reset fence just before submit (not before recording) ─
+        // Only a submit signals the fence again. Were it reset before
+        // recording, an exception thrown while recording would leave it
+        // unsignaled with no submit pending, and the next
+        // vkWaitForFences(UINT64_MAX) on this frame slot would never
+        // return.
+        VK_CHECK(vkResetFences(dev, 1, &frame.in_flight_fence), "Render: reset frame fence");
 
         // ── Submit ────────────────────────────────────────────────
         const VkPipelineStageFlags wait_stages[] = {
@@ -700,10 +728,21 @@ namespace Renderer_System
         const uint32_t light_count = (packet_lights > MAX_LIGHTS) ? MAX_LIGHTS : packet_lights;
         ubo.light_count = static_cast<int32_t>(light_count);
 
-        if (packet_lights > MAX_LIGHTS && !warned_invalid_item)
+        // Reported when the overflow starts and whenever the light count
+        // changes while it lasts, so a scene that stays over the limit
+        // does not print on every frame.
+        if (packet_lights > MAX_LIGHTS)
         {
-            std::cerr << "[Renderer] " << packet_lights << " lights in the packet, only the first "
-                << MAX_LIGHTS << " are uploaded.\n";
+            if (packet_lights != reported_light_overflow)
+            {
+                std::cerr << "[Renderer] " << packet_lights << " lights in the packet, only the first "
+                    << MAX_LIGHTS << " are uploaded.\n";
+                reported_light_overflow = packet_lights;
+            }
+        }
+        else
+        {
+            reported_light_overflow = 0;
         }
 
         // Lights go to their own buffer, written straight into the mapped
@@ -755,10 +794,47 @@ namespace Renderer_System
         //   - End_write must execute before any draw that may read the
         //     bindless set (declared layout rule,
         //     Bindless_Registry::Register_texture).
-        // Compute passes bind their pipeline and descriptor sets at
+                // Compute passes bind their pipeline and descriptor sets at
         // VK_PIPELINE_BIND_POINT_COMPUTE: the sets bound below for
         // GRAPHICS are not visible to dispatches, and binding compute sets
         // does not disturb them.
+
+        // ── Procedural texture pass (milestone 1.1: empty dispatch) ─
+        // Fixed size, independent of the swapchain: no recreation on
+        // resize. Replaced by the extent of the target Storage_Image once
+        // the pass writes one (milestone 1.2).
+        constexpr uint32_t PROCEDURAL_SIZE = 256;
+        constexpr uint32_t PROCEDURAL_GROUP_SIZE = 8;   // local_size_x / local_size_y of procedural.comp
+        {
+            vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, procedural_pipeline.Get_handle());
+
+            // Same set handles as the graphics pass: compute_pipeline_layout
+            // uses the same set layouts, so they are compatible. Set 1 is
+            // left unbound until the pass declares its storage image.
+            const VkDescriptorSet compute_per_frame_set = descriptor_sets[current_frame];
+            vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pipeline_layout.Get_handle(),
+                Descriptor_Set::Per_Frame, 1, &compute_per_frame_set, 0, nullptr);
+
+            const VkDescriptorSet compute_bindless_set = bindless_registry.Get_set();
+            vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pipeline_layout.Get_handle(),
+                Descriptor_Set::Bindless, 1, &compute_bindless_set, 0, nullptr);
+
+            Procedural_Push_Constants procedural_push{};
+            procedural_push.image_width = PROCEDURAL_SIZE;
+            procedural_push.image_height = PROCEDURAL_SIZE;
+            procedural_push.time = 0.0f;   // animated in milestone 1.3
+
+            // Stage flags must match the range of compute_pipeline_layout
+            // exactly (VK_SHADER_STAGE_COMPUTE_BIT).
+            vkCmdPushConstants(command_buffer, compute_pipeline_layout.Get_handle(), VK_SHADER_STAGE_COMPUTE_BIT,
+                0, sizeof(Procedural_Push_Constants), &procedural_push);
+
+            // Rounded up: a size that is not a multiple of the group size
+            // still covers every texel; the shader discards the excess.
+            const uint32_t group_count_x = (PROCEDURAL_SIZE + PROCEDURAL_GROUP_SIZE - 1) / PROCEDURAL_GROUP_SIZE;
+            const uint32_t group_count_y = (PROCEDURAL_SIZE + PROCEDURAL_GROUP_SIZE - 1) / PROCEDURAL_GROUP_SIZE;
+            vkCmdDispatch(command_buffer, group_count_x, group_count_y, 1);
+        }
 
         // ── Render pass ───────────────────────────────────────────
         std::array<VkClearValue, 2> clear_values{};
@@ -912,12 +988,37 @@ namespace Renderer_System
             push.albedo_texture_index = item.albedo_texture_index;
             push.albedo_sampler_index = item.albedo_sampler_index;
 
-            // Debug-only safety net. An index that was never registered reads
-            // an unwritten descriptor, which PARTIALLY_BOUND turns into
-            // undefined behaviour rather than a validation error; a released
-            // one reads the error texture or whatever texture reused the slot.
-            assert(bindless_registry.Is_texture_registered(push.albedo_texture_index) && "Draw_Item::albedo_texture_index is not a registered bindless texture slot");
-            assert(push.albedo_sampler_index < static_cast<uint32_t>(CoreTypes::Sampler_Preset::Count) && "Draw_Item::albedo_sampler_index is not a Sampler_Preset value");
+            // An index that was never registered reads an unwritten
+            // descriptor, which PARTIALLY_BOUND turns into undefined
+            // behaviour rather than a validation error, and without GPU-AV
+            // nothing reports it. Debug builds stop at the assert; every
+            // build replaces the index with a valid fallback before the
+            // push, so a bad index never reaches the shader: the error
+            // texture for a texture, the default preset for a sampler.
+            const bool texture_valid = bindless_registry.Is_texture_registered(push.albedo_texture_index);
+            const bool sampler_valid = push.albedo_sampler_index < static_cast<uint32_t>(CoreTypes::Sampler_Preset::Count);
+
+            assert(texture_valid && "Draw_Item::albedo_texture_index is not a registered bindless texture slot");
+            assert(sampler_valid && "Draw_Item::albedo_sampler_index is not a Sampler_Preset value");
+
+            if (!texture_valid || !sampler_valid)
+            {
+                if (!warned_invalid_material_index)
+                {
+                    std::cerr << "[Renderer] Draw item with texture index " << push.albedo_texture_index
+                        << " and sampler index " << push.albedo_sampler_index << " drawn with "
+                        << (texture_valid ? "its texture" : "the error texture") << " and "
+                        << (sampler_valid ? "its sampler" : "the default sampler")
+                        << ". Further occurrences are not reported.\n";
+                    warned_invalid_material_index = true;
+                }
+
+                if (!texture_valid)
+                    push.albedo_texture_index = CoreTypes::Default_Texture::Error;
+
+                if (!sampler_valid)
+                    push.albedo_sampler_index = static_cast<uint32_t>(CoreTypes::Sampler_Preset::Linear_Repeat);
+            }
 
             vkCmdPushConstants(_command_buffer, pipeline_layout.Get_handle(),
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,

@@ -98,10 +98,16 @@ namespace Renderer_System
         // _reader_stages is empty or holds a stage outside
         // Bindless_Reader_Pipeline_Stages (only those stages can read a
         // bindless slot). Throws std::runtime_error if the device does not
-        // support _format with optimal tiling as a storage image, a sampled
-        // image and a transfer destination. VK_FORMAT_R8G8B8A8_UNORM is
-        // guaranteed by the specification to support all three; sRGB
-        // formats rarely support storage.
+        // support _format with optimal tiling as a storage image, a
+        // transfer destination and a bindless texture
+        // (Vulkan_Image_Utils::Bindless_Sampled_Format_Features: sampled
+        // image with linear filtering, since any sampler preset may read
+        // the slot). VK_FORMAT_R8G8B8A8_UNORM and
+        // VK_FORMAT_R16G16B16A16_SFLOAT are guaranteed by the
+        // specification to support all of them; sRGB formats rarely
+        // support storage, and 32-bit float formats such as
+        // VK_FORMAT_R32G32B32A32_SFLOAT are not guaranteed linear
+        // filtering.
         Storage_Image(const Vulkan_Device& _device,
             VmaAllocator         _allocator,
             VkCommandBuffer      _command_buffer,

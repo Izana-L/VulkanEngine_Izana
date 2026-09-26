@@ -56,6 +56,31 @@ namespace Renderer_System
         // destroy those first. Safe with null handles.
         void Destroy_image(VmaAllocator _allocator, Image_Allocation& _image);
 
+        // Format features, with optimal tiling, that every image registered
+        // in the bindless texture array needs. The sampler is chosen per
+        // draw by the material, not by the texture, so any slot may be read
+        // with any CoreTypes::Sampler_Preset, the Linear_* ones included,
+        // and reading an image through a linear sampler requires
+        // SAMPLED_IMAGE_FILTER_LINEAR_BIT on its format. The 8-bit UNORM
+        // and SRGB color formats and R16G16B16A16_SFLOAT have both
+        // features guaranteed by the specification; the 32-bit float
+        // formats (R32_SFLOAT, R32G32B32A32_SFLOAT...) do not.
+        inline constexpr VkFormatFeatureFlags Bindless_Sampled_Format_Features =
+            VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+
+        // Throws std::runtime_error unless _format supports every feature in
+        // _required with optimal tiling on the physical device of _device.
+        // The message starts with _caller and lists the missing features.
+        // Enforced in every build: creating or using an image beyond the
+        // features of its format is invalid usage, and nothing guarantees
+        // a validation layer is present to report it.
+        void Require_optimal_tiling_features(
+            const Vulkan_Device& _device,
+            VkFormat             _format,
+            VkFormatFeatureFlags _required,
+            const char*          _caller
+        );
+
         // Creates a VkImageView for an existing VkImage. A VkImage is just
         // memory — the view tells Vulkan how to interpret it (format, which
         // mip levels and array layers are visible, 2D vs cubemap, etc.).
@@ -169,9 +194,15 @@ namespace Renderer_System
         // filtering). Leaves every mip level in SHADER_READ_ONLY_OPTIMAL layout
         // when done — no further transition needed after calling this.
         //
-        // Precondition: the image must support VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT
-        // for the given format (checked via assert in debug builds) and must
-        // already be in TRANSFER_DST_OPTIMAL layout (mip 0 freshly copied).
+        // Precondition: the image must already be in TRANSFER_DST_OPTIMAL
+        // layout (mip 0 freshly copied) and must have been created with
+        // TRANSFER_SRC and TRANSFER_DST usage.
+        //
+        // Throws std::runtime_error, before recording anything, if _format
+        // lacks any of BLIT_SRC, BLIT_DST or SAMPLED_IMAGE_FILTER_LINEAR with
+        // optimal tiling: the blits read and write the same image, and a
+        // blit with VK_FILTER_LINEAR requires linear filtering support on
+        // the source format.
         //
         // _command_buffer: must already be in the recording state
         void Generate_mipmaps(

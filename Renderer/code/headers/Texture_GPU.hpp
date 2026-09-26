@@ -52,6 +52,17 @@ namespace Renderer_System
         //   emissive), VK_FORMAT_R8G8B8A8_UNORM for data textures (normal,
         //   metallic-roughness, AO). Caller decides based on texture role —
         //   ImageData itself doesn't know its color space.
+        //
+        // Throws std::invalid_argument if _format is block-compressed or
+        // unsupported, or if _image_data.pixels does not hold exactly the
+        // bytes its dimensions, mip levels and _format need. Throws
+        // std::runtime_error if _format lacks, with optimal tiling, the
+        // features every bindless texture needs
+        // (Vulkan_Image_Utils::Bindless_Sampled_Format_Features) plus
+        // TRANSFER_DST, and the blit features when a mip chain is
+        // generated. On any exception every resource created so far is
+        // released, and the commands already recorded into _transfer_cmd
+        // must not be submitted.
         Texture_GPU(
             const Vulkan_Device& _device,
             VmaAllocator               _allocator,
@@ -85,6 +96,11 @@ namespace Renderer_System
         VkFormat    Get_format()      const;
 
     private:
+
+        // Validates the input and the format support, creates the staging
+        // buffer, the image and its view, and records the upload. Called
+        // once by the constructor, which releases everything on failure.
+        void Record_upload(const Vulkan_Device& _device, VkCommandBuffer _transfer_cmd, const CoreTypes::ImageData& _image_data);
 
         void Destroy();
 

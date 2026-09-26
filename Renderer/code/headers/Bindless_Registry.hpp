@@ -213,6 +213,15 @@ namespace Renderer_System
         // (registered and not released).
         uint32_t Get_registered_count() const;
 
+        // Returns how many more textures Register_texture can take before
+        // it throws: the slots never used plus the released ones. A caller
+        // that registers several textures after work it cannot undo (the
+        // upload batch in Renderer::Upload_batch) checks it first; with
+        // enough free slots and non-null views, Register_texture does not
+        // throw, because storage for every slot is reserved at
+        // construction.
+        uint32_t Get_free_texture_count() const;
+
         // Size of the sampler array: valid Set_sampler indices are
         // [0, Get_max_samplers()).
         uint32_t Get_max_samplers() const;
@@ -245,7 +254,9 @@ namespace Renderer_System
 
         // View written in every slot used so far, by index; VK_NULL_HANDLE
         // marks a released slot. Its size is the number of slots ever used,
-        // so slot_views.size() is the next slot that was never used.
+        // so slot_views.size() is the next slot that was never used. Its
+        // capacity is reserved for max_textures at construction, so
+        // push_back never reallocates and never throws.
         std::vector<VkImageView> slot_views;
 
         // Released slots, oldest first. Taken by Register_texture only once

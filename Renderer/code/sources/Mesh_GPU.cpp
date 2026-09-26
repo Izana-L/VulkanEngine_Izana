@@ -32,6 +32,26 @@ namespace Renderer_System
         assert(!_mesh_data.indices.empty() &&
             "Mesh_GPU: MeshData has no indices");
 
+        // The destructor does not run for a constructor that throws, so
+        // the buffers created before the failure are released here.
+        // Destroy() is safe on the null handles of the steps that never
+        // ran. Copies already recorded into _transfer_cmd reference the
+        // destroyed buffers, so the caller must not submit that command
+        // buffer (Renderer::Upload_batch frees it).
+        try
+        {
+            Record_upload(_transfer_cmd, _mesh_data);
+        }
+        catch (...)
+        {
+            Destroy();
+            throw;
+        }
+    }
+
+    // ---------- Record_upload ----------
+    void Mesh_GPU::Record_upload(VkCommandBuffer _transfer_cmd, const CoreTypes::MeshData& _mesh_data)
+    {
         // =========================================================
         // Vertex buffer
         // =========================================================

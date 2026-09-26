@@ -98,6 +98,63 @@ namespace Renderer_System
             }
         }
 
+        // ---------- Require_optimal_tiling_features ----------
+        void Require_optimal_tiling_features(
+            const Vulkan_Device& _device,
+            VkFormat             _format,
+            VkFormatFeatureFlags _required,
+            const char*          _caller)
+        {
+            VkFormatProperties format_properties{};
+            vkGetPhysicalDeviceFormatProperties(_device.Get_physical_device_handle(), _format, &format_properties);
+
+            const VkFormatFeatureFlags missing = _required & ~format_properties.optimalTilingFeatures;
+
+            if (missing == 0)
+                return;
+
+            // Names of the features the engine requires somewhere; any other
+            // bit is reported by its value.
+            struct Feature_Name
+            {
+                VkFormatFeatureFlagBits bit;
+                const char*             name;
+            };
+
+            static constexpr Feature_Name feature_names[] =
+            {
+                { VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT,               "SAMPLED_IMAGE" },
+                { VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT, "SAMPLED_IMAGE_FILTER_LINEAR" },
+                { VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT,               "STORAGE_IMAGE" },
+                { VK_FORMAT_FEATURE_BLIT_SRC_BIT,                    "BLIT_SRC" },
+                { VK_FORMAT_FEATURE_BLIT_DST_BIT,                    "BLIT_DST" },
+                { VK_FORMAT_FEATURE_TRANSFER_SRC_BIT,                "TRANSFER_SRC" },
+                { VK_FORMAT_FEATURE_TRANSFER_DST_BIT,                "TRANSFER_DST" },
+            };
+
+            std::string missing_names;
+            VkFormatFeatureFlags unnamed = missing;
+
+            for (const Feature_Name& feature : feature_names)
+            {
+                if ((missing & feature.bit) == 0)
+                    continue;
+
+                missing_names += missing_names.empty() ? "" : ", ";
+                missing_names += feature.name;
+                unnamed &= ~static_cast<VkFormatFeatureFlags>(feature.bit);
+            }
+
+            if (unnamed != 0)
+            {
+                missing_names += missing_names.empty() ? "" : ", ";
+                missing_names += "other flags (value " + std::to_string(unnamed) + ")";
+            }
+
+            throw std::runtime_error(std::string(_caller) + ": format " + std::to_string(static_cast<int>(_format)) +
+                                     " lacks " + missing_names + " with optimal tiling on this device");
+        }
+
         // ---------- Create_image_view ----------
         VkImageView Create_image_view(
             VkDevice              _device,
@@ -294,17 +351,16 @@ namespace Renderer_System
             assert(_mip_levels > 0 &&
                 "Generate_mipmaps() called with zero mip levels");
 
-            // Verify the format supports linear filtering for blit — required
-            // for vkCmdBlitImage with VK_FILTER_LINEAR. Almost all standard
-            // 8-bit formats support this; this assert catches the rare format
-            // that doesn't before producing visually broken mips.
-            VkFormatProperties format_properties{};
-            vkGetPhysicalDeviceFormatProperties(
-                _device.Get_physical_device_handle(), _format, &format_properties);
-
-            assert((format_properties.optimalTilingFeatures &
-                VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) &&
-                "Generate_mipmaps: image format does not support linear blitting");
+            // Checked in every build, before anything is recorded: each level
+            // is blitted from the previous one of the same image, so the
+            // format must be both a blit source and a blit destination, and
+            // VK_FILTER_LINEAR requires linear filtering on the source
+            // format. The 8-bit color formats support all three on every
+            // device; R32_SFLOAT, for example, is not guaranteed linear
+            // filtering.
+            Require_optimal_tiling_features(_device, _format,
+                VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT,
+                "Generate_mipmaps");
 
             VkImageMemoryBarrier barrier{};
             barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;

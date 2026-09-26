@@ -16,7 +16,7 @@ namespace Renderer_System
     // that would mean N identical copies of both objects, so they are
     // hoisted here and created once.
     //
-    // The layout contract, shared by every pipeline:
+        // The layout contract, shared by every graphics pipeline:
     //   set 0 : per-frame UBO + light buffer (Descriptor_Layout_Cache)
     //   set 1 : per-pass, reserved (empty layout)
     //   set 2 : per-material, reserved (empty layout)
@@ -24,10 +24,16 @@ namespace Renderer_System
     //   push constant : Push_Constants (Frame_Data.hpp), 96 bytes,
     //                   vertex + fragment stages
     //
-    // The day a pipeline needs a different contract (a compute pass, a
-    // shadow pass with no bindless set), this stops being one shared object
-    // and becomes a small cache keyed by the contract — same shape as
-    // Pipeline_Registry. Not today: every pipeline here is the same shape.
+    // Compute pipelines use a second instance built with the same four set
+    // layouts and their own push constant range (compute stage only). The
+    // set numbering is identical, so the same VkDescriptorSet handles are
+    // bound at VK_PIPELINE_BIND_POINT_COMPUTE without any new descriptor.
+    // A separate instance is required because vkCmdPushConstants must use
+    // exactly the stage flags of the range it updates.
+    //
+    // The day the number of distinct contracts grows (a shadow pass with no
+    // bindless set, several compute push blocks), this becomes a small
+    // cache keyed by the contract — same shape as Pipeline_Registry.
     class Pipeline_Layout
     {
         VkDevice         device_handle;
@@ -37,6 +43,17 @@ namespace Renderer_System
         // composes the VkPipelineLayout from the four of them and adds the
         // push constant range (Push_Constants in Frame_Data.hpp, both stages).
         Pipeline_Layout(const Vulkan_Device& _device, const Descriptor_Layout_Cache& _layouts);
+
+        // Same four set layouts, with a single push constant range of
+        // _push_constant_size bytes at offset 0, visible to
+        // _push_constant_stages. A size of 0 declares no push constant range.
+        //
+        // _push_constant_size must be a multiple of 4 and no larger than
+        // maxPushConstantsSize (128 bytes is the guaranteed minimum).
+        // _push_constant_stages must be non-zero when _push_constant_size
+        // is non-zero.
+        Pipeline_Layout(const Vulkan_Device& _device, const Descriptor_Layout_Cache& _layouts,
+            VkShaderStageFlags _push_constant_stages, uint32_t _push_constant_size);
         ~Pipeline_Layout();
 
         Pipeline_Layout(const Pipeline_Layout&) = delete;

@@ -17,17 +17,29 @@ namespace EngineCore
 {
     namespace
     {
-        // Environment variable that turns GPU-assisted validation on:
-        // ENGINE_GPU_AV=1. Any other value, or its absence, keeps standard
-        // validation.
-        constexpr const char* GPU_AV_ENV_VAR = "ENGINE_GPU_AV";
-
-        // Validation level for the Renderer: Standard by default,
-        // Gpu_Assisted only when GPU_AV_ENV_VAR equals "1". GPU-AV slows
-        // every draw noticeably, so it is never enabled without that
-        // explicit opt-in.
+        // Validation level for the Renderer:
+        //   Release (NDEBUG) - Off. The layer adds CPU cost to every API
+        //                      call and must not load in a shipped build,
+        //                      even on a machine with the Vulkan SDK.
+        //                      The ENGINE_GPU_AV variable is ignored.
+        //                      Validation can still be forced from outside
+        //                      the engine (Vulkan Configurator,
+        //                      VK_INSTANCE_LAYERS) to investigate a
+        //                      Release-only problem.
+        //   Debug            - Standard, or Gpu_Assisted when the
+        //                      ENGINE_GPU_AV variable equals "1". GPU-AV
+        //                      slows every draw noticeably, so it is never
+        //                      enabled without that explicit opt-in.
         Renderer_System::Validation_Mode Select_validation_mode()
         {
+#ifdef NDEBUG
+            return Renderer_System::Validation_Mode::Off;
+#else
+            // Environment variable that turns GPU-assisted validation on:
+            // ENGINE_GPU_AV=1. Any other value, or its absence, keeps
+            // standard validation.
+            constexpr const char* GPU_AV_ENV_VAR = "ENGINE_GPU_AV";
+
 #ifdef _MSC_VER
             // MSVC flags std::getenv as unsafe (C4996, an error with SDL
             // checks enabled). _dupenv_s is its checked replacement; it
@@ -45,6 +57,7 @@ namespace EngineCore
             return requested
                 ? Renderer_System::Validation_Mode::Gpu_Assisted
                 : Renderer_System::Validation_Mode::Standard;
+#endif
         }
     }
     // =========================================================
@@ -60,7 +73,7 @@ namespace EngineCore
         , resources()
 
         // Layer 2: GPU
-        , renderer(window, Select_validation_mode())   // Standard, or Gpu_Assisted with ENGINE_GPU_AV=1; degrades if unavailable
+        , renderer(window, Select_validation_mode())   // Off in Release; Standard, or Gpu_Assisted with ENGINE_GPU_AV=1, in Debug; degrades if unavailable
 
         // Layer 3: Simulation (no constructor args needed)
         , world()

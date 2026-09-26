@@ -6,8 +6,10 @@
 // following offset without any warning. Both are edited in the same
 // commit, always, and the C++ side pins the offsets with static_asserts.
 //
-// Only fields with a consumer are here:
-//   view / projection  - debug.vert
+// Fields and their consumers:
+//   view / projection  - none today; kept for the passes that need the
+//                        two matrices apart (view-space effects, position
+//                        reconstruction from depth)
 //   view_projection    - mesh.vert
 //   camera_position    - view-dependent lighting terms (mesh.frag)
 //   light_count        - mesh.frag

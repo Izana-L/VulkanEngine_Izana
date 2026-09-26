@@ -51,10 +51,12 @@ namespace Renderer_System
 
     // Mirror of `Frame_UBO` in frame_set.glsl (std140).
     //
-    // Only fields the shaders consume are here. The inverse matrices and
-    // the clock values that used to travel in this block had no reader
-    // on the GPU side and cost two matrix inversions per frame on the CPU
-    // side; they were removed rather than uploaded unread.
+    // The inverse matrices and the clock values that used to travel in
+    // this block had no reader on the GPU side and cost two matrix
+    // inversions per frame on the CPU side; they were removed rather than
+    // uploaded unread. view and projection have no reader today either,
+    // but cost only a copy: they stay for the passes that need the two
+    // matrices apart (frame_set.glsl lists every field's consumer).
     struct Frame_UBO
     {
         MathLib::Matrix4 view;
@@ -87,6 +89,20 @@ namespace Renderer_System
     static_assert(offsetof(Push_Constants, base_color) == 64, "Push_Constants breaks the layout of push_constants.glsl");
     static_assert(offsetof(Push_Constants, albedo_texture_index) == 80, "Push_Constants breaks the layout of push_constants.glsl");
     static_assert(offsetof(Push_Constants, albedo_sampler_index) == 84, "Push_Constants breaks the layout of push_constants.glsl");
+
+    // Mirror of `Procedural_Push_Constants` in procedural.comp. Compute
+    // stage only: declared in the compute pipeline layout, never in the
+    // graphics one. 16 bytes.
+    struct Procedural_Push_Constants
+    {
+        uint32_t image_width;    // texels; the shader reads both as a uvec2
+        uint32_t image_height;
+        float    time;           // seconds since start, drives the animation
+        float    _padding0;
+    };
+    static_assert(sizeof(Procedural_Push_Constants) == 16, "Procedural_Push_Constants breaks the layout of procedural.comp");
+    static_assert(offsetof(Procedural_Push_Constants, image_width) == 0, "Procedural_Push_Constants breaks the layout of procedural.comp");
+    static_assert(offsetof(Procedural_Push_Constants, time) == 8, "Procedural_Push_Constants breaks the layout of procedural.comp");
 
     // =========================================================
     // Frame_Data

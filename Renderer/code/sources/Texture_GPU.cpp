@@ -3,6 +3,7 @@
 #include <Vulkan_Buffer_Utils.hpp>
 #include <Vulkan_Utils.hpp>
 
+#include <algorithm>
 #include <cassert>
 #include <cstring>
 #include <stdexcept>
@@ -38,14 +39,32 @@ namespace Renderer_System
         assert(width > 0 && height > 0 &&
             "Texture_GPU: ImageData has zero dimensions");
 
+        // The destructor does not run for a constructor that throws, so
+        // whatever was created before the failure (staging buffer, image,
+        // view) is released here. Destroy() is safe on the null handles of
+        // the steps that never ran. Commands already recorded into
+        // _transfer_cmd reference the destroyed image, so the caller must
+        // not submit that command buffer (Renderer::Upload_batch frees it).
+        try
+        {
+            Record_upload(_device, _transfer_cmd, _image_data);
+        }
+        catch (...)
+        {
+            Destroy();
+            throw;
+        }
+    }
+
+    // ---------- Record_upload ----------
+    void Texture_GPU::Record_upload(const Vulkan_Device& _device, VkCommandBuffer _transfer_cmd, const CoreTypes::ImageData& _image_data)
+    {
         // =========================================================
-        // Staging buffer
+        // Validation
         // =========================================================
 
         // The staging size follows the FORMAT, not an assumed 4 bytes per
-        // pixel, and the pixel buffer must actually hold that much: a copy
-        // that read past the end of the vector would upload garbage or
-        // crash. Block-compressed formats are rejected here because the
+        // pixel. Block-compressed formats are rejected here because the
         // tightly packed copy and the blit-based mip generation below do
         // not apply to them.
         const uint32_t bytes_per_pixel = Vulkan_Image_Utils::Bytes_per_pixel(format);
@@ -56,15 +75,55 @@ namespace Renderer_System
                 " cannot be uploaded with a packed copy (block-compressed or unsupported)");
         }
 
+        // ImageData stores its mip levels consecutively, largest first
+        // (ImageData.hpp). Only level 0 is uploaded; the rest of the chain
+        // is generated on the GPU.
+        if (_image_data.mip_levels == 0 || _image_data.mip_levels > mip_levels) {
+            throw std::invalid_argument(
+                "Texture_GPU: ImageData declares " + std::to_string(_image_data.mip_levels) +
+                " mip level(s); a " + std::to_string(width) + "x" + std::to_string(height) +
+                " image has between 1 and " + std::to_string(mip_levels));
+        }
+
         const VkDeviceSize image_size =
             static_cast<VkDeviceSize>(width) * height * bytes_per_pixel;
 
-        if (_image_data.pixels.size() < image_size) {
+        VkDeviceSize expected_size = 0;
+        for (uint32_t level = 0; level < _image_data.mip_levels; ++level) {
+            const VkDeviceSize level_width = std::max(width >> level, 1u);
+            const VkDeviceSize level_height = std::max(height >> level, 1u);
+            expected_size += level_width * level_height * bytes_per_pixel;
+        }
+
+        // Exact size, not a lower bound: a buffer that holds more or fewer
+        // bytes than the format needs was decoded with a different texel
+        // layout (e.g. RGBA8 data declared as R8_UNORM), and uploading it
+        // would produce a corrupt texture without any error.
+        if (_image_data.pixels.size() != expected_size) {
             throw std::invalid_argument(
                 "Texture_GPU: ImageData holds " + std::to_string(_image_data.pixels.size()) +
-                " bytes but " + std::to_string(width) + "x" + std::to_string(height) +
-                " texels of this format need " + std::to_string(image_size));
+                " bytes but " + std::to_string(_image_data.mip_levels) + " mip level(s) of a " +
+                std::to_string(width) + "x" + std::to_string(height) +
+                " image in format " + std::to_string(static_cast<int>(format)) +
+                " take exactly " + std::to_string(expected_size));
         }
+
+        // Every bindless slot may be read with any sampler preset, linear
+        // ones included (Bindless_Sampled_Format_Features). TRANSFER_DST
+        // for the buffer copy; the blit features and TRANSFER_SRC only
+        // when a mip chain is generated.
+        const bool generate_mips = mip_levels > 1;
+
+        VkFormatFeatureFlags required_features = Vulkan_Image_Utils::Bindless_Sampled_Format_Features | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
+
+        if (generate_mips)
+            required_features |= VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT;
+
+        Vulkan_Image_Utils::Require_optimal_tiling_features(_device, format, required_features, "Texture_GPU");
+
+        // =========================================================
+        // Staging buffer
+        // =========================================================
 
         staging = Vulkan_Buffer_Utils::Create_buffer(
             allocator,
@@ -85,19 +144,21 @@ namespace Renderer_System
         // Image creation
         // =========================================================
 
-        // TRANSFER_SRC_BIT is required even though this image is the upload
-        // target, because Generate_mipmaps blits each mip level FROM the
-        // previous level of this same image — the image is both source and
-        // destination of those internal blits.
+        // TRANSFER_SRC_BIT only with a mip chain: Generate_mipmaps blits
+        // each mip level FROM the previous level of this same image, so
+        // the image is both source and destination of those blits.
+        VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+
+        if (generate_mips)
+            usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+
         image = Vulkan_Image_Utils::Create_image(
             allocator,
             width, height,
             mip_levels,
             format,
             VK_IMAGE_TILING_OPTIMAL,
-            VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-            VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-            VK_IMAGE_USAGE_SAMPLED_BIT
+            usage
         );
 
         // =========================================================
@@ -117,7 +178,7 @@ namespace Renderer_System
             _transfer_cmd, staging.buffer, image.image, width, height
         );
 
-        if (mip_levels > 1)
+        if (generate_mips)
         {
             // Generates mips 1..N from mip 0, leaves every level in
             // SHADER_READ_ONLY_OPTIMAL when done.

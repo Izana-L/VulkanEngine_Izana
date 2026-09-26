@@ -12,6 +12,7 @@
 #include <Vulkan_Depth_Resources.hpp>
 #include <Vulkan_Framebuffer.hpp>
 #include <Vulkan_Pipeline.hpp>
+#include <Vulkan_Compute_Pipeline.hpp>
 #include <Vulkan_Command_Pool.hpp>
 #include <Frame_Data.hpp>
 #include <Pipeline_Cache.hpp>
@@ -127,12 +128,25 @@ namespace Renderer_System
         // before the cache is serialized.
         Pipeline_Cache         pipeline_cache;
         Descriptor_Layout_Cache descriptor_layouts;
-        // The layout every pipeline shares. Before the registry, because
-        // pipelines are built against it and must be destroyed before it.
+        // The layout every graphics pipeline shares. Before the registry,
+        // because pipelines are built against it and must be destroyed
+        // before it.
         Pipeline_Layout        pipeline_layout;
 
-        // All pipelines, keyed by config.
+        // All graphics pipelines, keyed by config.
         Pipeline_Registry      pipeline_registry;
+
+        // Layout of the compute pipelines: the same four set layouts as
+        // pipeline_layout, with a push constant range of
+        // Procedural_Push_Constants for the compute stage only. Declared
+        // before the compute pipelines, which are built against it and
+        // must be destroyed before it.
+        Pipeline_Layout        compute_pipeline_layout;
+
+        // Compute pipelines, held as direct members (no registry: their
+        // number is small and fixed). Recorded before the render pass in
+        // Record_command_buffer.
+        Vulkan_Compute_Pipeline procedural_pipeline;
 
         // The two pipelines that exist today: opaque (no blending, depth
         // write) and transparent (alpha blending, depth test only). Held
@@ -151,6 +165,16 @@ namespace Renderer_System
         // Draw items that reference a mesh, transform or pipeline that
         // does not exist are skipped; the first one is reported once.
         bool                   warned_invalid_item = false;
+
+        // Draw items whose texture index is not a registered bindless
+        // slot, or whose sampler index is not a Sampler_Preset, are drawn
+        // with a valid fallback; the first one is reported once.
+        bool                   warned_invalid_material_index = false;
+
+        // Light count of the last packet reported as exceeding MAX_LIGHTS;
+        // 0 while the packets fit. The overflow is reported when it starts
+        // and whenever the count changes, not on every frame.
+        uint32_t               reported_light_overflow = 0;
 
         // Rasterization state shared by every batch; the transparent pass
         // only overrides depth writes.
@@ -366,7 +390,14 @@ namespace Renderer_System
         // several batches if that ever matters.
         //
         // Strong exception guarantee: if any upload fails, nothing of the
-        // batch stays registered.
+        // batch stays registered. Every check that can reject the batch
+        // (null or empty data, a full bindless texture array) runs before
+        // anything is recorded; once the submit has completed, registering
+        // the textures in the bindless array cannot fail.
+        //
+        // Throws std::invalid_argument for a null or empty element, and
+        // std::runtime_error if the bindless texture array does not have a
+        // free slot for every texture of the batch.
         Upload_Batch_Result Upload_batch(const Upload_Batch& _batch);
 
         // =========================================================

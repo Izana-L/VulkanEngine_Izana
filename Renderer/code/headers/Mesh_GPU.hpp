@@ -60,6 +60,9 @@ namespace Renderer_System
 
     public:
 
+        // Records the upload of _mesh_data into _transfer_cmd. If it
+        // throws, every buffer created so far is released, and the copies
+        // already recorded into _transfer_cmd must not be submitted.
         Mesh_GPU(
             VmaAllocator               _allocator,
             VkCommandBuffer            _transfer_cmd,
@@ -107,9 +110,12 @@ namespace Renderer_System
 
     private:
 
-        void Destroy();
+        // Creates the staging and final buffers and records both copies.
+        // Called once by the constructor, which releases every buffer
+        // created so far if this throws.
+        void Record_upload(VkCommandBuffer _transfer_cmd, const CoreTypes::MeshData& _mesh_data);
 
-        
+        void Destroy();
     };
 
 } // namespace Renderer

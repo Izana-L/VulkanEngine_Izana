@@ -172,6 +172,12 @@ namespace Renderer_System
         max_textures = effective.textures;
         max_samplers = effective.samplers;
 
+        // Storage for every slot up front: Register_texture then never
+        // allocates, so it cannot throw once a free slot exists (see
+        // Get_free_texture_count). Done before the Vulkan objects exist,
+        // so a failed allocation leaves nothing to clean up.
+        slot_views.reserve(max_textures);
+
         try
         {
             Create_layout();
@@ -210,8 +216,10 @@ namespace Renderer_System
 
         uint32_t index = 0;
 
-        // The bookkeeping is updated before the descriptor write: the only
-        // step that can throw (push_back) then runs before anything changes.
+        // The bookkeeping is updated before the descriptor write. push_back
+        // does not reallocate (the capacity is reserved at construction),
+        // so past the argument check this function only throws when no
+        // slot is free.
         if (slot_views.size() < max_textures)
         {
             // A slot that was never used: no frame has ever read it.
@@ -354,6 +362,13 @@ namespace Renderer_System
     uint32_t Bindless_Registry::Get_registered_count() const
     {
         return static_cast<uint32_t>(slot_views.size() - released_slots.size());
+    }
+
+    // ---------- Get_free_texture_count ----------
+    uint32_t Bindless_Registry::Get_free_texture_count() const
+    {
+        const uint32_t never_used = max_textures - static_cast<uint32_t>(slot_views.size());
+        return never_used + static_cast<uint32_t>(released_slots.size());
     }
 
     // ---------- Get_max_samplers ----------

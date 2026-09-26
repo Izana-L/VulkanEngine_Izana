@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Shader compilation for Renderer.vcxproj.
+
+  MSBuild imports this file automatically into every project in this folder
+  (Directory.Build.targets, supported by C++ projects since Visual Studio
+  2019), so it takes effect without an Import in the .vcxproj. It is the
+  only project in this folder. A Directory.Build.targets added in a parent
+  folder is not imported while this one exists: MSBuild stops at the first
+  one it finds walking up from the project.
+
+  It replaces the PreBuildEvent that used to compile the shaders, which had
+  three problems:
+    - Visual Studio's fast up-to-date check only looks at project items, and
+      the shaders were not items: after editing only a shader or a
+      common/*.glsl include, the project counted as up to date, the
+      PreBuildEvent did not run and the old .spv kept being used without
+      any warning.
+    - The command was duplicated in the Debug and Release configurations.
+    - It did not pass a target environment to glslc.
+
+  How this target fixes each one:
+    - DisableFastUpToDateCheck makes Visual Studio hand every build to
+      MSBuild. MSBuild's own incremental checks keep a build with no changes
+      fast: the C++ compiler skips up-to-date files, and this target is
+      skipped when every .spv is newer than its inputs.
+    - Inputs / Outputs: each stage file maps to its own .spv, so editing one
+      stage recompiles only that stage. The files in common/ are included by
+      several stages and cannot be mapped to one output, so editing any of
+      them recompiles every stage. This file is an input as well, so a
+      change to the compiler options recompiles everything.
+    - One definition for every configuration, with an explicit glslc
+      target environment (RendererShaderTargetEnv) matching the Vulkan 1.3
+      device the engine requires (Vulkan_Device rejects anything older).
+
+  Requirement: the VULKAN_SDK environment variable, set by the Vulkan SDK
+  installer; glslc.exe ships with the SDK.
+
+  After adding this file, remove the two PreBuildEvent blocks from
+  Renderer.vcxproj; otherwise the shaders are also compiled there, on every
+  build, without the target environment.
+-->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <PropertyGroup>
+    <DisableFastUpToDateCheck>true</DisableFastUpToDateCheck>
+
+    <RendererShaderDir>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\shaders\'))</RendererShaderDir>
+    <RendererShaderOutputDir>$(RendererShaderDir)compiled\</RendererShaderOutputDir>
+    <RendererShaderTargetEnv>vulkan1.3</RendererShaderTargetEnv>
+    <RendererGlslc>$(VULKAN_SDK)\Bin\glslc.exe</RendererGlslc>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- One item per shader stage; each produces <file>.<stage>.spv. -->
+    <RendererShaderStage Include="$(RendererShaderDir)*.vert;$(RendererShaderDir)*.frag;$(RendererShaderDir)*.comp" />
+
+    <!-- Files included by the stages (#include "common/..."). -->
+    <RendererShaderInclude Include="$(RendererShaderDir)common\**\*.glsl" />
+  </ItemGroup>
+
+  <Target Name="Compile_Renderer_Shaders"
+          BeforeTargets="ClCompile"
+          Inputs="@(RendererShaderStage);@(RendererShaderInclude);$(MSBuildThisFileFullPath)"
+          Outputs="@(RendererShaderStage->'$(RendererShaderOutputDir)%(Filename)%(Extension).spv')">
+
+    <Error Condition="'$(VULKAN_SDK)' == ''"
+           Text="VULKAN_SDK is not set: install the Vulkan SDK, which provides glslc.exe, and restart Visual Studio." />
+    <Error Condition="!Exists('$(RendererGlslc)')"
+           Text="glslc.exe not found at '$(RendererGlslc)'." />
+
+    <MakeDir Directories="$(RendererShaderOutputDir)" />
+
+    <!-- Batched over the stages that are out of date: one glslc call each.
+         A compile error fails the build. -->
+    <Exec Command="&quot;$(RendererGlslc)&quot; --target-env=$(RendererShaderTargetEnv) &quot;%(RendererShaderStage.FullPath)&quot; -o &quot;$(RendererShaderOutputDir)%(RendererShaderStage.Filename)%(RendererShaderStage.Extension).spv&quot;" />
+  </Target>
+
+</Project>

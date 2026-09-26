@@ -75,6 +75,11 @@ namespace EngineCore
         // RenderPacket::transforms points into this vector: valid until
         // the next Extract() call.
         std::vector<MathLib::Matrix4> transform_buffer;
+
+        // Set once a material selecting a sampler preset that does not
+        // exist has been reported; such materials fall back to the default
+        // preset silently afterwards.
+        bool warned_invalid_sampler = false;
     };
 
 } // namespace EngineCore

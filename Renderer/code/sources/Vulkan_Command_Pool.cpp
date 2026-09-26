@@ -32,24 +32,35 @@ namespace Renderer_System {
             "Vulkan_Command_Pool: failed to create command pool");
 
         // ---------- Command buffer allocation ----------
-        if (_buffer_count > 0) {
-            command_buffers.resize(_buffer_count);
+        // The destructor does not run for a constructor that throws, so a
+        // failure from here on destroys the pool created above. Destroy()
+        // also clears command_buffers.
+        try
+        {
+            if (_buffer_count > 0) {
+                command_buffers.resize(_buffer_count);
 
-            VkCommandBufferAllocateInfo alloc_info{};
-            alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-            alloc_info.commandPool = command_pool;
+                VkCommandBufferAllocateInfo alloc_info{};
+                alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+                alloc_info.commandPool = command_pool;
 
-            // PRIMARY command buffers can be submitted directly to a queue.
-            // SECONDARY buffers can only be called from within a primary
-            // buffer (used for splitting recording work across threads) -
-            // not needed for the current single-threaded recording approach.
-            alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-            alloc_info.commandBufferCount = static_cast<uint32_t>(command_buffers.size());
+                // PRIMARY command buffers can be submitted directly to a queue.
+                // SECONDARY buffers can only be called from within a primary
+                // buffer (used for splitting recording work across threads) -
+                // not needed for the current single-threaded recording approach.
+                alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+                alloc_info.commandBufferCount = static_cast<uint32_t>(command_buffers.size());
 
-            // Unlike most Vulkan creation calls, this one allocates MULTIPLE
-            // command buffers in a single call, filling the whole vector at once.
-            VK_CHECK(vkAllocateCommandBuffers(device_handle, &alloc_info, command_buffers.data()),
-                "Vulkan_Command_Pool: failed to allocate command buffers");
+                // Unlike most Vulkan creation calls, this one allocates MULTIPLE
+                // command buffers in a single call, filling the whole vector at once.
+                VK_CHECK(vkAllocateCommandBuffers(device_handle, &alloc_info, command_buffers.data()),
+                    "Vulkan_Command_Pool: failed to allocate command buffers");
+            }
+        }
+        catch (...)
+        {
+            Destroy();
+            throw;
         }
     }
 

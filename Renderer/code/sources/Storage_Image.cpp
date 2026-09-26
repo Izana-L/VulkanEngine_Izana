@@ -47,19 +47,16 @@ namespace Renderer_System
         // Enforced in every build: creating a STORAGE image with a format
         // that lacks the feature is invalid usage, and nothing guarantees
         // a validation layer is present to report it. TRANSFER_DST is
-        // required by the initial clear.
-        VkFormatProperties format_properties{};
-        vkGetPhysicalDeviceFormatProperties(_device.Get_physical_device_handle(), _format, &format_properties);
-
+        // required by the initial clear. The image is read through its
+        // bindless slot, and any sampler preset may read any slot, so the
+        // format also needs the features of every bindless texture
+        // (Bindless_Sampled_Format_Features), linear filtering included:
+        // without it, a Linear_* preset reading the image is invalid.
         constexpr VkFormatFeatureFlags required_features = VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
-                                                           VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
-                                                           VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
+                                                           VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
+                                                           Vulkan_Image_Utils::Bindless_Sampled_Format_Features;
 
-        if ((format_properties.optimalTilingFeatures & required_features) != required_features)
-        {
-            throw std::runtime_error("Storage_Image: format " + std::to_string(static_cast<int>(_format)) +
-                " does not support storage, sampled and transfer destination use with optimal tiling on this device");
-        }
+        Vulkan_Image_Utils::Require_optimal_tiling_features(_device, _format, required_features, "Storage_Image");
 
         try
         {

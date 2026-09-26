@@ -1,0 +1,32 @@
+#version 450
+
+// Procedural texture pass (roadmap step 1).
+//
+// One invocation per texel of the target image, in 8x8 workgroups. The
+// Renderer dispatches ceil(width / 8) x ceil(height / 8) groups, so the
+// last row and column of groups may extend past the image: the bounds
+// check below discards those invocations.
+//
+// Milestone 1.1: no output yet. The dispatch only exercises the compute
+// pipeline, its layout and the COMPUTE bind point. The storage image
+// (set 1, binding 0) and the write are added in milestone 1.2.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// EXACT mirror of Renderer_System::Procedural_Push_Constants (C++), 16
+// bytes, compute stage only. Declared in the compute pipeline layout,
+// not in the graphics one.
+layout(push_constant) uniform Procedural_Push_Constants
+{
+    uvec2 image_size;           // offset 0: width, height in texels
+    float time;                 // offset 8: seconds since start, drives the animation
+    float _pad0;                // offset 12: keeps the block at 16 bytes
+} push;
+
+void main()
+{
+    const uvec2 texel = gl_GlobalInvocationID.xy;
+
+    // Invocations outside the image come from rounding the dispatch up.
+    if (texel.x >= push.image_size.x || texel.y >= push.image_size.y)
+        return;
+}

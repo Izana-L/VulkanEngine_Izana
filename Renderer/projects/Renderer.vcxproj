@@ -118,6 +118,7 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
     <ClCompile Include="..\code\sources\Vulkan_Allocator.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Buffer_Utils.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Command_Pool.cpp" />
+    <ClCompile Include="..\code\sources\Vulkan_Compute_Pipeline.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Depth_Resources.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Device.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Framebuffer.cpp" />
@@ -146,6 +147,7 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
     <ClInclude Include="..\code\headers\Vulkan_Allocator.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Buffer_Utils.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Command_Pool.hpp" />
+    <ClInclude Include="..\code\headers\Vulkan_Compute_Pipeline.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Depth_Resources.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Device.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Framebuffer.hpp" />
