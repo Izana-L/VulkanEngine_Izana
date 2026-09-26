@@ -45,7 +45,8 @@ namespace Renderer_System {
                                   device_name(),
                                   swapchain_maintenance1_enabled(false),
                                   sampler_anisotropy_enabled(false),
-                                  max_sampler_anisotropy(1.0f)
+                                  max_sampler_anisotropy(1.0f),
+                                  bindless_enabled(false)
     {
         VkInstance instance_handle = _instance.Get_handle();
         VkSurfaceKHR surface_handle = _surface.Get_handle();
@@ -158,24 +159,41 @@ namespace Renderer_System {
                 << "falling back to per-image semaphores only).\n";
         }
 
+        // ── Descriptor indexing ───────────────────────────────────
+        // Recorded from the selected GPU instead of assumed:
+        // Is_bindless_supported() returns this value, and the features
+        // below are requested only when it is true, since enabling an
+        // unsupported feature makes vkCreateDevice fail. Device selection
+        // requires them today; if that ever changes, the device is created
+        // without them and Bindless_Registry refuses to run on it.
+        bindless_enabled = best_support.bindless;
+
         // ── Feature structs (pNext chain) ─────────────────────────
         VkPhysicalDeviceDescriptorIndexingFeatures descriptor_indexing_features{};
         descriptor_indexing_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
 
+        const VkBool32 bindless_feature = bindless_enabled ? VK_TRUE : VK_FALSE;
+
         // Array size known only at runtime.
-        descriptor_indexing_features.runtimeDescriptorArray = VK_TRUE;
+        descriptor_indexing_features.runtimeDescriptorArray = bindless_feature;
 
         // Allow unbound slots in the array (not every texture slot
         // needs to be filled as long as the shader never accesses it).
-        descriptor_indexing_features.descriptorBindingPartiallyBound = VK_TRUE;
+        descriptor_indexing_features.descriptorBindingPartiallyBound = bindless_feature;
 
         // Allow non-uniform indexing in shaders (each invocation can
         // use a different texture index).
-        descriptor_indexing_features.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+        descriptor_indexing_features.shaderSampledImageArrayNonUniformIndexing = bindless_feature;
 
-        // Allow updating the descriptor set while it is bound, so new
-        // textures can be streamed in without stalling the pipeline.
-        descriptor_indexing_features.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+        // Allow writing descriptors after the set was bound in a command
+        // buffer that is still being recorded; the submission sees them.
+        descriptor_indexing_features.descriptorBindingSampledImageUpdateAfterBind = bindless_feature;
+
+        // Allow writing descriptors that no pending command buffer reads
+        // while frames that use the set are still executing, so bindless
+        // slots can be registered, rewritten and released without waiting
+        // for the device to go idle.
+        descriptor_indexing_features.descriptorBindingUpdateUnusedWhilePending = bindless_feature;
 
         VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR swapchain_maintenance1_features{};
         swapchain_maintenance1_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_KHR;
@@ -188,7 +206,8 @@ namespace Renderer_System {
         void* chain_head = &descriptor_indexing_features;
         descriptor_indexing_features.pNext = swapchain_maintenance1_enabled ? &swapchain_maintenance1_features : nullptr;
 
-        std::cout << "[Vulkan_Device] Bindless descriptor indexing enabled.\n";
+        std::cout << "[Vulkan_Device] Bindless descriptor indexing "
+            << (bindless_enabled ? "enabled" : "not available") << ".\n";
 
         // ── Device create info ────────────────────────────────────
         VkDeviceCreateInfo device_create_info{};
@@ -235,6 +254,7 @@ namespace Renderer_System {
         swapchain_maintenance1_enabled(_other.swapchain_maintenance1_enabled),
         sampler_anisotropy_enabled(_other.sampler_anisotropy_enabled),
         max_sampler_anisotropy(_other.max_sampler_anisotropy),
+        bindless_enabled(_other.bindless_enabled),
         bindless_limits(_other.bindless_limits)
     {
     
@@ -258,6 +278,7 @@ namespace Renderer_System {
             swapchain_maintenance1_enabled = _other.swapchain_maintenance1_enabled;
             sampler_anisotropy_enabled = _other.sampler_anisotropy_enabled;
             max_sampler_anisotropy = _other.max_sampler_anisotropy;
+            bindless_enabled = _other.bindless_enabled;
             bindless_limits = _other.bindless_limits;
 
             _other.physical_device = VK_NULL_HANDLE;
@@ -303,7 +324,7 @@ namespace Renderer_System {
     }
 
     bool Vulkan_Device::Is_bindless_supported() const {
-        return logical_device != VK_NULL_HANDLE;
+        return bindless_enabled;
     }
 
     bool Vulkan_Device::Is_sampler_anisotropy_enabled() const {
@@ -449,7 +470,8 @@ namespace Renderer_System {
         support.bindless = indexing_features.runtimeDescriptorArray == VK_TRUE &&
                            indexing_features.descriptorBindingPartiallyBound == VK_TRUE &&
                            indexing_features.shaderSampledImageArrayNonUniformIndexing == VK_TRUE &&
-                           indexing_features.descriptorBindingSampledImageUpdateAfterBind == VK_TRUE;
+                           indexing_features.descriptorBindingSampledImageUpdateAfterBind == VK_TRUE &&
+                           indexing_features.descriptorBindingUpdateUnusedWhilePending == VK_TRUE;
            
 
         support.swapchain_maintenance1_feature =

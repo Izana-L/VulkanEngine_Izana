@@ -18,18 +18,37 @@ namespace Renderer_System
     namespace
     {
         // Descriptors outside the bindless set that also count against
-        // maxPerStageUpdateAfterBindResources. The limit applies to each
-        // stage of Bindless_Reader_Stages separately, so the margin covers
-        // the most loaded one:
+        // maxPerStageUpdateAfterBindResources. That limit counts sampled
+        // images, storage images, buffers and input attachments of every
+        // set in the pipeline layout, plus the color attachments in the
+        // fragment stage; SAMPLER descriptors do not count against it. It
+        // applies to each stage of Bindless_Reader_Stages separately, so
+        // the margin covers the most loaded one:
         //   fragment - set 0 (frame UBO, light SSBO) and the color
         //              attachments;
         //   compute  - set 0 and the descriptors of the pass's own set 1
-        //              (e.g. the storage image it writes).
+        //              (e.g. the storage image it writes and the textures
+        //              it reads).
         // A small margin rather than an exact count, so a new per-frame or
         // per-pass binding does not silently push a stage over the limit.
         // The per-stage limits are the same numbers for every stage, so
         // Fit_to_device_limits needs no distinction between stages.
         constexpr uint32_t OTHER_STAGE_RESOURCES_MARGIN = 16;
+
+        // Sampled images (SAMPLED_IMAGE, COMBINED_IMAGE_SAMPLER,
+        // UNIFORM_TEXEL_BUFFER) that the other sets of a pipeline layout
+        // may declare, e.g. an input texture that a compute pass reads
+        // through its set 1. maxPerStageDescriptorUpdateAfterBindSampledImages
+        // counts them per stage together with the bindless texture array,
+        // and maxDescriptorSetUpdateAfterBindSampledImages over the whole
+        // pipeline layout, despite its name. Set 0 declares none and sets 1
+        // and 2 are empty today; a set that declares more than this must
+        // raise the margin.
+        constexpr uint32_t OTHER_SETS_SAMPLED_IMAGES_MARGIN = 16;
+
+        // The same for samplers (SAMPLER, COMBINED_IMAGE_SAMPLER), which the
+        // sampler limits count together with the bindless sampler array.
+        constexpr uint32_t OTHER_SETS_SAMPLERS_MARGIN = 16;
 
         // Fewest texture slots the engine accepts; a device that cannot
         // offer them is treated as unsupported. The default textures take
@@ -44,24 +63,47 @@ namespace Renderer_System
             uint32_t samplers = 0;
         };
 
-        // Clamps the requested sizes to the device limits. Each array is
-        // first capped by its own per-stage and per-set limits. The shared
-        // budgets (resources per stage, descriptors in all pools) are then
-        // enforced by shrinking only the texture array: the sampler array
-        // is tiny and its slots are fixed by the presets.
+        // _limit minus _margin, or 0 when the margin does not fit.
+        constexpr uint32_t Reserve_margin(uint32_t _limit, uint32_t _margin)
+        {
+            return _limit > _margin ? _limit - _margin : 0;
+        }
+
+        // Clamps the requested sizes to the device limits:
+        //   - each array is capped by its own per-stage and per-layout
+        //     limits, minus what the other sets may declare in the same
+        //     category;
+        //   - the texture array alone is capped by the resources-per-stage
+        //     budget, which counts sampled images but not samplers;
+        //   - both arrays together must fit in the descriptors of all
+        //     update-after-bind pools, which count every descriptor type.
+        //     The bindless pool is the only pool created with
+        //     UPDATE_AFTER_BIND, so the whole limit is available to it.
+        //     When the sum does not fit, only the texture array shrinks:
+        //     the sampler array is tiny and its slots are fixed by the
+        //     presets.
         Array_Sizes Fit_to_device_limits(const Array_Sizes& _desired, const Bindless_Limits& _limits)
         {
             Array_Sizes sizes;
-            sizes.textures = std::min({ _desired.textures, _limits.max_per_stage_sampled_images, _limits.max_per_set_sampled_images });
-            sizes.samplers = std::min({ _desired.samplers, _limits.max_per_stage_samplers, _limits.max_per_set_samplers });
 
-            const uint32_t stage_budget = _limits.max_per_stage_resources > OTHER_STAGE_RESOURCES_MARGIN
-                                        ? _limits.max_per_stage_resources - OTHER_STAGE_RESOURCES_MARGIN: 0;
+            sizes.textures = std::min({ _desired.textures,
+                                        Reserve_margin(_limits.max_per_stage_sampled_images, OTHER_SETS_SAMPLED_IMAGES_MARGIN),
+                                        Reserve_margin(_limits.max_per_set_sampled_images, OTHER_SETS_SAMPLED_IMAGES_MARGIN),
+                                        Reserve_margin(_limits.max_per_stage_resources, OTHER_STAGE_RESOURCES_MARGIN) });
 
-            const uint32_t shared_budget = std::min(stage_budget, _limits.max_descriptors_in_all_pools);
+            sizes.samplers = std::min({ _desired.samplers,
+                                        Reserve_margin(_limits.max_per_stage_samplers, OTHER_SETS_SAMPLERS_MARGIN),
+                                        Reserve_margin(_limits.max_per_set_samplers, OTHER_SETS_SAMPLERS_MARGIN) });
 
-            if (sizes.textures + sizes.samplers > shared_budget)
-                sizes.textures = shared_budget > sizes.samplers ? shared_budget - sizes.samplers : 0;
+            // Summed in 64 bits: two limits close to UINT32_MAX must not
+            // wrap around and appear to fit.
+            const uint64_t pool_descriptors = static_cast<uint64_t>(sizes.textures) + sizes.samplers;
+
+            if (pool_descriptors > _limits.max_descriptors_in_all_pools)
+            {
+                sizes.textures = _limits.max_descriptors_in_all_pools > sizes.samplers
+                               ? _limits.max_descriptors_in_all_pools - sizes.samplers : 0;
+            }
 
             return sizes;
         }
@@ -72,7 +114,6 @@ namespace Renderer_System
         : device_handle(_device.Get_logical_device_handle()),
         max_textures(_desired_textures),
         max_samplers(_desired_samplers),
-        next_free_index(0),
         layout(VK_NULL_HANDLE),
         pool(VK_NULL_HANDLE),
         set(VK_NULL_HANDLE)
@@ -80,12 +121,14 @@ namespace Renderer_System
         assert(device_handle != VK_NULL_HANDLE &&
             "Vulkan_Device must be fully constructed before creating a Bindless_Registry");
 
-        // Enforced in every build: writing a descriptor array with the
-        // UPDATE_AFTER_BIND / PARTIALLY_BOUND flags on a device that did
-        // not enable descriptor indexing is invalid usage that no layer
-        // may be present to report. Vulkan_Device only selects devices
-        // with the features, so this is a defence against a future change
-        // to that policy, not an expected path.
+        // Enforced in every build: creating a layout with the
+        // UPDATE_AFTER_BIND / UPDATE_UNUSED_WHILE_PENDING / PARTIALLY_BOUND
+        // flags on a device that did not enable descriptor indexing is
+        // invalid usage that no layer may be present to report.
+        // Is_bindless_supported() reports the features the device was
+        // actually created with. Vulkan_Device only selects devices that
+        // have them, so this is a defence against a future change to that
+        // policy, not an expected path.
         if (!_device.Is_bindless_supported())
         {
             throw std::runtime_error(
@@ -165,15 +208,80 @@ namespace Renderer_System
         if (_image_view == VK_NULL_HANDLE)
             throw std::invalid_argument("Bindless_Registry::Register_texture: null image view");
 
-        if (next_free_index >= max_textures) 
+        uint32_t index = 0;
+
+        // The bookkeeping is updated before the descriptor write: the only
+        // step that can throw (push_back) then runs before anything changes.
+        if (slot_views.size() < max_textures)
         {
-            throw std::runtime_error( "Bindless_Registry: the texture array is full (" + std::to_string(max_textures) + 
-                                      " slots) — raise BINDLESS_DESIRED_TEXTURES, within the device limits logged at startup." );
+            // A slot that was never used: no frame has ever read it.
+            index = static_cast<uint32_t>(slot_views.size());
+            slot_views.push_back(_image_view);
+        }
+        else if (!released_slots.empty())
+        {
+            // No frame in flight reads a released slot: Release_texture
+            // required it when the slot was released, and no command
+            // recorded since then may use a released index.
+            index = released_slots.front();
+            released_slots.pop_front();
+            slot_views[index] = _image_view;
+        }
+        else
+        {
+            throw std::runtime_error( "Bindless_Registry: the texture array is full (" + std::to_string(max_textures) +
+                                      " slots, none released): release unused slots or raise BINDLESS_DESIRED_TEXTURES, "
+                                      "within the device limits logged at startup." );
         }
 
-        const uint32_t index = next_free_index;
-        ++next_free_index;
+        Write_texture_slot(index, _image_view);
 
+        return index;
+    }
+
+    // ---------- Update_texture ----------
+    void Bindless_Registry::Update_texture(uint32_t _index, VkImageView _image_view)
+    {
+        if (_image_view == VK_NULL_HANDLE)
+            throw std::invalid_argument("Bindless_Registry::Update_texture: null image view");
+
+        Validate_mutable_slot(_index, "Update_texture");
+
+        slot_views[_index] = _image_view;
+        Write_texture_slot(_index, _image_view);
+    }
+
+    // ---------- Release_texture ----------
+    void Bindless_Registry::Release_texture(uint32_t _index)
+    {
+        Validate_mutable_slot(_index, "Release_texture");
+
+        // Queued first: push_back is the only step that can throw, so a
+        // failure leaves the slot registered and unchanged.
+        released_slots.push_back(_index);
+
+        // A stale index reads the error texture instead of the released
+        // view. The Renderer registers the error texture before anything
+        // else, so it is always present by the time a slot can be released;
+        // without it, the slot keeps its previous descriptor, which
+        // PARTIALLY_BOUND tolerates as long as no shader reads the slot.
+        constexpr uint32_t fallback_index = CoreTypes::Default_Texture::Error;
+
+        if (Is_texture_registered(fallback_index))
+            Write_texture_slot(_index, slot_views[fallback_index]);
+
+        slot_views[_index] = VK_NULL_HANDLE;
+    }
+
+    // ---------- Is_texture_registered ----------
+    bool Bindless_Registry::Is_texture_registered(uint32_t _index) const
+    {
+        return _index < slot_views.size() && slot_views[_index] != VK_NULL_HANDLE;
+    }
+
+    // ---------- Write_texture_slot ----------
+    void Bindless_Registry::Write_texture_slot(uint32_t _index, VkImageView _image_view)
+    {
         VkDescriptorImageInfo image_info{};
         image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         image_info.imageView = _image_view;
@@ -182,17 +290,34 @@ namespace Renderer_System
         write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         write.dstSet = set;
         write.dstBinding = Binding_Bindless::Textures;
-        write.dstArrayElement = index;
+        write.dstArrayElement = _index;
         write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
         write.descriptorCount = 1;
         write.pImageInfo = &image_info;
 
-        // Writing a single array element while the set may already be bound
-        // in a previous frame's command buffer is exactly what
-        // UPDATE_AFTER_BIND on both the pool and the binding makes legal.
+        // Every caller guarantees that no command buffer pending execution
+        // reads this slot, which is what makes the write legal while frames
+        // that use the set are still in flight: UPDATE_UNUSED_WHILE_PENDING
+        // allows writing the descriptors those frames do not read, and
+        // UPDATE_AFTER_BIND a command buffer that bound the set and is
+        // still being recorded, whose submission then sees the new view.
         vkUpdateDescriptorSets(device_handle, 1, &write, 0, nullptr);
+    }
 
-        return index;
+    // ---------- Validate_mutable_slot ----------
+    void Bindless_Registry::Validate_mutable_slot(uint32_t _index, const char* _caller) const
+    {
+        if (_index < CoreTypes::Default_Texture::Count)
+        {
+            throw std::invalid_argument(std::string("Bindless_Registry::") + _caller + ": slot " + std::to_string(_index) +
+                                        " holds a default texture (CoreTypes::Default_Texture), which every draw item relies on");
+        }
+
+        if (!Is_texture_registered(_index))
+        {
+            throw std::invalid_argument(std::string("Bindless_Registry::") + _caller + ": slot " + std::to_string(_index) +
+                                        " does not hold a registered texture");
+        }
     }
 
     // ---------- Set_sampler ----------
@@ -228,7 +353,7 @@ namespace Renderer_System
     // ---------- Get_registered_count ----------
     uint32_t Bindless_Registry::Get_registered_count() const
     {
-        return next_free_index;
+        return static_cast<uint32_t>(slot_views.size() - released_slots.size());
     }
 
     // ---------- Get_max_samplers ----------
@@ -278,15 +403,23 @@ namespace Renderer_System
         //                       shader never reads them. Essential since most
         //                       texture slots start empty, and sampler slots
         //                       past Sampler_Preset::Count are never written.
-        //   UPDATE_AFTER_BIND — allows writing new slots (Register_texture,
-        //                       Set_sampler) even after this set has already
-        //                       been bound in a previously-recorded command
-        //                       buffer.
+        //   UPDATE_AFTER_BIND — writes made after this set was bound in a
+        //                       command buffer that is still being recorded
+        //                       are legal, and its submission sees them.
+        //   UPDATE_UNUSED_WHILE_PENDING
+        //                     — slots that no pending command buffer reads
+        //                       (dynamically, with PARTIALLY_BOUND) can be
+        //                       written while frames that use this set are
+        //                       still executing. Register_texture,
+        //                       Update_texture, Release_texture and
+        //                       Set_sampler rely on it outside startup.
         //   VARIABLE_DESCRIPTOR_COUNT is intentionally NOT used here — only
         //   the binding with the highest number in a set may use it, and a
         //   fixed size for both arrays is simpler and sufficient for this
         //   engine's needs.
-        constexpr VkDescriptorBindingFlags bindless_flags = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+        constexpr VkDescriptorBindingFlags bindless_flags = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
+                                                            VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
+                                                            VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT;
 
         // One entry per binding, in the same order as `bindings`.
         const std::array<VkDescriptorBindingFlags, 2> binding_flags = { bindless_flags, bindless_flags };

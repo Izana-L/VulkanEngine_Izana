@@ -46,8 +46,10 @@ namespace Renderer_System
             // layout is set by the first user of the image:
             //   uploaded textures - UNDEFINED -> TRANSFER_DST_OPTIMAL before
             //                       the buffer copy (Transition_image_layout);
-            //   storage images    - UNDEFINED -> GENERAL before every compute
-            //                       write (Transition_image_layout);
+            //   storage images    - UNDEFINED -> TRANSFER_DST_OPTIMAL for the
+            //                       initial clear, then UNDEFINED -> GENERAL
+            //                       before every compute write (Storage_Image,
+            //                       through Record_image_barrier);
             //   attachments       - the render pass, through the attachment
             //                       initialLayout and its subpass layout.
             image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -126,6 +128,52 @@ namespace Renderer_System
             return image_view;
         }
 
+        // ---------- Record_image_barrier ----------
+        void Record_image_barrier(
+            VkCommandBuffer      _command_buffer,
+            VkImage              _image,
+            VkImageLayout        _old_layout,
+            VkImageLayout        _new_layout,
+            const Barrier_Scope& _source,
+            const Barrier_Scope& _destination,
+            uint32_t             _mip_levels)
+        {
+            assert(_command_buffer != VK_NULL_HANDLE &&
+                "Record_image_barrier() called with a null command buffer");
+            assert(_image != VK_NULL_HANDLE &&
+                "Record_image_barrier() called with a null image");
+            assert(_mip_levels > 0 &&
+                "Record_image_barrier() called with zero mip levels");
+
+            // Enforced in every build: an empty stage mask is invalid usage
+            // without synchronization2, which the device does not enable,
+            // and nothing guarantees a validation layer is present to
+            // report it.
+            if (_source.stages == 0 || _destination.stages == 0)
+                throw std::invalid_argument("Record_image_barrier: the source and destination stage masks must not be empty");
+
+            VkImageMemoryBarrier barrier{};
+            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            barrier.oldLayout = _old_layout;
+            barrier.newLayout = _new_layout;
+            barrier.srcAccessMask = _source.access;
+            barrier.dstAccessMask = _destination.access;
+
+            // No queue family ownership transfer: the barrier stays within
+            // the queue family that records it.
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+
+            barrier.image = _image;
+            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            barrier.subresourceRange.baseMipLevel = 0;
+            barrier.subresourceRange.levelCount = _mip_levels;
+            barrier.subresourceRange.baseArrayLayer = 0;
+            barrier.subresourceRange.layerCount = 1;
+
+            vkCmdPipelineBarrier(_command_buffer, _source.stages, _destination.stages, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+        }
+
         // ---------- Transition_image_layout ----------
         void Transition_image_layout(
             VkCommandBuffer _command_buffer,
@@ -139,65 +187,41 @@ namespace Renderer_System
             assert(_image != VK_NULL_HANDLE &&
                 "Transition_image_layout() called with a null image");
 
-            VkImageMemoryBarrier barrier{};
-            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            barrier.oldLayout = _old_layout;
-            barrier.newLayout = _new_layout;
-
-            // Not transferring queue family ownership — same queue does
-            // everything (graphics queue handles transfers too here).
-            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-
-            barrier.image = _image;
-            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            barrier.subresourceRange.baseMipLevel = 0;
-            barrier.subresourceRange.levelCount = _mip_levels;
-            barrier.subresourceRange.baseArrayLayer = 0;
-            barrier.subresourceRange.layerCount = 1;
-
-            VkPipelineStageFlags source_stage;
-            VkPipelineStageFlags destination_stage;
-
             // Each supported transition has a specific pair of access masks
             // and pipeline stages — these tell the GPU what kind of work
             // must finish before the transition and what kind of work must
             // wait until after it, so the barrier actually synchronizes
             // correctly instead of just changing the layout label.
+            Barrier_Scope source;
+            Barrier_Scope destination;
 
             if (_old_layout == VK_IMAGE_LAYOUT_UNDEFINED &&
                 _new_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
             {
-                // Nothing to wait on (image is fresh) — transfer writes
-                // must happen after this barrier.
-                barrier.srcAccessMask = 0;
-                barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-
-                source_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-                destination_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+                // Nothing to wait on: the image was just created and no
+                // earlier command accesses it. Transfer writes must happen
+                // after this barrier. An image that was already in use needs
+                // its earlier accesses in the source scope, so it goes
+                // through Record_image_barrier instead.
+                source = { VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0 };
+                destination = { VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT };
             }
             else if (_old_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL &&
                 _new_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
             {
                 // Transfer writes must finish before shader reads begin, in
-               // every stage that can read the image through the bindless
-               // set (Bindless_Reader_Pipeline_Stages, Shader_Stages.hpp).
-                barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-                source_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-                destination_stage = Bindless_Reader_Pipeline_Stages;
+                // every stage that can read the image through the bindless
+                // set (Bindless_Reader_Pipeline_Stages, Shader_Stages.hpp).
+                source = { VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT };
+                destination = { Bindless_Reader_Pipeline_Stages, VK_ACCESS_SHADER_READ_BIT };
             }
             else if (_old_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL &&
                 _new_layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
             {
                 // Used between mip levels during Generate_mipmaps: the level
                 // just written becomes the source for blitting into the next.
-                barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-
-                source_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-                destination_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+                source = { VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT };
+                destination = { VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT };
             }
             else if (_old_layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL &&
                 _new_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
@@ -205,53 +229,20 @@ namespace Renderer_System
                 // Used after Generate_mipmaps finishes: the last mip level
                 // (still TRANSFER_SRC from being blit source) becomes readable
                 // by every bindless reader stage.
-                barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-                barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-                source_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-                destination_stage = Bindless_Reader_Pipeline_Stages;
-            }
-            else if (_old_layout == VK_IMAGE_LAYOUT_UNDEFINED && _new_layout == VK_IMAGE_LAYOUT_GENERAL)
-            {
-                // Before a compute shader rewrites a storage image registered
-                // in the bindless set. Reserved for that use: the destination
-                // assumes the writer is a compute shader.
-                //
-                // UNDEFINED discards the previous contents, which is correct
-                // only because the dispatch rewrites every texel.
-                //
-                // The source is the bindless reader stages, not TOP_OF_PIPE:
-                // the reads of the previous frame must finish before the
-                // image is overwritten (write-after-read). A barrier orders
-                // against every command submitted earlier to the same queue,
-                // so this also covers frames recorded in other command
-                // buffers. A write-after-read hazard needs only an execution
-                // dependency, hence the empty source access mask.
-                barrier.srcAccessMask = 0;
-                barrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-
-                source_stage = Bindless_Reader_Pipeline_Stages;
-                destination_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-            }
-            else if (_old_layout == VK_IMAGE_LAYOUT_GENERAL && _new_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-            {
-                // After the dispatch that wrote the image and before any
-                // reader: returns the image to the declared layout of its
-                // bindless slot (Bindless_Registry::Register_texture) and
-                // makes the compute writes visible to every bindless reader
-                // stage.
-                barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-                barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-                source_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-                destination_stage = Bindless_Reader_Pipeline_Stages;
+                source = { VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT };
+                destination = { Bindless_Reader_Pipeline_Stages, VK_ACCESS_SHADER_READ_BIT };
             }
             else
             {
-                throw std::runtime_error("Transition_image_layout: unsupported layout transition. " "Add a new branch here if this transition is genuinely needed.");
+                // Deliberately no branch for GENERAL: the layouts do not say
+                // which stages write or read the image, and a guess would
+                // record wrong stages and accesses without any error.
+                throw std::runtime_error("Transition_image_layout: unsupported layout transition; only the texture upload "
+                                         "transitions are derived from the layouts. Record any other transition with "
+                                         "Record_image_barrier and explicit source and destination scopes.");
             }
 
-            vkCmdPipelineBarrier( _command_buffer,source_stage, destination_stage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+            Record_image_barrier(_command_buffer, _image, _old_layout, _new_layout, source, destination, _mip_levels);
         }
 
         // ---------- Copy_buffer_to_image ----------

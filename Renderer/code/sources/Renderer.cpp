@@ -912,10 +912,11 @@ namespace Renderer_System
             push.albedo_texture_index = item.albedo_texture_index;
             push.albedo_sampler_index = item.albedo_sampler_index;
 
-            // Debug-only safety net. An index past the written slots reads
+            // Debug-only safety net. An index that was never registered reads
             // an unwritten descriptor, which PARTIALLY_BOUND turns into
-            // undefined behaviour rather than a validation error.
-            assert(push.albedo_texture_index < bindless_registry.Get_registered_count() && "Draw_Item::albedo_texture_index points past the registered textures");
+            // undefined behaviour rather than a validation error; a released
+            // one reads the error texture or whatever texture reused the slot.
+            assert(bindless_registry.Is_texture_registered(push.albedo_texture_index) && "Draw_Item::albedo_texture_index is not a registered bindless texture slot");
             assert(push.albedo_sampler_index < static_cast<uint32_t>(CoreTypes::Sampler_Preset::Count) && "Draw_Item::albedo_sampler_index is not a Sampler_Preset value");
 
             vkCmdPushConstants(_command_buffer, pipeline_layout.Get_handle(),
@@ -945,6 +946,14 @@ namespace Renderer_System
         swapchain.Recreate();
         depth_resources.Recreate(swapchain.Get_extent());
         framebuffers.Recreate(render_pass, swapchain, depth_resources);
+
+        // Resolution-dependent images registered in the bindless set (the
+        // Storage_Image outputs of compute passes) belong here as well,
+        // after the idle wait above: Storage_Image::Recreate, with its
+        // clear submitted before the next frame reads the slot, then
+        // Bindless_Registry::Update_texture on the slot the image already
+        // holds. Every draw keeps its index and reads a live view, and no
+        // slot is consumed per resize.
 
         // The image count may have changed: one Image_Sync per new image.
         Create_image_sync();

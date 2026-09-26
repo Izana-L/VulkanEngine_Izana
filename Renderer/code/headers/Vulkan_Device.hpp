@@ -63,8 +63,13 @@ namespace Renderer_System {
         // Descriptor indexing features required for bindless textures:
         //   runtimeDescriptorArray, descriptorBindingPartiallyBound,
         //   shaderSampledImageArrayNonUniformIndexing,
-        //   descriptorBindingSampledImageUpdateAfterBind.
-        // All four are REQUIRED: a device without them is not selected.
+        //   descriptorBindingSampledImageUpdateAfterBind,
+        //   descriptorBindingUpdateUnusedWhilePending.
+        // All five are REQUIRED: a device without them is not selected.
+        // The last one lets Bindless_Registry write slots that no pending
+        // frame reads while other frames are still executing. It belongs
+        // to the minimum descriptor indexing feature set, so every device
+        // with the Vulkan 1.2 descriptorIndexing capability supports it.
         bool bindless = false;
 
         bool sampler_anisotropy = false;
@@ -120,6 +125,10 @@ namespace Renderer_System {
         bool  sampler_anisotropy_enabled;
         float max_sampler_anisotropy;
 
+        // Whether the descriptor indexing features of Device_Support::bindless
+        // were enabled when the logical device was created.
+        bool  bindless_enabled;
+
         Bindless_Limits bindless_limits;
     public:
 
@@ -146,8 +155,12 @@ namespace Renderer_System {
         // is enabled on this device, together with its instance half.
         bool Is_swapchain_maintenance1_enabled() const;
 
-        // Always true for a constructed device: descriptor indexing is a
-        // selection requirement. Kept so callers can state the dependency.
+        // True when the descriptor indexing features bindless textures need
+        // (Device_Support::bindless) were enabled on this device. The value
+        // is recorded from the selected GPU when the device is created, not
+        // assumed: device selection requires the features today, so it is
+        // true, but a device created without them reports false and
+        // Bindless_Registry refuses to run on it.
         bool Is_bindless_supported() const;
 
         // True when the samplerAnisotropy feature was enabled.

@@ -73,30 +73,73 @@ namespace Renderer_System
             uint32_t              _mip_levels
         );
 
-        // Records a pipeline barrier that transitions an image between layouts
-        // and inserts the correct access masks and pipeline stages for the
-         // transition. Only the transitions listed below are supported; any
-        // other pair throws std::runtime_error. Extend this function if new
-        // transitions are needed rather than calling vkCmdPipelineBarrier
-        // directly elsewhere.
+        // One side of a pipeline barrier: the pipeline stages whose work the
+        // barrier orders, and the memory accesses of those stages that it
+        // makes available (source side) or visible (destination side).
+        struct Barrier_Scope
+        {
+            VkPipelineStageFlags stages = 0;
+            VkAccessFlags        access = 0;
+        };
+
+        // Records an image memory barrier on the color aspect of mip levels
+        // 0 .. _mip_levels - 1 (array layer 0), with the synchronization
+        // stated by the caller instead of derived from the layouts:
+        //   _source      - the earlier work the barrier waits for, and the
+        //                  writes it makes available;
+        //   _destination - the later work that waits for the barrier, and
+        //                  the accesses the data is made visible to.
+        // A layout pair alone does not say which work happens on each side
+        // (GENERAL serves storage writes by any shader stage, compute to
+        // compute chains through imageLoad, transfer writes...), so every
+        // transition whose layouts do not identify that work is recorded
+        // here, never through Transition_image_layout.
         //
-        // Every transition that ends in SHADER_READ_ONLY_OPTIMAL (the declared
-        // layout of the bindless slots) makes the image readable by all
-        // Bindless_Reader_Pipeline_Stages (Shader_Stages.hpp).
+        // The caller is responsible for what only it can know: every stage
+        // in both scopes must be supported by the queue family of the pool
+        // _command_buffer was allocated from (FRAGMENT_SHADER, for example,
+        // is not available on a compute-only queue), and every access must
+        // be supported by a stage of its scope.
+        //
+        // _command_buffer: must already be in the recording state
+        // _mip_levels: number of mip levels affected by the barrier
+        //
+        // Throws std::invalid_argument if either stage mask is 0, which
+        // vkCmdPipelineBarrier does not allow without synchronization2.
+        void Record_image_barrier(
+            VkCommandBuffer      _command_buffer,
+            VkImage              _image,
+            VkImageLayout        _old_layout,
+            VkImageLayout        _new_layout,
+            const Barrier_Scope& _source,
+            const Barrier_Scope& _destination,
+            uint32_t             _mip_levels
+        );
+
+        // Records the barrier of one step of the texture upload in
+        // Texture_GPU. Only the transitions listed below are supported; any
+        // other pair throws std::runtime_error. Each of them involves a
+        // TRANSFER_* layout, which only transfer commands use, so the pair
+        // identifies the transfer side; the other side is fixed by the
+        // upload flow and stated next to each pair. Any other transition,
+        // GENERAL above all, is recorded with Record_image_barrier and
+        // explicit scopes instead of being added here.
         //
         // Supported transitions:
-        //   Texture upload:
-        //     UNDEFINED            -> TRANSFER_DST_OPTIMAL     (before buffer copy)
+        //     UNDEFINED            -> TRANSFER_DST_OPTIMAL     (before buffer copy;
+        //                                                       the image is freshly
+        //                                                       created, so nothing
+        //                                                       earlier accesses it)
         //     TRANSFER_DST_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL (after copy, no mips)
         //     TRANSFER_DST_OPTIMAL -> TRANSFER_SRC_OPTIMAL     (before mip generation)
         //     TRANSFER_SRC_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL (after mip generation)
-        //   Compute write to an image registered in the bindless set
-        //   (rule in Bindless_Registry::Register_texture):
-        //     UNDEFINED            -> GENERAL                  (before the dispatch;
-        //                                                       waits for the readers
-        //                                                       of previous frames)
-        //     GENERAL              -> SHADER_READ_ONLY_OPTIMAL (after the dispatch)
         //
+        // The transitions that end in SHADER_READ_ONLY_OPTIMAL (the declared
+        // layout of the bindless slots) make the image readable by all
+        // Bindless_Reader_Pipeline_Stages (Shader_Stages.hpp). That includes
+        // FRAGMENT_SHADER, so this function is recorded on a queue family
+        // with graphics support: the graphics family, which every command
+        // pool of the engine uses (Vulkan_Command_Pool).
         //
         // _command_buffer: must already be in the recording state
         // _mip_levels: number of mip levels affected by this transition
