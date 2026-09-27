@@ -81,6 +81,23 @@ namespace ECS
 
         // Emissive color scale. Zero = no emission.
         MathLib::Vector3 emissive_factor = { 0.0f, 0.0f, 0.0f };
+
+        // =========================================================
+        // GPU binding
+        // =========================================================
+
+        // Value of gpu_material_id while the material is not registered.
+        static constexpr uint32_t INVALID_GPU_MATERIAL_ID = 0xFFFFFFFFu;
+
+        // Slot of this material in the Renderer's material table, set by
+        // the Engine when it registers the material (the fields above,
+        // resolved to GPU indices). The Extractor copies it into
+        // Draw_Item::material_index; while it is INVALID_GPU_MATERIAL_ID
+        // the item draws with CoreTypes::Default_Material.
+        //
+        // Changing a field above does NOT update the GPU copy: the material
+        // has to be registered again, which yields a new slot.
+        uint32_t gpu_material_id = INVALID_GPU_MATERIAL_ID;
     };
 
 } // namespace ECS

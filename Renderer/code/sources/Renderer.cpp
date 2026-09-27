@@ -129,6 +129,12 @@ namespace Renderer_System
             // so the defaults take the reserved bindless slots.
             Upload_default_textures();
 
+            // ── Material table ─────────────────────────────────────────
+            // After the defaults: the default material samples
+            // Default_Texture::White, and registration checks that its
+            // slot exists. After the descriptor pool (per_material_set).
+            Init_material_table();
+
             // ── Compute pass resources ─────────────────────────────────
             // After the defaults (its bindless slot comes after theirs) and
             // after the descriptor pool (per_pass_set is allocated from it).
@@ -183,6 +189,10 @@ namespace Renderer_System
         textures.clear();
         procedural_image.reset();
 
+        // Tolerates a buffer that was never created (constructor failure
+        // before Init_material_table).
+        Vulkan_Buffer_Utils::Destroy_buffer(allocator.Get_handle(), material_buffer);
+        registered_materials.clear();
 
         if (transfer_fence != VK_NULL_HANDLE) {
             vkDestroyFence(dev, transfer_fence, nullptr);
@@ -642,6 +652,114 @@ namespace Renderer_System
             << ") in bindless slot " << procedural_texture_index << ".\n";
     }
 
+    // =========================================================
+    // Material table
+    // =========================================================
+
+    void Renderer::Init_material_table()
+    {
+        VkDevice dev = device.Get_logical_device_handle();
+
+        // ── Buffer ─────────────────────────────────────────────────
+        // Host-visible and coherent (Cpu_To_Gpu), persistently mapped:
+        // Register_material writes each new slot in place.
+        material_buffer = Vulkan_Buffer_Utils::Create_buffer(allocator.Get_handle(), sizeof(Material_GPU) * MAX_MATERIALS,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, Vulkan_Buffer_Utils::Buffer_Access::Cpu_To_Gpu, true);
+
+        // Reserved up front: Register_material then never reallocates, so
+        // its push_back cannot throw after the capacity check.
+        registered_materials.reserve(MAX_MATERIALS);
+
+        // ── Set 2: material table descriptor ───────────────────────
+        const VkDescriptorSetLayout per_material_layout = descriptor_layouts.Get(Descriptor_Set::Per_Material);
+
+        VkDescriptorSetAllocateInfo alloc_info{};
+        alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        alloc_info.descriptorPool = descriptor_pool;
+        alloc_info.descriptorSetCount = 1;
+        alloc_info.pSetLayouts = &per_material_layout;
+
+        VK_CHECK(vkAllocateDescriptorSets(dev, &alloc_info, &per_material_set),
+            "Init_material_table: failed to allocate the set 2 descriptor set");
+
+        // The range is the whole CAPACITY: the descriptor is written once
+        // and slots are added in place afterwards.
+        VkDescriptorBufferInfo buffer_info{};
+        buffer_info.buffer = material_buffer.buffer;
+        buffer_info.offset = 0;
+        buffer_info.range = sizeof(Material_GPU) * MAX_MATERIALS;
+
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = per_material_set;
+        write.dstBinding = Binding_Per_Material::Materials;
+        write.dstArrayElement = 0;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write.descriptorCount = 1;
+        write.pBufferInfo = &buffer_info;
+
+        vkUpdateDescriptorSets(dev, 1, &write, 0, nullptr);
+
+        // ── Default material ───────────────────────────────────────
+        // A default-constructed Material_Desc is the default material.
+        // Slot 0 is a contract with every Draw_Item: a mismatch means
+        // something was registered before this call.
+        const uint32_t default_slot = Register_material(Material_Desc{});
+
+        if (default_slot != CoreTypes::Default_Material)
+            throw std::logic_error("Renderer: the default material did not land in slot "
+                + std::to_string(CoreTypes::Default_Material) + "; something was registered before it");
+
+        std::cout << "[Renderer] Material table: " << MAX_MATERIALS << " slots, default material in slot "
+            << CoreTypes::Default_Material << ".\n";
+    }
+
+    uint32_t Renderer::Register_material(const Material_Desc& _desc)
+    {
+        assert(material_buffer.mapped_ptr != nullptr && "Register_material called before Init_material_table");
+
+        // Validated once here instead of once per draw per frame. A slot
+        // that passes these checks stays valid because slots are never
+        // rewritten, provided the texture is not released through
+        // Bindless_Registry::Release_texture while a material references
+        // it (nothing releases textures today).
+        if (!bindless_registry.Is_texture_registered(_desc.albedo_texture_index))
+            throw std::invalid_argument("Register_material: albedo_texture_index " + std::to_string(_desc.albedo_texture_index)
+                + " is not a registered bindless texture slot");
+
+        const uint32_t sampler_index = static_cast<uint32_t>(_desc.sampler);
+
+        if (sampler_index >= static_cast<uint32_t>(CoreTypes::Sampler_Preset::Count))
+            throw std::invalid_argument("Register_material: sampler " + std::to_string(sampler_index)
+                + " is not a Sampler_Preset value");
+
+        // Deduplication by value. Linear: runs at registration time only,
+        // over at most MAX_MATERIALS entries.
+        for (uint32_t slot = 0; slot < static_cast<uint32_t>(registered_materials.size()); ++slot)
+        {
+            if (registered_materials[slot] == _desc)
+                return slot;
+        }
+
+        if (registered_materials.size() >= MAX_MATERIALS)
+            throw std::runtime_error("Register_material: the material table is full (" + std::to_string(MAX_MATERIALS)
+                + " slots): raise MAX_MATERIALS in Frame_Data.hpp");
+
+        const uint32_t slot = static_cast<uint32_t>(registered_materials.size());
+        registered_materials.push_back(_desc);
+
+        // Written in place: this slot was never referenced by a submitted
+        // command, and host-coherent writes are visible to the next submit
+        // without a flush or a barrier.
+        Material_GPU& gpu_material = static_cast<Material_GPU*>(material_buffer.mapped_ptr)[slot];
+        gpu_material.base_color = _desc.base_color;
+        gpu_material.albedo_texture_index = _desc.albedo_texture_index;
+        gpu_material.albedo_sampler_index = sampler_index;
+        gpu_material._padding0 = 0;
+        gpu_material._padding1 = 0;
+
+        return slot;
+    }
 
     // =========================================================
     // Surface size
@@ -1001,22 +1119,38 @@ namespace Renderer_System
         vkCmdSetDepthCompareOp(command_buffer, raster_state.depth_compare_op);
 
         // ── Bind descriptor sets ─────────────────────────────────
-        // Set 0: per-frame view/projection UBO + light buffer.
-        // Set 3: global bindless texture array, bound once here and
-        // indexed by every draw item through its push constants.
+// Set 0: per-frame view/projection UBO, light buffer and object
+//        buffer of this frame slot.
+// Set 2: global material table, indexed through each object's
+//        material_index.
+// Set 3: global bindless texture array, indexed through each
+//        material's albedo_texture_index.
+// Set 1 is not bound: it only holds compute pass resources.
         VkDescriptorSet per_frame_set = descriptor_sets[current_frame];
         vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout.Get_handle(),
-                                Descriptor_Set::Per_Frame, 1, &per_frame_set, 0, nullptr);
+            Descriptor_Set::Per_Frame, 1, &per_frame_set, 0, nullptr);
+
+        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout.Get_handle(),
+            Descriptor_Set::Per_Material, 1, &per_material_set, 0, nullptr);
 
         VkDescriptorSet bindless_set = bindless_registry.Get_set();
         vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout.Get_handle(),
-                                Descriptor_Set::Bindless, 1, &bindless_set, 0, nullptr);
+            Descriptor_Set::Bindless, 1, &bindless_set, 0, nullptr);
 
         uint8_t  bound_pipeline_id = 0xFF;
         uint32_t bind_count = 0;
 
+        // ── Object buffer of this frame slot ──────────────────────
+        // Rewritten from entry 0 every frame: the GPU finished reading
+        // this slot's copy before its fence was waited on in Render().
+        // Shared counter: opaque items take [0, opaque), transparent items
+        // continue from there.
+        Object_GPU* const objects = static_cast<Object_GPU*>(_frame.object_buffer.mapped_ptr);
+        uint32_t          object_count = 0;
+
         // ── Opaque pass: depth write on ───────────────────────────
-        Draw_items(command_buffer, _packet.opaque_items, CoreTypes::Render_Pass_Bit::Opaque, _packet, bound_pipeline_id, bind_count);
+        Draw_items(command_buffer, _packet.opaque_items, CoreTypes::Render_Pass_Bit::Opaque, _packet,
+            objects, object_count, bound_pipeline_id, bind_count);
 
         // ── Transparent pass: depth test only, back-to-front ──────
         // The list arrives sorted back-to-front by the extract; blending
@@ -1025,7 +1159,8 @@ namespace Renderer_System
         {
             vkCmdSetDepthWriteEnable(command_buffer, VK_FALSE);
 
-            Draw_items(command_buffer, _packet.transparent_items, CoreTypes::Render_Pass_Bit::Transparent, _packet, bound_pipeline_id, bind_count);
+            Draw_items(command_buffer, _packet.transparent_items, CoreTypes::Render_Pass_Bit::Transparent, _packet,
+                objects, object_count, bound_pipeline_id, bind_count);
         }
 
         if (bind_count != last_reported_binds)
@@ -1051,9 +1186,13 @@ namespace Renderer_System
         const std::vector<CoreTypes::Draw_Item>& _items,
         uint8_t _pass_bit,
         const CoreTypes::RenderPacket& _packet,
+        Object_GPU* _objects,
+        uint32_t& _object_count,
         uint8_t& _bound_pipeline_id,
         uint32_t& _bind_count)
     {
+        assert(_objects != nullptr && "Draw_items: the object buffer of the frame is not mapped");
+
         for (const CoreTypes::Draw_Item& item : _items)
         {
             // An item that does not take part in this pass is skipped, so a
@@ -1063,12 +1202,15 @@ namespace Renderer_System
             const uint8_t item_pipeline_id = CoreTypes::Get_pipeline_id(item.sort_key);
             const VkPipeline pipeline = pipeline_registry.Get_by_id(item_pipeline_id);
 
-            // Every reference is validated in every build: an out-of-range
-            // transform index would read past the packet's array.
+            // Every reference is validated in every build, before its entry
+            // is written: an out-of-range transform index would read past
+            // the packet's array, and an out-of-range material index would
+            // read past the written slots of the material table.
             const bool valid =
                 pipeline != VK_NULL_HANDLE &&
                 item.mesh_gpu_id < meshes.size() &&
-                item.transform_idx < _packet.transform_count;
+                item.transform_idx < _packet.transform_count &&
+                item.material_index < registered_materials.size();
 
             if (!valid)
             {
@@ -1076,11 +1218,26 @@ namespace Renderer_System
                 {
                     std::cerr << "[Renderer] Draw item skipped: pipeline " << int(item_pipeline_id)
                         << ", mesh " << item.mesh_gpu_id << ", transform " << item.transform_idx
+                        << ", material " << item.material_index
                         << " (registered meshes: " << meshes.size() << ", transforms in packet: "
-                        << _packet.transform_count << "). Further occurrences are not reported.\n";
+                        << _packet.transform_count << ", registered materials: " << registered_materials.size()
+                        << "). Further occurrences are not reported.\n";
                     warned_invalid_item = true;
                 }
                 continue;
+            }
+
+            // The object buffer is full: this and every later item of the
+            // frame are skipped.
+            if (_object_count >= MAX_OBJECTS)
+            {
+                if (!warned_object_overflow)
+                {
+                    std::cerr << "[Renderer] More than " << MAX_OBJECTS << " draws in one frame: the rest are skipped. "
+                        "Raise MAX_OBJECTS in Frame_Data.hpp. Further occurrences are not reported.\n";
+                    warned_object_overflow = true;
+                }
+                return;
             }
 
             if (item_pipeline_id != _bound_pipeline_id)
@@ -1090,53 +1247,27 @@ namespace Renderer_System
                 ++_bind_count;
             }
 
-            // Per-draw data: model matrix (vertex stage), tint, texture
-// index and sampler index (fragment stage), all in one push.
-            Push_Constants push{};
-            push.model = _packet.transforms[item.transform_idx];
-            push.base_color = item.base_color;
-            push.albedo_texture_index = item.albedo_texture_index;
-            push.albedo_sampler_index = item.albedo_sampler_index;
+            // ── Object entry ──────────────────────────────────────
+            // Its index is the draw's firstInstance, which the vertex shader
+            // receives as gl_InstanceIndex. No push constants: the shaders
+            // read everything per draw from this entry and the material
+            // table.
+            const uint32_t object_index = _object_count++;
+            const MathLib::Matrix4& model = _packet.transforms[item.transform_idx];
 
-            // An index that was never registered reads an unwritten
-            // descriptor, which PARTIALLY_BOUND turns into undefined
-            // behaviour rather than a validation error, and without GPU-AV
-            // nothing reports it. Debug builds stop at the assert; every
-            // build replaces the index with a valid fallback before the
-            // push, so a bad index never reaches the shader: the error
-            // texture for a texture, the default preset for a sampler.
-            const bool texture_valid = bindless_registry.Is_texture_registered(push.albedo_texture_index);
-            const bool sampler_valid = push.albedo_sampler_index < static_cast<uint32_t>(CoreTypes::Sampler_Preset::Count);
-
-            assert(texture_valid && "Draw_Item::albedo_texture_index is not a registered bindless texture slot");
-            assert(sampler_valid && "Draw_Item::albedo_sampler_index is not a Sampler_Preset value");
-
-            if (!texture_valid || !sampler_valid)
-            {
-                if (!warned_invalid_material_index)
-                {
-                    std::cerr << "[Renderer] Draw item with texture index " << push.albedo_texture_index
-                        << " and sampler index " << push.albedo_sampler_index << " drawn with "
-                        << (texture_valid ? "its texture" : "the error texture") << " and "
-                        << (sampler_valid ? "its sampler" : "the default sampler")
-                        << ". Further occurrences are not reported.\n";
-                    warned_invalid_material_index = true;
-                }
-
-                if (!texture_valid)
-                    push.albedo_texture_index = CoreTypes::Default_Texture::Error;
-
-                if (!sampler_valid)
-                    push.albedo_sampler_index = static_cast<uint32_t>(CoreTypes::Sampler_Preset::Linear_Repeat);
-            }
-
-            vkCmdPushConstants(_command_buffer, pipeline_layout.Get_handle(),
-                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                0, sizeof(Push_Constants), &push);
+            Object_GPU& object = _objects[object_index];
+            object.model = model;
+            // Inverse-transpose computed once per draw here instead of once
+            // per vertex in mesh.vert; correct under non-uniform scale.
+            object.normal_matrix = glm::transpose(glm::inverse(model));
+            object.material_index = item.material_index;
+            object.mesh_index = item.mesh_gpu_id;
+            object.flags = item.pass_mask;
+            object._padding0 = 0;
 
             const Mesh_GPU& mesh = meshes[item.mesh_gpu_id];
             mesh.Bind(_command_buffer);
-            mesh.Draw(_command_buffer);
+            mesh.Draw(_command_buffer, object_index);
         }
     }
 
@@ -1212,16 +1343,18 @@ namespace Renderer_System
 
     void Renderer::Init_descriptor_pool()
     {
-        // Set 0: one uniform buffer and one storage buffer descriptor per
-        // frame-in-flight. Set 1: one storage image descriptor for the
-        // procedural pass (per_pass_set, shared by every frame slot).
+        // Set 0: one uniform buffer and two storage buffers (lights,
+        // objects) per frame-in-flight. Set 1: one storage image for the
+        // procedural pass (per_pass_set). Set 2: one storage buffer for the
+        // material table (per_material_set). Sets 1 and 2 are shared by
+        // every frame slot.
         std::array<VkDescriptorPoolSize, 3> pool_sizes{};
 
         pool_sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         pool_sizes[0].descriptorCount = FRAMES_IN_FLIGHT;
 
         pool_sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        pool_sizes[1].descriptorCount = FRAMES_IN_FLIGHT;
+        pool_sizes[1].descriptorCount = 2 * FRAMES_IN_FLIGHT + 1;
 
         pool_sizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         pool_sizes[2].descriptorCount = 1;
@@ -1230,7 +1363,7 @@ namespace Renderer_System
         pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pool_info.poolSizeCount = static_cast<uint32_t>(pool_sizes.size());
         pool_info.pPoolSizes = pool_sizes.data();
-        pool_info.maxSets = FRAMES_IN_FLIGHT + 1;   // one set 0 per frame slot + one set 1
+        pool_info.maxSets = FRAMES_IN_FLIGHT + 2;   // one set 0 per frame slot + one set 1 + one set 2
 
         VK_CHECK(vkCreateDescriptorPool(device.Get_logical_device_handle(), &pool_info, nullptr, &descriptor_pool),
             "Renderer: failed to create descriptor pool");
@@ -1269,8 +1402,16 @@ namespace Renderer_System
             // change by memcpy. Frame_UBO::light_count says how many entries
             // are valid.
             light_info.range = sizeof(Light_GPU) * MAX_LIGHTS;
+            // Same rule as the lights: the whole capacity. Only the entries
+            // written this frame are read, because every draw indexes its own
+            // entry through firstInstance.
+            VkDescriptorBufferInfo object_info{};
+            object_info.buffer = frames[i].object_buffer.buffer;
+            object_info.offset = 0;
+            object_info.range = sizeof(Object_GPU) * MAX_OBJECTS;
 
-            std::array<VkWriteDescriptorSet, 2> writes{};
+            std::array<VkWriteDescriptorSet, 3> writes{};
+ 
 
             writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[0].dstSet = descriptor_sets[i];
@@ -1287,6 +1428,14 @@ namespace Renderer_System
             writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             writes[1].descriptorCount = 1;
             writes[1].pBufferInfo = &light_info;
+
+            writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[2].dstSet = descriptor_sets[i];
+            writes[2].dstBinding = Binding_Per_Frame::Objects;
+            writes[2].dstArrayElement = 0;
+            writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[2].descriptorCount = 1;
+            writes[2].pBufferInfo = &object_info;
 
             vkUpdateDescriptorSets(device.Get_logical_device_handle(),
                 static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);

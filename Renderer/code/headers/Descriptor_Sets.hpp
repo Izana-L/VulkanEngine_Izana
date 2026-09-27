@@ -28,7 +28,7 @@ namespace Renderer_System
     {
         inline constexpr uint32_t Per_Frame = 0;
         inline constexpr uint32_t Per_Pass = 1;   // resources written by a compute pass
-        inline constexpr uint32_t Per_Material = 2;   // reservado, vacio
+        inline constexpr uint32_t Per_Material = 2;   // global material table, written on registration
         inline constexpr uint32_t Bindless = 3;
         inline constexpr uint32_t Count = 4;
     }
@@ -38,6 +38,7 @@ namespace Renderer_System
     {
         inline constexpr uint32_t Frame_UBO = 0;   // camara, inversas, tiempo
         inline constexpr uint32_t Lights = 1;   // SSBO con el array de luces
+        inline constexpr uint32_t Objects = 2;     // SSBO of Object_GPU, one entry per draw, indexed by gl_InstanceIndex
     }
 
     // Bindings inside set 1. Visible to the compute stage only: graphics
@@ -47,6 +48,14 @@ namespace Renderer_System
     {
         inline constexpr uint32_t Procedural_Output = 0;   // STORAGE_IMAGE written by procedural.comp (layout GENERAL)
     }
+
+    // Bindings inside set 2. One set for every frame: the table is
+    // append-only, so a frame in flight never reads a slot being written.
+    namespace Binding_Per_Material
+    {
+        inline constexpr uint32_t Materials = 0;   // SSBO of Material_GPU, indexed by Object_GPU::material_index
+    }
+
 
 
     // Bindings dentro del set 3. Imagen y muestreador van en arrays

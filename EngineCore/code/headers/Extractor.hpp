@@ -39,8 +39,10 @@ namespace EngineCore
     //      transform, plus the clear color.
     //   2. Iterates entities with Transform_Component + Mesh_Component,
     //      resolves Asset_Handle -> gpu_id, reads the optional
-    //      Material_Component (tint, albedo texture), routes each item to
-    //      the opaque or the transparent list and fills the transforms.
+    //      Material_Component (its material table slot, and the tint alpha
+    //      that routes each item to the opaque or the transparent list)
+    //      and fills the transforms. Textures are not resolved here: the
+    //      Engine did it once, when it registered the material.
     //   3. Iterates entities with Transform_Component + Light_Component,
     //      fills the GPU_Light array from WORLD positions and directions.
     //   4. Sorts opaque items front-to-back and transparent items

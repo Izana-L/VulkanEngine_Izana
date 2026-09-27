@@ -13,9 +13,9 @@ namespace Renderer_System
     // Set 1 holds the resources written by compute passes
    // (Binding_Per_Pass), visible to the compute stage only.
    //
-   // Set 2 is created with bindingCount = 0. An empty layout is legal,
-   // reserves no descriptors and costs no memory: its only purpose is to
-   // occupy the slot so that set 3 is ALWAYS set 3.
+       // Set 2 holds the global material table (Binding_Per_Material),
+    // visible to the fragment stage (material sampling) and the compute
+    // stage (passes that read materials, e.g. GPU culling).
     class Descriptor_Layout_Cache
     {
         VkDevice device_handle;
@@ -42,6 +42,6 @@ namespace Renderer_System
 
         VkDescriptorSetLayout Create_per_frame_layout();
         VkDescriptorSetLayout Create_per_pass_layout();
-        VkDescriptorSetLayout Create_empty_layout();
+        VkDescriptorSetLayout Create_per_material_layout();
     };
 }

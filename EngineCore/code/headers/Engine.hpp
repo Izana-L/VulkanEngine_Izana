@@ -11,7 +11,7 @@
 #include <Engine_Loop.hpp>
 #include <Entity.hpp>
 #include <Asset_Handle.hpp>
-
+#include <Material_Component.hpp>
 #include <cstdint>
 #include <string>
 
@@ -94,7 +94,14 @@ namespace EngineCore
         // the id already registered.
         uint32_t Ensure_mesh_uploaded(CoreTypes::Asset_Handle _mesh);
         uint32_t Ensure_image_uploaded(CoreTypes::Asset_Handle _image);
-
+        // Registers _material in the Renderer's material table if it has no
+        // slot yet, stores the slot in _material.gpu_material_id and returns
+        // it. Texture handles are resolved to bindless indices here, once:
+        // an unassigned albedo uses Default_Texture::White, and an assigned
+        // one without a GPU index (never uploaded, or a stale handle) uses
+        // Default_Texture::Error, so the mistake shows up magenta. Equal
+        // materials share one slot (Renderer::Register_material).
+        uint32_t Ensure_material_registered(ECS::Material_Component& _material);
         // Creates an entity with a transform and a mesh at _position, with
         // the mesh uploaded if needed.
         ECS::Entity Spawn_mesh_entity(CoreTypes::Asset_Handle _mesh, const MathLib::Vector3& _position);

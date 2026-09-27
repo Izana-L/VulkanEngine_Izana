@@ -141,6 +141,32 @@ namespace EngineCore
         return bindless_index;
     }
 
+    uint32_t Engine::Ensure_material_registered(ECS::Material_Component& _material)
+    {
+        if (_material.gpu_material_id != ECS::Material_Component::INVALID_GPU_MATERIAL_ID)
+            return _material.gpu_material_id;
+
+        Renderer_System::Material_Desc desc;
+        desc.base_color = _material.base_color_factor;
+        desc.sampler = _material.sampler;
+
+        // Albedo not assigned: White (the Material_Desc default). Assigned
+        // but with no GPU index (never uploaded, or a stale handle): Error,
+        // so the mistake shows up magenta instead of silently white.
+        if (_material.albedo.Is_valid())
+        {
+            const uint32_t texture_index = resources.Get_image_gpu_id(_material.albedo);
+
+            desc.albedo_texture_index = texture_index != ResourceManager::Resource_Manager::INVALID_GPU_ID
+                                        ? texture_index : CoreTypes::Default_Texture::Error;
+        }
+
+        _material.gpu_material_id = renderer.Register_material(desc);
+
+        return _material.gpu_material_id;
+    }
+
+
     ECS::Entity Engine::Spawn_mesh_entity(CoreTypes::Asset_Handle _mesh, const MathLib::Vector3& _position)
     {
         Ensure_mesh_uploaded(_mesh);
@@ -204,6 +230,9 @@ namespace EngineCore
         {
             std::cerr << "[Engine] Albedo texture not loaded: " << e.what() << "\n";
         }
+        // Registered after its texture is uploaded: the albedo handle is
+        // resolved to its bindless index at this point, once.
+        Ensure_material_registered(sphere_material);
 
         world.Add_component<ECS::Material_Component>(sphere_entity, sphere_material);
 
@@ -222,6 +251,8 @@ namespace EngineCore
         // Material_Component onwards, with no CPU pixels to upload.
         ECS::Material_Component cube_material;
         cube_material.albedo = resources.Register_external_image("procedural", renderer.Get_procedural_texture_index());
+
+        Ensure_material_registered(cube_material);
 
         world.Add_component<ECS::Material_Component>(cube_entity, cube_material);
 

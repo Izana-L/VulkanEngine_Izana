@@ -3,13 +3,14 @@
 #extension GL_EXT_nonuniform_qualifier : require
 
 #include "common/frame_set.glsl"
-#include "common/push_constants.glsl"
+#include "common/scene_data.glsl"
 #include "common/bindless.glsl"
 
 layout(location = 0) in vec3 frag_world_normal;
 layout(location = 1) in vec3 frag_world_pos;
 layout(location = 2) in vec2 frag_uv;
 layout(location = 3) in vec4 frag_color;
+layout(location = 4) flat in uint frag_material_index;
 
 layout(location = 0) out vec4 out_color;
 
@@ -26,11 +27,15 @@ void main()
     vec3 N = normalize(frag_world_normal);
     vec3 V = normalize(frame.camera_position - frag_world_pos);
 
-    // Base color: vertex tint * per-draw tint * albedo texture, read with
-    // the sampler preset the material selected. Every draw carries a
-    // written texture slot: an untextured draw samples the white default
-    // texture, which leaves the tint unchanged.
-    vec4 base = frag_color * push.base_color * Sample_bindless(push.albedo_texture_index, push.albedo_sampler_index, frag_uv);
+    // Base color: vertex tint * material tint * albedo texture, read with
+    // the sampler preset the material selected. Every material carries a
+    // written texture slot: an untextured one samples the white default
+    // texture, which leaves the tint unchanged. Sample_bindless applies
+    // nonuniformEXT: the material, and so the texture index, may differ
+    // between invocations of one subgroup once draws are merged.
+    Material material = material_buffer.materials[frag_material_index];
+
+    vec4 base = frag_color * material.base_color * Sample_bindless(material.albedo_texture_index, material.albedo_sampler_index, frag_uv);
 
     vec3 diffuse  = vec3(0.0);
     vec3 specular = vec3(0.0);

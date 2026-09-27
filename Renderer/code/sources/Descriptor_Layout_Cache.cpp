@@ -19,7 +19,7 @@ namespace Renderer_System
         {
             layouts[Descriptor_Set::Per_Frame] = Create_per_frame_layout();
             layouts[Descriptor_Set::Per_Pass] = Create_per_pass_layout();
-            layouts[Descriptor_Set::Per_Material] = Create_empty_layout();
+            layouts[Descriptor_Set::Per_Material] = Create_per_material_layout();
         }
         catch (...)
         {
@@ -58,7 +58,7 @@ namespace Renderer_System
     // ---------- set 0 : por fotograma ----------
     VkDescriptorSetLayout Descriptor_Layout_Cache::Create_per_frame_layout()
     {
-        std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
+        std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
 
        
         bindings[0].binding = Binding_Per_Frame::Frame_UBO;
@@ -71,6 +71,17 @@ namespace Renderer_System
         bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[1].descriptorCount = 1;
         bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+
+        // binding 2 — object buffer: one Object_GPU per draw, indexed by
+        // gl_InstanceIndex (the draw's firstInstance). Visible to the vertex
+        // stage (model and normal matrices), the fragment stage (material
+        // index, flags) and the compute stage (GPU culling reads every
+        // object); declaring COMPUTE now keeps this layout stable later.
+        bindings[2].binding = Binding_Per_Frame::Objects;
+        bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[2].descriptorCount = 1;
+        bindings[2].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+
 
         VkDescriptorSetLayoutCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -108,17 +119,29 @@ namespace Renderer_System
         return layout;
     }
 
-    // ---------- set 2 : reserved ----------
-    VkDescriptorSetLayout Descriptor_Layout_Cache::Create_empty_layout()
+    // ---------- set 2 : per material ----------
+    VkDescriptorSetLayout Descriptor_Layout_Cache::Create_per_material_layout()
     {
+        std::array<VkDescriptorSetLayoutBinding, 1> bindings{};
+
+        // binding 0 — material table: one Material_GPU per registered
+        // material, indexed by Object_GPU::material_index. Visible to the
+        // fragment stage (base color, albedo texture and sampler) and the
+        // compute stage (passes that need material data, e.g. culling by
+        // pass or alpha mode). The vertex stage only forwards the index.
+        bindings[0].binding = Binding_Per_Material::Materials;
+        bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[0].descriptorCount = 1;
+        bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+
         VkDescriptorSetLayoutCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        info.bindingCount = 0;
-        info.pBindings = nullptr;
+        info.bindingCount = static_cast<uint32_t>(bindings.size());
+        info.pBindings = bindings.data();
 
         VkDescriptorSetLayout layout = VK_NULL_HANDLE;
         VK_CHECK(vkCreateDescriptorSetLayout(device_handle, &info, nullptr, &layout),
-            "Descriptor_Layout_Cache: failed to create an empty set layout");
+            "Descriptor_Layout_Cache: failed to create the set 2 layout");
         return layout;
     }
 }

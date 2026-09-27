@@ -124,53 +124,27 @@ namespace EngineCore
 
                 if (gpu_id == ResourceManager::Resource_Manager::INVALID_GPU_ID) return;
 
-                // Optional material: per-draw tint, albedo texture and the
-                // sampler preset it is read with. Without one the item draws
-                // with the white default texture and the default sampler,
-                // which looks exactly like an untextured draw.
+                // Optional material, already registered in the Renderer's
+                // material table by the Engine: the item only carries its
+                // slot. Without a material, or with one not registered yet,
+                // the item draws with the default material, which looks
+                // exactly like an untextured, untinted draw. The textures
+                // were resolved to bindless indices at registration, not
+                // here every frame.
                 CoreTypes::Draw_Item item{};
                 item.mesh_gpu_id = gpu_id;
-                item.base_color = { 1.0f, 1.0f, 1.0f, 1.0f };
-                item.albedo_texture_index = CoreTypes::Default_Texture::White;
-                item.albedo_sampler_index = static_cast<uint32_t>(CoreTypes::Sampler_Preset::Linear_Repeat);
+                item.material_index = CoreTypes::Default_Material;
+
+                // Alpha of the material tint: what routes the item to the
+                // opaque or the transparent pass below.
+                float base_alpha = 1.0f;
 
                 if (const ECS::Material_Component* material = _world.Try_get_component<ECS::Material_Component>(entity))
                 {
-                    item.base_color = material->base_color_factor;
+                    if (material->gpu_material_id != ECS::Material_Component::INVALID_GPU_MATERIAL_ID)
+                        item.material_index = material->gpu_material_id;
 
-                    // The preset value is already the slot in the bindless
-                    // sampler array; no translation is needed. A value that
-                    // is not a preset (Count itself, or corrupt material
-                    // data) would index a sampler slot that was never
-                    // written, which is undefined behaviour on the GPU:
-                    // such a material keeps the default preset, and the
-                    // first one is reported.
-                    const uint32_t sampler_index = static_cast<uint32_t>(material->sampler);
-
-                    if (sampler_index < static_cast<uint32_t>(CoreTypes::Sampler_Preset::Count))
-                    {
-                        item.albedo_sampler_index = sampler_index;
-                    }
-                    else if (!warned_invalid_sampler)
-                    {
-                        std::cerr << "[Extractor] Material of entity " << ECS::Entity_index(entity)
-                                  << " selects sampler preset " << sampler_index << ", which does not exist ("
-                                  << static_cast<uint32_t>(CoreTypes::Sampler_Preset::Count)
-                                  << " presets); Linear_Repeat is used instead. Further occurrences are not reported.\n";
-                        warned_invalid_sampler = true;
-                    }
-
-                    // Albedo not assigned: stays White. Assigned but with no
-                    // GPU index (never uploaded, or a stale handle): Error,
-                    // so the mistake shows up magenta instead of silently
-                    // white.
-                    if (material->albedo.Is_valid())
-                    {
-                        const uint32_t texture_index = _resources.Get_image_gpu_id(material->albedo);
-
-                        item.albedo_texture_index = texture_index != ResourceManager::Resource_Manager::INVALID_GPU_ID
-                                                                    ? texture_index: CoreTypes::Default_Texture::Error;
-                    }
+                    base_alpha = material->base_color_factor.a;
                 }
 
                 // Store the world matrix and record its index.
@@ -183,7 +157,7 @@ namespace EngineCore
 
                 // Alpha below one routes the item to the transparent pass:
                 // blended pipeline, back-to-front order, no depth writes.
-                const bool transparent = item.base_color.a < 1.0f;
+                const bool transparent = base_alpha < 1.0f;
 
                 if (transparent)
                 {

@@ -97,9 +97,14 @@ namespace Renderer_System
         // Must be called before Draw() within the same command buffer.
         void Bind(VkCommandBuffer _command_buffer) const;
 
-        // Records an indexed draw call for the full mesh.
+        // Records an indexed draw call for the full mesh, one instance.
         // Bind() must have been called first in this command buffer.
-        void Draw(VkCommandBuffer _command_buffer) const;
+        //
+        // _first_instance is the value gl_InstanceIndex takes in the vertex
+        // shader (Vulkan includes firstInstance in it): the Renderer passes
+        // the index of the draw's entry in the object buffer. A non-zero
+        // value needs no device feature on a direct draw.
+        void Draw(VkCommandBuffer _command_buffer, uint32_t _first_instance = 0) const;
 
         // =========================================================
         // Query

@@ -73,6 +73,13 @@ namespace CoreTypes
         inline constexpr uint32_t Count = 4;
     }
 
+    // Slot of the material table reserved for the default material. The
+    // Renderer registers it at startup, before any other material, so it
+    // is always slot 0: white base color, Default_Texture::White albedo,
+    // Sampler_Preset::Linear_Repeat. An item without a material draws with
+    // it, which looks exactly like an untextured, untinted draw.
+    inline constexpr uint32_t Default_Material = 0;
+
     // =========================================================
     // Draw_Item
     // =========================================================
@@ -97,33 +104,25 @@ namespace CoreTypes
     // comes back. That is the standard choice: a pipeline bind costs far
     // more than the overdraw it saves.
     //
-    // The material id lives ONLY inside the key (there is no material table
-    // to index yet); Get_material_id() unpacks it when a consumer appears.
+    // The material_id field of the key is still 0: grouping draws by
+    // material only pays off once materials bind per-draw state, and every
+    // material is now read from one table (Draw_Item::material_index).
     struct Draw_Item
     {
         uint32_t         mesh_gpu_id = 0;
         uint32_t         transform_idx = 0;
 
-        // Bindless index of the albedo texture. Never an empty slot: an
-        // untextured item uses Default_Texture::White and a missing image
-        // Default_Texture::Error. Travels to the fragment shader through
-        // the push constant block.
-        uint32_t         albedo_texture_index = Default_Texture::White;
-
-        // Bindless index of the sampler the albedo texture is read with:
-        // the material's Sampler_Preset, whose value is its slot in the
-        // sampler array. Travels next to albedo_texture_index.
-        uint32_t         albedo_sampler_index = static_cast<uint32_t>(Sampler_Preset::Linear_Repeat);
+        // Slot of the item's material in the Renderer's material table
+        // (base color, albedo texture and sampler). Never an unregistered
+        // slot: an item without a material uses Default_Material. The
+        // Renderer copies it into the object buffer, and the shaders read
+        // the material from there.
+        uint32_t         material_index = Default_Material;
 
         // Which passes draw this item (Render_Pass_Bit).
         uint8_t          pass_mask = Render_Pass_Bit::Opaque;
 
         uint64_t         sort_key = 0;
-
-        // Per-draw tint multiplied with the vertex color and the albedo
-        // texture. Alpha below 1.0 is what routes an item to the
-        // transparent list.
-        MathLib::Vector4 base_color = { 1.0f, 1.0f, 1.0f, 1.0f };
     };
 
     // =========================================================

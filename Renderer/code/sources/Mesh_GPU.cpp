@@ -227,14 +227,14 @@ namespace Renderer_System
     }
 
     // ---------- Draw ----------
-    void Mesh_GPU::Draw(VkCommandBuffer _command_buffer) const
+    void Mesh_GPU::Draw(VkCommandBuffer _command_buffer, uint32_t _first_instance) const
     {
         assert(vertex_buffer.buffer != VK_NULL_HANDLE &&
             "Draw() called on a moved-from or destroyed Mesh_GPU");
         assert(_command_buffer != VK_NULL_HANDLE &&
             "Draw() called with a null command buffer");
 
-        vkCmdDrawIndexed(_command_buffer, index_count, 1, 0, 0, 0);
+        vkCmdDrawIndexed(_command_buffer, index_count, 1, 0, 0, _first_instance);
     }
 
     // ---------- Getters ----------

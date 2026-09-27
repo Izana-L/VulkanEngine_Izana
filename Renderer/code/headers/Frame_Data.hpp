@@ -18,8 +18,19 @@ namespace Renderer_System
 {
 
     // Capacity of the per-frame light buffer. The shader reads an
-    // unsized array, so raising this touches only the C++ side.
+// unsized array, so raising this touches only the C++ side.
     static constexpr uint32_t MAX_LIGHTS = 16;
+
+    // Capacity of the per-frame object buffer: one Object_GPU per draw,
+    // opaque items first, then transparent ones. Draws beyond it are
+    // skipped with a single warning. Growing a buffer that descriptors in
+    // flight reference is out of scope; raise the constant instead.
+    static constexpr uint32_t MAX_OBJECTS = 4096;
+
+    // Capacity of the material table (set 2). Append-only: a slot, once
+    // written, never changes. Slot 0 is CoreTypes::Default_Material.
+    static constexpr uint32_t MAX_MATERIALS = 1024;
+
 
     // =========================================================
     // GPU-side layouts: the C++ half of the C++/GLSL contract
@@ -104,6 +115,43 @@ namespace Renderer_System
     static_assert(offsetof(Procedural_Push_Constants, image_width) == 0, "Procedural_Push_Constants breaks the layout of procedural.comp");
     static_assert(offsetof(Procedural_Push_Constants, time) == 8, "Procedural_Push_Constants breaks the layout of procedural.comp");
 
+    // Mirror of `Object` in scene_data.glsl (std430). One entry per draw in
+    // the per-frame object buffer (set 0, Binding_Per_Frame::Objects); the
+    // draw passes its index as firstInstance and the vertex shader reads
+    // objects[gl_InstanceIndex].
+    //
+    // normal_matrix is a mat4 on purpose: a mat3 occupies three vec4
+    // columns in std430 (48 bytes, not 36), so a mat4 costs 16 bytes more
+    // and removes any padding mismatch. The shader uses its upper 3x3.
+    struct Object_GPU
+    {
+        MathLib::Matrix4 model;             // world matrix
+        MathLib::Matrix4 normal_matrix;     // transpose(inverse(model)), computed on the CPU
+        uint32_t         material_index;    // slot in the material table (set 2)
+        uint32_t         mesh_index;        // Renderer mesh registry id; read by GPU culling (roadmap step 4)
+        uint32_t         flags;             // bits 0-7: CoreTypes::Render_Pass_Bit of the item; bits 8-31 reserved
+        uint32_t         _padding0;         // keeps the stride at a multiple of 16
+    };
+    static_assert(sizeof(Object_GPU) == 144, "Object_GPU breaks the std430 layout of scene_data.glsl");
+    static_assert(offsetof(Object_GPU, normal_matrix) == 64, "Object_GPU breaks the std430 layout of scene_data.glsl");
+    static_assert(offsetof(Object_GPU, material_index) == 128, "Object_GPU breaks the std430 layout of scene_data.glsl");
+    static_assert(offsetof(Object_GPU, flags) == 136, "Object_GPU breaks the std430 layout of scene_data.glsl");
+
+    // Mirror of `Material` in scene_data.glsl (std430). One entry per
+    // registered material in the material table (set 2,
+    // Binding_Per_Material::Materials); objects reference it through
+    // Object_GPU::material_index.
+    struct Material_GPU
+    {
+        MathLib::Vector4 base_color;             // tint multiplied with vertex color and albedo sample
+        uint32_t         albedo_texture_index;   // bindless texture slot; untextured = CoreTypes::Default_Texture::White
+        uint32_t         albedo_sampler_index;   // slot in the bindless sampler array (a CoreTypes::Sampler_Preset value)
+        uint32_t         _padding0;
+        uint32_t         _padding1;
+    };
+    static_assert(sizeof(Material_GPU) == 32, "Material_GPU breaks the std430 layout of scene_data.glsl");
+    static_assert(offsetof(Material_GPU, albedo_texture_index) == 16, "Material_GPU breaks the std430 layout of scene_data.glsl");
+    static_assert(offsetof(Material_GPU, albedo_sampler_index) == 20, "Material_GPU breaks the std430 layout of scene_data.glsl");
     // =========================================================
     // Frame_Data
     // =========================================================
@@ -182,6 +230,11 @@ namespace Renderer_System
         // MAX_LIGHTS entries of Light_GPU, storage buffer.
         Vulkan_Buffer_Utils::Buffer_Allocation light_buffer;
 
+        // MAX_OBJECTS entries of Object_GPU, storage buffer, persistently
+        // mapped. Rewritten entirely every frame by the Renderer, one entry
+        // per draw; the entry index is the draw's firstInstance.
+        Vulkan_Buffer_Utils::Buffer_Allocation object_buffer;
+
     private:
 
         VkDevice     device_handle;
@@ -222,6 +275,10 @@ namespace Renderer_System
 
             light_buffer = Vulkan_Buffer_Utils::Create_buffer(allocator, sizeof(Light_GPU) * MAX_LIGHTS,
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, Vulkan_Buffer_Utils::Buffer_Access::Cpu_To_Gpu, true);
+
+            object_buffer = Vulkan_Buffer_Utils::Create_buffer(allocator, sizeof(Object_GPU) * MAX_OBJECTS,
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, Vulkan_Buffer_Utils::Buffer_Access::Cpu_To_Gpu, true);
+        
         }
         catch (...)
         {
@@ -239,6 +296,7 @@ namespace Renderer_System
     {
         if (device_handle == VK_NULL_HANDLE) return;
 
+        Vulkan_Buffer_Utils::Destroy_buffer(allocator, object_buffer);
         Vulkan_Buffer_Utils::Destroy_buffer(allocator, light_buffer);
         Vulkan_Buffer_Utils::Destroy_buffer(allocator, uniform_buffer);
 
@@ -258,6 +316,7 @@ namespace Renderer_System
         in_flight_fence(_other.in_flight_fence),
         uniform_buffer(_other.uniform_buffer),
         light_buffer(_other.light_buffer),
+        object_buffer(_other.object_buffer),
         device_handle(_other.device_handle),
         allocator(_other.allocator)
     {
@@ -265,6 +324,7 @@ namespace Renderer_System
         _other.in_flight_fence = VK_NULL_HANDLE;
         _other.uniform_buffer = {};
         _other.light_buffer = {};
+        _other.object_buffer = {};
         _other.device_handle = VK_NULL_HANDLE;
     }
 
@@ -279,6 +339,7 @@ namespace Renderer_System
             in_flight_fence = _other.in_flight_fence;
             uniform_buffer = _other.uniform_buffer;
             light_buffer = _other.light_buffer;
+            object_buffer = _other.object_buffer;
             device_handle = _other.device_handle;
             allocator = _other.allocator;
 
@@ -286,6 +347,7 @@ namespace Renderer_System
             _other.in_flight_fence = VK_NULL_HANDLE;
             _other.uniform_buffer = {};
             _other.light_buffer = {};
+            _other.object_buffer = {};
             _other.device_handle = VK_NULL_HANDLE;
         }
         return *this;

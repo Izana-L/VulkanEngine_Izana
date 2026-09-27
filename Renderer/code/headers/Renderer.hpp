@@ -67,6 +67,28 @@ namespace Renderer_System
         std::vector<uint32_t> texture_bindless_indices;
     };
 
+    // Material as the Renderer registers it: GPU-ready values only, with
+    // every texture already resolved to its bindless index. The caller
+    // (Engine) translates an ECS::Material_Component into this, choosing
+    // the default textures for unassigned or missing images, so the
+    // Renderer never sees asset handles.
+    //
+    // Two descriptions that compare equal share one slot of the material
+    // table: Register_material deduplicates by value.
+    struct Material_Desc
+    {
+        MathLib::Vector4          base_color = { 1.0f, 1.0f, 1.0f, 1.0f };
+        uint32_t                  albedo_texture_index = CoreTypes::Default_Texture::White;
+        CoreTypes::Sampler_Preset sampler = CoreTypes::Sampler_Preset::Linear_Repeat;
+
+        bool operator==(const Material_Desc& _other) const
+        {
+            return base_color == _other.base_color
+                && albedo_texture_index == _other.albedo_texture_index
+                && sampler == _other.sampler;
+        }
+    };
+
     // Renderer: the only Vulkan-facing class that EngineCore knows about.
     //
     // Owns the entire Vulkan stack (instance -> device -> swapchain ->
@@ -167,6 +189,10 @@ namespace Renderer_System
         // Draw items that reference a mesh, transform or pipeline that
         // does not exist are skipped; the first one is reported once.
         bool                   warned_invalid_item = false;
+
+        // Draws beyond MAX_OBJECTS in one frame are skipped; the first
+        // frame that overflows is reported once.
+        bool                   warned_object_overflow = false;
 
         // Draw items whose texture index is not a registered bindless
         // slot, or whose sampler index is not a Sampler_Preset, are drawn
@@ -277,6 +303,25 @@ namespace Renderer_System
         // magenta instead of an unregistered slot.
         uint32_t                                          procedural_texture_index = CoreTypes::Default_Texture::Error;
 
+        // =========================================================
+        // Material table (set 2)
+        // =========================================================
+
+        // MAX_MATERIALS entries of Material_GPU, storage buffer,
+        // persistently mapped. One copy shared by every frame in flight:
+        // the table is append-only, so Register_material only writes slots
+        // that no submitted command references yet, and host-coherent
+        // writes before a submit need no barrier.
+        Vulkan_Buffer_Utils::Buffer_Allocation            material_buffer;
+
+        // Set 2: the material table descriptor. One set, written once in
+        // Init_material_table().
+        VkDescriptorSet                                   per_material_set = VK_NULL_HANDLE;
+
+        // CPU copy of every registered description; index = slot in the
+        // table. Used by Register_material to deduplicate by value.
+        std::vector<Material_Desc>                        registered_materials;
+
 
         // =========================================================
         // Asset registries
@@ -326,6 +371,15 @@ namespace Renderer_System
         // and the transfer fence exist.
         void Init_procedural_pass();
 
+        // Creates material_buffer, allocates and writes per_material_set,
+        // and registers the default material, checking that it lands in
+        // slot CoreTypes::Default_Material. Called once from the
+        // constructor, after the descriptor pool exists, after
+        // Upload_default_textures (the default material samples
+        // Default_Texture::White) and before any other material is
+        // registered.
+        void Init_material_table();
+
         std::vector<Pipeline_Config> Build_pipeline_manifest() const;
 
         // Creates one Image_Sync per swapchain image of the CURRENT swapchain.
@@ -361,9 +415,19 @@ namespace Renderer_System
         void Record_command_buffer(Frame_Data& _frame, const CoreTypes::RenderPacket& _packet, uint32_t _image_index);
 
         // Records the draws of one item list for one pass. Items whose
-        // pass_mask lacks _pass_bit are skipped.
-        void Draw_items(VkCommandBuffer _command_buffer,const std::vector<CoreTypes::Draw_Item>& _items,uint8_t _pass_bit,
-                        const CoreTypes::RenderPacket& _packet, uint8_t& _bound_pipeline_id, uint32_t& _bind_count);
+        // pass_mask lacks _pass_bit are skipped, and so are items that
+        // reference a pipeline, mesh, transform or material that does not
+        // exist.
+        //
+        // Every drawn item gets the next entry of _objects (the mapped
+        // object buffer of the frame being recorded): the entry index,
+        // _object_count before the increment, is the draw's firstInstance.
+        // _object_count is shared by all the calls of one frame, so the
+        // opaque pass takes indices [0, opaque) and the transparent pass
+        // continues from there. Items beyond MAX_OBJECTS are skipped.
+            void Draw_items(VkCommandBuffer _command_buffer, const std::vector<CoreTypes::Draw_Item>&_items, uint8_t _pass_bit,
+                            const CoreTypes::RenderPacket & _packet, Object_GPU * _objects, uint32_t & _object_count, uint8_t & 
+                            _bound_pipeline_id, uint32_t & _bind_count);
 
         // Recreates the swapchain, depth resources, framebuffers and
         // per-image synchronization after a resize or OUT_OF_DATE error.
@@ -401,7 +465,10 @@ namespace Renderer_System
         // array (set 3, binding 0). The texture carries no sampler: the
         // shader pairs it with the slot of the sampler array (set 3,
         // binding 1) that the material selects, e.g.:
-        //   Sample_bindless(push.albedo_texture_index, push.albedo_sampler_index, uv)
+        //   Sample_bindless(material.albedo_texture_index, material.albedo_sampler_index, uv)
+        // where the index returned here reaches the shader as
+        // Material_Desc::albedo_texture_index (see Register_material).
+        //
         //
         // This is distinct from the internal Texture_GPU registry index
         // (used only to keep the Texture_GPU object alive); callers
@@ -443,6 +510,26 @@ namespace Renderer_System
         // std::runtime_error if the bindless texture array does not have a
         // free slot for every texture of the batch.
         Upload_Batch_Result Upload_batch(const Upload_Batch& _batch);
+
+        // =========================================================
+        // Materials
+        // =========================================================
+
+        // Registers a material in the material table (set 2) and returns
+        // its slot: the value Draw_Item::material_index carries and the
+        // shaders index the table with. A description equal to one already
+        // registered returns that slot and writes nothing.
+        //
+        // Slots are never released or rewritten, so the returned index is
+        // valid for the whole lifetime of the Renderer. Meant for load
+        // time; calling it between frames is also valid, because a new
+        // slot is never referenced by a command already submitted.
+        //
+        // Throws std::invalid_argument if albedo_texture_index is not a
+        // registered bindless slot or sampler is not a Sampler_Preset
+        // value, and std::runtime_error if the table is full
+        // (MAX_MATERIALS).
+        uint32_t Register_material(const Material_Desc& _desc);
 
         // =========================================================
         // Compute pass outputs
