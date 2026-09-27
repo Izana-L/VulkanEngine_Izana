@@ -11,12 +11,73 @@
 #include <MathConstants.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <limits>
 
 namespace EngineCore
 {
+
+    namespace
+    {
+        // Plane through _point with unit normal _normal pointing inside:
+        // xyz = normal, w = -dot(normal, point), so dot(xyz, p) + w is the
+        // signed distance of p (positive inside).
+        MathLib::Vector4 Make_plane(const MathLib::Vector3& _normal, const MathLib::Vector3& _point)
+        {
+            return MathLib::Vector4(_normal, -glm::dot(_normal, _point));
+        }
+
+        // World space culling planes of a camera, built from its parameters
+        // rather than extracted from view_projection: with reverse-Z and an
+        // infinite far plane the classic extraction yields a degenerate far
+        // plane and signs that differ from the usual derivation.
+        //
+        // _right, _up, _forward: orthonormal world space basis of the view,
+        // the same one Look_at builds. Order of the planes: left, right,
+        // bottom, top, near (CoreTypes::Frustum).
+        CoreTypes::Frustum Make_camera_frustum(const ECS::Camera_Component& _camera,
+            const MathLib::Vector3& _position,
+            const MathLib::Vector3& _right,
+            const MathLib::Vector3& _up,
+            const MathLib::Vector3& _forward,
+            float _aspect)
+        {
+            CoreTypes::Frustum frustum;
+
+            if (_camera.projection == ECS::Camera_Component::Projection::Perspective)
+            {
+                // Side planes through the eye. A point at distance d along
+                // the view direction is inside horizontally when
+                // |x| <= d * tan_half_width: the plane normals lean towards
+                // the view direction by that slope.
+                const float tan_half_height = std::tan(_camera.fov * MathLib::Constants::DEG_TO_RAD * 0.5f);
+                const float tan_half_width = tan_half_height * _aspect;
+
+                frustum.planes[0] = Make_plane(glm::normalize( _right + _forward * tan_half_width), _position);   // left
+                frustum.planes[1] = Make_plane(glm::normalize(-_right + _forward * tan_half_width), _position);   // right
+                frustum.planes[2] = Make_plane(glm::normalize( _up + _forward * tan_half_height), _position);     // bottom
+                frustum.planes[3] = Make_plane(glm::normalize(-_up + _forward * tan_half_height), _position);     // top
+            }
+            else
+            {
+                // Parallel side planes at the half extents of the box.
+                const float half_height = _camera.ortho_size;
+                const float half_width = half_height * _aspect;
+
+                frustum.planes[0] = Make_plane( _right, _position - _right * half_width);    // left
+                frustum.planes[1] = Make_plane(-_right, _position + _right * half_width);    // right
+                frustum.planes[2] = Make_plane( _up, _position - _up * half_height);         // bottom
+                frustum.planes[3] = Make_plane(-_up, _position + _up * half_height);         // top
+            }
+
+            // Near plane, facing the view direction.
+            frustum.planes[4] = Make_plane(_forward, _position + _forward * _camera.near_plane);
+
+            return frustum;
+        }
+    }
 
     bool Extractor::Extract(const ECS::World& _world,
         const ResourceManager::Resource_Manager& _resources,
@@ -105,7 +166,19 @@ namespace EngineCore
         _out_packet.view.view_projection = projection * view;
         _out_packet.view.camera_position = cam_pos;
         _out_packet.view.camera_forward = cam_forward;
+        _out_packet.view.near_plane = camera_comp->near_plane;
         _out_packet.clear_color = camera_comp->clear_color;
+
+        // Culling planes, from the same basis Look_at builds: forward, the
+        // right vector cross(forward, up) and the up vector re-orthogonalized
+        // from both, so the planes match the view matrix exactly.
+        {
+            const MathLib::Vector3 view_forward = glm::normalize(cam_forward);
+            const MathLib::Vector3 view_right = glm::normalize(glm::cross(view_forward, cam_up));
+            const MathLib::Vector3 view_up = glm::cross(view_right, view_forward);
+
+            _out_packet.view.frustum = Make_camera_frustum(*camera_comp, cam_pos, view_right, view_up, view_forward, aspect);
+        }
 
         // =========================================================
         // 3. Build Draw_Items from (Transform + Mesh) entities

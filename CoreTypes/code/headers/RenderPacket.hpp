@@ -3,12 +3,55 @@
 #include <Vector.hpp>
 #include <Matrix.hpp>
 #include <Sampler_Preset.hpp>
+#include <array>
 #include <bit>
 #include <cstdint>
 #include <vector>
 
 namespace CoreTypes
 {
+
+    // =========================================================
+    // Frustum
+    // =========================================================
+
+    // The planes a bounding sphere is culled against, in WORLD space.
+    //
+    // Each plane stores its unit normal pointing INSIDE the frustum in
+    // xyz and its offset in w: a point p is on the inner side when
+    // dot(xyz, p) + w >= 0. The unit normal makes that value the signed
+    // distance to the plane, so it compares directly with a radius.
+    //
+    // Five planes: left, right, bottom, top and near. There is no far
+    // plane: the perspective projection is infinite. An orthographic
+    // camera does have a far plane, which is left to the rasterizer: the
+    // culling stays conservative.
+    //
+    // A default-constructed Frustum (all planes zero) contains everything,
+    // so a view that never filled it culls nothing.
+    //
+    // Built by the Extractor from the camera parameters; the Renderer
+    // uploads the same values for the GPU culling and tests the
+    // transparent items against them on the CPU.
+    struct Frustum
+    {
+        static constexpr uint32_t PLANE_COUNT = 5;
+
+        std::array<MathLib::Vector4, PLANE_COUNT> planes{};
+
+        // False when the sphere lies entirely on the outer side of one
+        // plane. A sphere crossing a plane (partly visible) is kept.
+        bool Intersects_sphere(const MathLib::Vector3& _center, float _radius) const
+        {
+            for (const MathLib::Vector4& plane : planes)
+            {
+                if (glm::dot(MathLib::Vector3(plane), _center) + plane.w < -_radius)
+                    return false;
+            }
+
+            return true;
+        }
+    };
 
     // =========================================================
     // RenderView
@@ -34,6 +77,13 @@ namespace CoreTypes
         MathLib::Matrix4 view_projection;   // projection * view, precomputed
         MathLib::Vector3 camera_position;   // world-space eye position
         MathLib::Vector3 camera_forward;    // world-space unit forward vector
+
+        // Distance from the eye to the near plane: where the depth slices of
+        // the clustered lighting start.
+        float            near_plane = 0.1f;
+
+        // Culling planes of the camera (see Frustum).
+        Frustum          frustum;
     };
 
     // =========================================================

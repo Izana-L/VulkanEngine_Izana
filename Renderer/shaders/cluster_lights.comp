@@ -1,0 +1,130 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+// Light assignment of the clustered lighting.
+//
+// One invocation per cluster: it tests every point and spot light against
+// the view space box of its cluster, reserves room in the shared light
+// index list with one atomicAdd, and writes the indices there, compacted,
+// together with its (offset, count) range in the cluster grid. mesh.frag
+// then loops over the range of the fragment's cluster only.
+//
+// Two passes over the lights (count, then write) keep the lists exact
+// without a per-invocation array: the test is a handful of instructions,
+// cheaper than the local memory a fixed list would spill to.
+//
+// Recorded every frame before the render pass, after the counter reset
+// (vkCmdFillBuffer + barrier TRANSFER -> COMPUTE) and followed by a
+// barrier COMPUTE -> FRAGMENT (Renderer::Record_command_buffer).
+//
+// Spot lights are tested with the sphere of their range: conservative (a
+// cluster behind the cone still gets the light), correct, and the cone is
+// applied by the fragment shader anyway. A light with a range of zero or
+// less reaches no cluster.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#define CLUSTER_DATA_WRITABLE
+#include "common/frame_set.glsl"
+#include "common/cluster_data.glsl"
+
+// EXACT mirror of Renderer_System::Cluster_Push_Constants (C++), 16 bytes.
+layout(push_constant) uniform Cluster_Push_Constants
+{
+    uint cluster_count;          // offset 0
+    uint light_index_capacity;   // offset 4: entries of cluster_light_indices
+    uint first_local_light;      // offset 8: lights before it are directional
+    uint light_count;            // offset 12
+} push;
+
+// Set 0, binding 5 (Binding_Per_Frame::Cluster_Counters). EXACT mirror of
+// Renderer_System::Cluster_Counters_GPU. Reset to zero every frame.
+layout(set = 0, binding = 5, std430) buffer Cluster_Counters
+{
+    uint light_index_count;      // entries requested this frame, may exceed the capacity
+    uint dropped_light_count;    // entries that did not fit
+    uint _pad0;
+    uint _pad1;
+} cluster_counters;
+
+// Set 1, binding 1 (Binding_Per_Pass::Cluster_AABBs): view space boxes,
+// built on the CPU when the projection changes.
+layout(set = 1, binding = 1, std430) readonly buffer Cluster_AABB_Buffer
+{
+    Cluster_AABB aabbs[];
+} cluster_aabbs;
+
+// True when the range sphere of light _light_index touches the box. The
+// box is in view space, so the light position is taken there with the
+// same view matrix the fragment shader uses for its depth.
+bool Light_reaches_cluster(uint _light_index, vec3 _box_min, vec3 _box_max)
+{
+    const Light light = light_buffer.lights[_light_index];
+
+    if (!(light.range > 0.0))
+        return false;
+
+    const vec3 center  = (frame.view * vec4(light.position_or_direction, 1.0)).xyz;
+    const vec3 closest = clamp(center, _box_min, _box_max);
+    const vec3 offset  = center - closest;
+
+    return dot(offset, offset) <= light.range * light.range;
+}
+
+void main()
+{
+    const uint cluster = gl_GlobalInvocationID.x;
+
+    // The dispatch is rounded up to whole groups.
+    if (cluster >= push.cluster_count)
+        return;
+
+    const vec3 box_min = cluster_aabbs.aabbs[cluster].min_point.xyz;
+    const vec3 box_max = cluster_aabbs.aabbs[cluster].max_point.xyz;
+
+    // ── Pass 1: count ─────────────────────────────────────────
+    uint count = 0u;
+
+    for (uint i = push.first_local_light; i < push.light_count; ++i)
+    {
+        if (Light_reaches_cluster(i, box_min, box_max))
+            ++count;
+    }
+
+    // ── Reserve ───────────────────────────────────────────────
+    // One atomic per cluster. The counter keeps counting past the
+    // capacity, so the frame statistics show how much was requested; the
+    // part that does not fit is clamped away and counted as dropped.
+    uint offset = 0u;
+    uint stored = 0u;
+
+    if (count > 0u)
+    {
+        offset = atomicAdd(cluster_counters.light_index_count, count);
+
+        if (offset < push.light_index_capacity)
+            stored = min(count, push.light_index_capacity - offset);
+
+        if (stored < count)
+            atomicAdd(cluster_counters.dropped_light_count, count - stored);
+    }
+
+    // ── Pass 2: write ─────────────────────────────────────────
+    // Same test, same order: the indices come out in increasing buffer
+    // order, the order the brute force path adds the lights in. The write
+    // count is what the grid records, so a pass that found fewer lights
+    // than the first one never exposes unwritten entries.
+    uint written = 0u;
+
+    for (uint i = push.first_local_light; i < push.light_count && written < stored; ++i)
+    {
+        if (Light_reaches_cluster(i, box_min, box_max))
+        {
+            cluster_light_indices.indices[offset + written] = i;
+            ++written;
+        }
+    }
+
+    const uint overflow = (stored < count) ? CLUSTER_OVERFLOW_BIT : 0u;
+
+    cluster_grid.ranges[cluster] = uvec2(offset, written | overflow);
+}

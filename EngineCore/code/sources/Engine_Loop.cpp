@@ -10,8 +10,80 @@
 #include <Extractor.hpp>
 #include <RenderPacket.hpp>
 
+#include <cstdint>
+
 namespace EngineCore
 {
+
+    namespace
+    {
+        // Next value of a cyclic enumeration with a Count enumerator.
+        template <typename ENUM>
+        ENUM Next_value(ENUM _value)
+        {
+            const uint32_t next = static_cast<uint32_t>(_value) + 1u;
+            return static_cast<ENUM>(next % static_cast<uint32_t>(ENUM::Count));
+        }
+    }
+
+    void Engine_Loop::Handle_debug_input(const Input_System::Input& _input, Renderer_System::Renderer& _renderer)
+    {
+        if (!debug_actions_resolved)
+        {
+            debug_action_ids.light_culling = _input.Get_action_id("DebugLightCulling");
+            debug_action_ids.cluster_view = _input.Get_action_id("DebugClusterView");
+            debug_action_ids.opaque_path = _input.Get_action_id("DebugOpaquePath");
+            debug_action_ids.freeze_culling = _input.Get_action_id("DebugFreezeCulling");
+            debug_action_ids.show_bounds = _input.Get_action_id("DebugShowBounds");
+            debug_action_ids.stats = _input.Get_action_id("DebugStats");
+            debug_actions_resolved = true;
+        }
+
+        Renderer_System::Render_Debug_Settings settings = _renderer.Get_debug_settings();
+        bool changed = false;
+
+        if (_input.Was_action_pressed(debug_action_ids.light_culling))
+        {
+            settings.light_culling = (settings.light_culling == Renderer_System::Light_Culling_Mode::Clustered)
+                ? Renderer_System::Light_Culling_Mode::Brute_Force
+                : Renderer_System::Light_Culling_Mode::Clustered;
+            changed = true;
+        }
+
+        if (_input.Was_action_pressed(debug_action_ids.cluster_view))
+        {
+            settings.cluster_view = Next_value(settings.cluster_view);
+            changed = true;
+        }
+
+        if (_input.Was_action_pressed(debug_action_ids.opaque_path))
+        {
+            settings.opaque_path = Next_value(settings.opaque_path);
+            changed = true;
+        }
+
+        if (_input.Was_action_pressed(debug_action_ids.freeze_culling))
+        {
+            settings.freeze_culling = !settings.freeze_culling;
+            changed = true;
+        }
+
+        if (_input.Was_action_pressed(debug_action_ids.show_bounds))
+        {
+            settings.show_bounds = !settings.show_bounds;
+            changed = true;
+        }
+
+        if (_input.Was_action_pressed(debug_action_ids.stats))
+        {
+            settings.print_stats = !settings.print_stats;
+            changed = true;
+        }
+
+        // The Renderer logs every value that changed.
+        if (changed)
+            _renderer.Set_debug_settings(settings);
+    }
 
     void Engine_Loop::Run(Platform::Window& _window,
         Input_System::Input& _input,
@@ -64,6 +136,9 @@ namespace EngineCore
 
             // ── 5. Input snapshots + named actions ────────────────
             _input.Update();
+
+            // Runtime switches between the old and new render paths.
+            Handle_debug_input(_input, _renderer);
 
             // ── 6. Camera (input -> transform) ────────────────────
             _camera_controller.Update(_camera_entity, _input, _world, dt);

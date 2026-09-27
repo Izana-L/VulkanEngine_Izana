@@ -24,10 +24,18 @@ struct Object
     mat4 model;                 // offset 0:   world matrix
     mat4 normal_matrix;         // offset 64:  transpose(inverse(model)); only the upper 3x3 is used
     uint material_index;        // offset 128: slot in materials[]
-    uint mesh_index;            // offset 132: Renderer mesh registry id (GPU culling)
-    uint flags;                 // offset 136: bits 0-7 = Render_Pass_Bit of the draw
+    uint mesh_index;            // offset 132: Renderer mesh registry id = slot in the mesh table (mesh_table.glsl)
+    uint flags;                 // offset 136: OBJECT_FLAG_* bits
     uint _pad0;                 // offset 140
 };
+
+// Bits of Object::flags, mirror of Renderer_System::Object_Flag.
+const uint OBJECT_FLAG_PASS_MASK = 0xFFu;    // bits 0-7: RENDER_PASS_* mask of the draw
+const uint OBJECT_FLAG_ACTIVE    = 0x100u;   // bit 8: drawn this frame; the culling pass skips entries without it
+
+// Mirror of CoreTypes::Render_Pass_Bit.
+const uint RENDER_PASS_OPAQUE      = 1u;
+const uint RENDER_PASS_TRANSPARENT = 2u;
 
 // EXACT mirror of Renderer_System::Material_GPU, std430, 32 bytes.
 struct Material

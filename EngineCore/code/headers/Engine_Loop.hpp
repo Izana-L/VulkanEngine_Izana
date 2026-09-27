@@ -3,6 +3,8 @@
 #include <Time.hpp>
 #include <Entity.hpp>
 
+#include <cstddef>
+
 namespace Platform { class Window; }
 namespace Input_System { class Input; }
 namespace Renderer_System { class Renderer; }
@@ -26,6 +28,7 @@ namespace EngineCore
     //   3. Time::Update()                - delta time, FPS
     //   4. Resize handling               - Window flag -> Renderer swapchain
     //   5. Input::Update()               - publish deltas, flush actions
+    //      Debug switches                - input -> Renderer debug settings
     //   6. Camera_Controller::Update()   - input -> camera transform
     //   7. Transform_System::Update()    - recompute TRS matrices
     //   8. Extractor::Extract()          - ECS -> RenderPacket
@@ -61,9 +64,35 @@ namespace EngineCore
 
     private:
 
+        // Applies the debug actions pressed this frame to the Renderer's
+        // runtime switches (Renderer_System::Render_Debug_Settings):
+        //   DebugLightCulling  - clustered lights <-> every light (reference)
+        //   DebugClusterView   - cycles the cluster grid overlays
+        //   DebugOpaquePath    - cycles direct / CPU indirect / GPU indirect /
+        //                        GPU culled opaque draws
+        //   DebugFreezeCulling - freezes the culling camera
+        //   DebugShowBounds    - bounding sphere wireframes
+        //   DebugStats         - GPU timings and counters every second
+        // Actions missing from the input JSON simply never fire.
+        void Handle_debug_input(const Input_System::Input& _input, Renderer_System::Renderer& _renderer);
+
         // The engine's single clock. Also hosts the named profiler timers
         // (Start_timer / Scoped_timer) for instrumenting the running loop.
         Platform::Time time;
+
+        // Action ids of the debug switches, resolved on the first frame.
+        struct Debug_Action_Ids
+        {
+            size_t light_culling = static_cast<size_t>(-1);
+            size_t cluster_view = static_cast<size_t>(-1);
+            size_t opaque_path = static_cast<size_t>(-1);
+            size_t freeze_culling = static_cast<size_t>(-1);
+            size_t show_bounds = static_cast<size_t>(-1);
+            size_t stats = static_cast<size_t>(-1);
+        };
+
+        Debug_Action_Ids debug_action_ids;
+        bool             debug_actions_resolved = false;
     };
 
 } // namespace EngineCore

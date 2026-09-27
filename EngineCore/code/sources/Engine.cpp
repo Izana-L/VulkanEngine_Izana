@@ -8,8 +8,12 @@
 #include <Primitive_Desc.hpp>
 #include <MathConstants.hpp>
 
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 
@@ -17,6 +21,55 @@ namespace EngineCore
 {
     namespace
     {
+        // ── Test scene of the GPU-driven roadmap ───────────────────────
+        // Clustered lighting needs many point lights and GPU culling needs
+        // thousands of objects, most of them outside the view at any time.
+        // TEST_SCENE_ENABLED = false leaves only the reference scene.
+        constexpr bool     TEST_SCENE_ENABLED = true;
+
+        // Objects per side of the grid (48 x 48 = 2304 objects), world units
+        // between neighbours, and the z of the row closest to the camera,
+        // in front of the reference objects and behind them in view order.
+        constexpr uint32_t TEST_GRID_SIDE = 48;
+        constexpr float    TEST_GRID_SPACING = 2.0f;
+        constexpr float    TEST_GRID_FIRST_Z = -6.0f;
+
+        // One object out of TEST_TRANSPARENT_EVERY is transparent (drawn by
+        // the CPU path, culled on the CPU).
+        constexpr uint32_t TEST_TRANSPARENT_EVERY = 13;
+
+        // Height of the floor plane; the reference sphere rests on it.
+        constexpr float    TEST_FLOOR_Y = -1.0f;
+
+        // Point lights scattered over the grid, and their range bounds.
+        constexpr uint32_t TEST_POINT_LIGHTS = 256;
+        constexpr float    TEST_LIGHT_MIN_RANGE = 3.0f;
+        constexpr float    TEST_LIGHT_MAX_RANGE = 6.0f;
+
+        // Deterministic value in [0, 1) for element _index and channel
+        // _channel (integer hash). Used instead of <random>, whose
+        // distributions differ between standard libraries: the test scene
+        // must be the same everywhere to serve as a reference.
+        float Hash_unit(uint32_t _index, uint32_t _channel)
+        {
+            uint32_t h = _index * 747796405u + _channel * 2891336453u + 0x9E3779B9u;
+            h ^= h >> 16;
+            h *= 0x7FEB352Du;
+            h ^= h >> 15;
+            h *= 0x846CA68Bu;
+            h ^= h >> 16;
+            return static_cast<float>(h >> 8) * (1.0f / 16777216.0f);
+        }
+
+        // Fully saturated color of hue _hue in [0, 1).
+        MathLib::Vector3 Hue_to_rgb(float _hue)
+        {
+            const float r = std::clamp(std::abs(_hue * 6.0f - 3.0f) - 1.0f, 0.0f, 1.0f);
+            const float g = std::clamp(2.0f - std::abs(_hue * 6.0f - 2.0f), 0.0f, 1.0f);
+            const float b = std::clamp(2.0f - std::abs(_hue * 6.0f - 4.0f), 0.0f, 1.0f);
+            return { r, g, b };
+        }
+
         // Validation level for the Renderer:
         //   Release (NDEBUG) - Off. The layer adds CPU cost to every API
         //                      call and must not load in a shipped build,
@@ -278,6 +331,127 @@ namespace EngineCore
 
         std::cout << "[Engine] Directional light entity created (id="
             << light_entity << ").\n";
+
+        if (TEST_SCENE_ENABLED)
+            Setup_test_scene();
+    }
+
+    // =========================================================
+    // Setup_test_scene: stress content for clustering and culling
+    // =========================================================
+
+    void Engine::Setup_test_scene()
+    {
+        const CoreTypes::Asset_Handle cube_handle = resources.Create_primitive(ResourceManager::Primitive_Desc::Make_cube());
+        const CoreTypes::Asset_Handle sphere_handle = resources.Create_primitive(ResourceManager::Primitive_Desc::Make_sphere(16, 8));
+        const CoreTypes::Asset_Handle plane_handle = resources.Create_primitive(ResourceManager::Primitive_Desc::Make_plane(1));
+
+        const float grid_width = static_cast<float>(TEST_GRID_SIDE - 1) * TEST_GRID_SPACING;
+        const float grid_center_z = TEST_GRID_FIRST_Z - 0.5f * grid_width;
+
+        // ── Floor ──────────────────────────────────────────────
+        // A unit plane scaled to cover the grid and the reference objects.
+        {
+            const ECS::Entity floor_entity = Spawn_mesh_entity(plane_handle, { 0.0f, TEST_FLOOR_Y, grid_center_z });
+
+            const float floor_size = grid_width + 24.0f;
+            world.Get_component<ECS::Transform_Component>(floor_entity).Set_scale({ floor_size, 1.0f, floor_size });
+
+            ECS::Material_Component floor_material;
+            floor_material.base_color_factor = { 0.55f, 0.55f, 0.55f, 1.0f };
+            Ensure_material_registered(floor_material);
+
+            world.Add_component<ECS::Material_Component>(floor_entity, floor_material);
+        }
+
+        // ── Materials ──────────────────────────────────────────
+        // A small palette shared by the grid: equal materials share one
+        // slot of the material table.
+        std::array<ECS::Material_Component, 6> palette;
+
+        for (uint32_t i = 0; i < palette.size(); ++i)
+        {
+            const MathLib::Vector3 tint = glm::mix(Hue_to_rgb(static_cast<float>(i) / static_cast<float>(palette.size())),
+                                                   MathLib::Vector3(1.0f), 0.55f);
+            palette[i].base_color_factor = MathLib::Vector4(tint, 1.0f);
+            Ensure_material_registered(palette[i]);
+        }
+
+        // Alpha below one routes the items to the transparent pass.
+        ECS::Material_Component glass_material;
+        glass_material.base_color_factor = { 0.55f, 0.8f, 1.0f, 0.45f };
+        Ensure_material_registered(glass_material);
+
+        // ── Object grid ────────────────────────────────────────
+        // Spheres and cubes alternate. Cubes are stretched vertically by a
+        // different amount each: the culling radius must follow the largest
+        // axis of a non-uniform scale.
+        uint32_t transparent_objects = 0;
+
+        for (uint32_t row = 0; row < TEST_GRID_SIDE; ++row)
+        {
+            for (uint32_t column = 0; column < TEST_GRID_SIDE; ++column)
+            {
+                const uint32_t index = row * TEST_GRID_SIDE + column;
+                const bool     is_sphere = ((row + column) % 2) == 0;
+
+                const float x = (static_cast<float>(column) - 0.5f * static_cast<float>(TEST_GRID_SIDE - 1)) * TEST_GRID_SPACING;
+                const float z = TEST_GRID_FIRST_Z - static_cast<float>(row) * TEST_GRID_SPACING;
+
+                MathLib::Vector3 scale;
+                float            half_height;
+
+                if (is_sphere)
+                {
+                    // The sphere primitive has radius 1.
+                    const float radius = 0.35f + 0.2f * Hash_unit(index, 0);
+                    scale = { radius, radius, radius };
+                    half_height = radius;
+                }
+                else
+                {
+                    // The cube primitive has side 1.
+                    const float height = 0.6f + 1.8f * Hash_unit(index, 1);
+                    scale = { 0.7f, height, 0.7f };
+                    half_height = 0.5f * height;
+                }
+
+                const ECS::Entity entity = Spawn_mesh_entity(is_sphere ? sphere_handle : cube_handle,
+                                                             { x, TEST_FLOOR_Y + half_height, z });
+
+                world.Get_component<ECS::Transform_Component>(entity).Set_scale(scale);
+
+                const bool transparent = (index % TEST_TRANSPARENT_EVERY) == 0;
+                transparent_objects += transparent ? 1u : 0u;
+
+                world.Add_component<ECS::Material_Component>(entity,
+                    transparent ? glass_material : palette[index % palette.size()]);
+            }
+        }
+
+        // ── Point lights ───────────────────────────────────────
+        // Scattered over the grid, close to the objects, with a finite
+        // range: a point light with range 0 would reach no cluster.
+        for (uint32_t i = 0; i < TEST_POINT_LIGHTS; ++i)
+        {
+            const float x = (Hash_unit(i, 10) - 0.5f) * (grid_width + TEST_GRID_SPACING);
+            const float z = TEST_GRID_FIRST_Z + TEST_GRID_SPACING - Hash_unit(i, 11) * (grid_width + 2.0f * TEST_GRID_SPACING);
+            const float y = TEST_FLOOR_Y + 0.4f + 1.4f * Hash_unit(i, 12);
+
+            const MathLib::Vector3 color = glm::mix(Hue_to_rgb(Hash_unit(i, 13)), MathLib::Vector3(1.0f), 0.2f);
+            const float            intensity = 2.0f + 2.0f * Hash_unit(i, 14);
+            const float            range = TEST_LIGHT_MIN_RANGE + (TEST_LIGHT_MAX_RANGE - TEST_LIGHT_MIN_RANGE) * Hash_unit(i, 15);
+
+            const ECS::Entity light_entity = world.Create_entity();
+
+            world.Add_component<ECS::Transform_Component>(light_entity).Set_position({ x, y, z });
+            world.Add_component<ECS::Light_Component>(light_entity, ECS::Light_Component::Make_point(color, intensity, range));
+
+            transform_system.Register(light_entity, world);
+        }
+
+        std::cout << "[Engine] Test scene: " << (TEST_GRID_SIDE * TEST_GRID_SIDE) << " objects (" << transparent_objects
+            << " transparent) on a floor, " << TEST_POINT_LIGHTS << " point lights.\n";
     }
 
 } // namespace EngineCore

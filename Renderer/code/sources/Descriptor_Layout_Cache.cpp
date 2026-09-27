@@ -1,9 +1,11 @@
 #include <Descriptor_Layout_Cache.hpp>
 #include <Vulkan_Utils.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <stdexcept>
+#include <string>
 
 namespace Renderer_System
 {
@@ -20,6 +22,8 @@ namespace Renderer_System
             layouts[Descriptor_Set::Per_Frame] = Create_per_frame_layout();
             layouts[Descriptor_Set::Per_Pass] = Create_per_pass_layout();
             layouts[Descriptor_Set::Per_Material] = Create_per_material_layout();
+
+            Check_storage_buffer_budget();
         }
         catch (...)
         {
@@ -58,7 +62,7 @@ namespace Renderer_System
     // ---------- set 0 : por fotograma ----------
     VkDescriptorSetLayout Descriptor_Layout_Cache::Create_per_frame_layout()
     {
-        std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
+        std::array<VkDescriptorSetLayoutBinding, 8> bindings{};
 
        
         bindings[0].binding = Binding_Per_Frame::Frame_UBO;
@@ -82,6 +86,39 @@ namespace Renderer_System
         bindings[2].descriptorCount = 1;
         bindings[2].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
 
+        // bindings 3-4 — cluster grid and compacted light index list:
+        // written by cluster_lights.comp, read by mesh.frag.
+        bindings[3].binding = Binding_Per_Frame::Cluster_Grid;
+        bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[3].descriptorCount = 1;
+        bindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+
+        bindings[4].binding = Binding_Per_Frame::Cluster_Light_Indices;
+        bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[4].descriptorCount = 1;
+        bindings[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+
+        // binding 5 — allocation counter of the light index list. Compute
+        // only: the fragment stage reads the ranges, never the counter.
+        bindings[5].binding = Binding_Per_Frame::Cluster_Counters;
+        bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[5].descriptorCount = 1;
+        bindings[5].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+        // bindings 6-7 — draw commands and draw count written by
+        // cull_objects.comp. Compute only: the draw reads them as indirect
+        // and count buffers, which is not a descriptor access.
+        bindings[6].binding = Binding_Per_Frame::Draw_Commands;
+        bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[6].descriptorCount = 1;
+        bindings[6].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+        bindings[7].binding = Binding_Per_Frame::Draw_Count;
+        bindings[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[7].descriptorCount = 1;
+        bindings[7].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+        Record_bindings(bindings.data(), static_cast<uint32_t>(bindings.size()));
 
         VkDescriptorSetLayoutCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -97,7 +134,7 @@ namespace Renderer_System
     // ---------- set 1 : per pass ----------
     VkDescriptorSetLayout Descriptor_Layout_Cache::Create_per_pass_layout()
     {
-        std::array<VkDescriptorSetLayoutBinding, 1> bindings{};
+        std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
 
         // binding 0 — output of procedural.comp. STORAGE_IMAGE, accessed in
         // layout GENERAL between Storage_Image::Begin_write and End_write.
@@ -107,6 +144,17 @@ namespace Renderer_System
         bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         bindings[0].descriptorCount = 1;
         bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+        // binding 1 — view space boxes of the clusters, input of
+        // cluster_lights.comp. One copy for every frame: rewritten only when
+        // the projection changes, behind a barrier against the previous
+        // frame's reads.
+        bindings[1].binding = Binding_Per_Pass::Cluster_AABBs;
+        bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[1].descriptorCount = 1;
+        bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+        Record_bindings(bindings.data(), static_cast<uint32_t>(bindings.size()));
 
         VkDescriptorSetLayoutCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -122,7 +170,7 @@ namespace Renderer_System
     // ---------- set 2 : per material ----------
     VkDescriptorSetLayout Descriptor_Layout_Cache::Create_per_material_layout()
     {
-        std::array<VkDescriptorSetLayoutBinding, 1> bindings{};
+        std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
 
         // binding 0 — material table: one Material_GPU per registered
         // material, indexed by Object_GPU::material_index. Visible to the
@@ -134,6 +182,17 @@ namespace Renderer_System
         bindings[0].descriptorCount = 1;
         bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
 
+        // binding 1 — mesh table: one Mesh_Info_GPU per mesh gpu id,
+        // indexed by Object_GPU::mesh_index. Visible to the compute stage
+        // (the culling pass builds draw commands and tests bounding
+        // spheres) and the vertex stage (bounds.vert draws those spheres).
+        bindings[1].binding = Binding_Per_Material::Meshes;
+        bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[1].descriptorCount = 1;
+        bindings[1].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+
+        Record_bindings(bindings.data(), static_cast<uint32_t>(bindings.size()));
+
         VkDescriptorSetLayoutCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         info.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -143,5 +202,39 @@ namespace Renderer_System
         VK_CHECK(vkCreateDescriptorSetLayout(device_handle, &info, nullptr, &layout),
             "Descriptor_Layout_Cache: failed to create the set 2 layout");
         return layout;
+    }
+
+    // ---------- storage buffer budget ----------
+    void Descriptor_Layout_Cache::Record_bindings(const VkDescriptorSetLayoutBinding* _bindings, uint32_t _count)
+    {
+        for (uint32_t i = 0; i < _count; ++i)
+        {
+            if (_bindings[i].descriptorType != VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+                continue;
+
+            if (_bindings[i].stageFlags & VK_SHADER_STAGE_VERTEX_BIT)   storage_buffers_per_stage[0] += _bindings[i].descriptorCount;
+            if (_bindings[i].stageFlags & VK_SHADER_STAGE_FRAGMENT_BIT) storage_buffers_per_stage[1] += _bindings[i].descriptorCount;
+            if (_bindings[i].stageFlags & VK_SHADER_STAGE_COMPUTE_BIT)  storage_buffers_per_stage[2] += _bindings[i].descriptorCount;
+
+            storage_buffers_total += _bindings[i].descriptorCount;
+        }
+    }
+
+    void Descriptor_Layout_Cache::Check_storage_buffer_budget() const
+    {
+        // Required_Storage_Buffers is what Vulkan_Device demanded from the
+        // GPU. Layouts beyond it could exceed the limits of a device that
+        // was accepted, so the mismatch is a programming error reported
+        // here, not a validation message on some GPUs only. The bindless
+        // set holds no storage buffers.
+        const uint32_t per_stage = std::max({ storage_buffers_per_stage[0], storage_buffers_per_stage[1], storage_buffers_per_stage[2] });
+
+        if (per_stage > Required_Storage_Buffers || storage_buffers_total > Required_Storage_Buffers)
+        {
+            throw std::logic_error("Descriptor_Layout_Cache: the layouts use " + std::to_string(per_stage) +
+                " storage buffers in one stage and " + std::to_string(storage_buffers_total) +
+                " in total, more than Required_Storage_Buffers (" + std::to_string(Required_Storage_Buffers) +
+                "): raise it in Descriptor_Sets.hpp");
+        }
     }
 }

@@ -38,9 +38,19 @@ namespace Renderer_System
 
             if (_access == Buffer_Access::Cpu_To_Gpu)
             {
-                
+
                 alloc_info.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
                 alloc_info.requiredFlags = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+
+                if (_keep_mapped)
+                    alloc_info.flags |= VMA_ALLOCATION_CREATE_MAPPED_BIT;
+            }
+            else if (_access == Buffer_Access::Gpu_To_Cpu)
+            {
+                // RANDOM access lets VMA pick HOST_CACHED memory, the only
+                // kind the CPU reads at full speed. Coherence is not
+                // required: Read_from_buffer invalidates before reading.
+                alloc_info.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
 
                 if (_keep_mapped)
                     alloc_info.flags |= VMA_ALLOCATION_CREATE_MAPPED_BIT;
@@ -103,6 +113,64 @@ namespace Renderer_System
             // checks internally), so this is always safe and never wasteful.
             VK_CHECK(vmaFlushAllocation(_allocator, _buffer.allocation, 0, _size),
                 "Upload_to_buffer: flush allocation");
+        }
+
+        void Read_from_buffer(VmaAllocator             _allocator,
+            const Buffer_Allocation& _buffer,
+            void* _destination,
+            VkDeviceSize             _size)
+        {
+            assert(_buffer.allocation != VK_NULL_HANDLE);
+            assert(_buffer.mapped_ptr != nullptr && "Read_from_buffer: the buffer must be persistently mapped");
+
+            // No-op when the memory type is HOST_COHERENT, like the flush of
+            // Upload_to_buffer.
+            VK_CHECK(vmaInvalidateAllocation(_allocator, _buffer.allocation, 0, _size),
+                "Read_from_buffer: invalidate allocation");
+
+            std::memcpy(_destination, _buffer.mapped_ptr, static_cast<size_t>(_size));
+        }
+
+        void Record_memory_barrier(VkCommandBuffer _command_buffer, const Access_Scope& _source, const Access_Scope& _destination)
+        {
+            assert(_command_buffer != VK_NULL_HANDLE);
+
+            if (_source.stages == 0 || _destination.stages == 0)
+                throw std::invalid_argument("Record_memory_barrier: both stage masks must be non-zero");
+
+            VkMemoryBarrier barrier{};
+            barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            barrier.srcAccessMask = _source.access;
+            barrier.dstAccessMask = _destination.access;
+
+            vkCmdPipelineBarrier(_command_buffer, _source.stages, _destination.stages, 0,
+                1, &barrier, 0, nullptr, 0, nullptr);
+        }
+
+        void Record_zero_fill_and_barrier(VkCommandBuffer _command_buffer, std::initializer_list<Buffer_Range> _ranges,
+                                          const Access_Scope& _consumer)
+        {
+            assert(_command_buffer != VK_NULL_HANDLE);
+
+            for (const Buffer_Range& range : _ranges)
+            {
+                assert(range.buffer != VK_NULL_HANDLE && "Record_zero_fill_and_barrier: null buffer");
+                assert(range.offset % 4 == 0 && "Record_zero_fill_and_barrier: offset must be a multiple of 4");
+                assert((range.size == VK_WHOLE_SIZE || range.size % 4 == 0) && "Record_zero_fill_and_barrier: size must be a multiple of 4");
+
+                vkCmdFillBuffer(_command_buffer, range.buffer, range.offset, range.size, 0u);
+            }
+
+            // Fills are transfer writes: without this barrier the consumer
+            // may start from the value the previous frame left.
+            Record_memory_barrier(_command_buffer,
+                { VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT }, _consumer);
+        }
+
+        void Record_compute_to_consumer_barrier(VkCommandBuffer _command_buffer, const Access_Scope& _consumers)
+        {
+            Record_memory_barrier(_command_buffer,
+                { VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT }, _consumers);
         }
     }
 }

@@ -70,8 +70,28 @@ namespace Renderer_System {
             if (!_support.bindless)
                 missing.push_back("the descriptor indexing features of bindless textures");
 
+            // GPU-driven drawing: the opaque pass is recorded as indirect
+            // draws whose firstInstance carries the object index, and the
+            // culling pass decides the draw count on the GPU.
+            if (!_support.multi_draw_indirect)
+                missing.push_back("multiDrawIndirect");
+
+            if (!_support.draw_indirect_first_instance)
+                missing.push_back("drawIndirectFirstInstance");
+
+            if (!_support.draw_indirect_count)
+                missing.push_back("drawIndirectCount");
+
             if (!_support.vertex_formats)
                 missing.push_back("the vertex buffer formats of Vulkan_Vertex_Layout");
+
+            if (_support.max_per_stage_storage_buffers < Required_Storage_Buffers ||
+                _support.max_set_storage_buffers < Required_Storage_Buffers)
+            {
+                missing.push_back(std::to_string(Required_Storage_Buffers) + " storage buffers per stage and per pipeline layout (reports " +
+                                  std::to_string(_support.max_per_stage_storage_buffers) + " and " +
+                                  std::to_string(_support.max_set_storage_buffers) + ")");
+            }
 
             // Every pipeline layout declares Descriptor_Set::Count sets
             // (0-3). The specification guarantees at least 4. The value is
@@ -97,7 +117,11 @@ namespace Renderer_System {
                                   swapchain_maintenance1_enabled(false),
                                   sampler_anisotropy_enabled(false),
                                   max_sampler_anisotropy(1.0f),
-                                  bindless_enabled(false)
+                                  bindless_enabled(false),
+                                  fill_mode_non_solid_enabled(false),
+                                  max_draw_indirect_count(0),
+                                  timestamp_valid_bits(0),
+                                  timestamp_period(0.0f)
     {
         VkInstance instance_handle = _instance.Get_handle();
         VkSurfaceKHR surface_handle = _surface.Get_handle();
@@ -167,12 +191,32 @@ namespace Renderer_System {
         VkPhysicalDeviceFeatures device_features{};
         device_features.samplerAnisotropy = best_support.sampler_anisotropy ? VK_TRUE : VK_FALSE;
 
+        // Required by device selection, so both are supported here.
+        device_features.multiDrawIndirect = VK_TRUE;
+        device_features.drawIndirectFirstInstance = VK_TRUE;
+
+        device_features.fillModeNonSolid = best_support.fill_mode_non_solid ? VK_TRUE : VK_FALSE;
+
         sampler_anisotropy_enabled = best_support.sampler_anisotropy;
         max_sampler_anisotropy = best_support.max_sampler_anisotropy;
+        fill_mode_non_solid_enabled = best_support.fill_mode_non_solid;
+        max_draw_indirect_count = best_support.max_draw_indirect_count;
+        timestamp_valid_bits = best_support.timestamp_valid_bits;
+        timestamp_period = best_support.timestamp_period;
 
         std::cout << "[Vulkan_Device] Sampler anisotropy "
             << (sampler_anisotropy_enabled ? "enabled (max " + std::to_string(max_sampler_anisotropy) + ")" : "not available")
             << ".\n";
+
+        std::cout << "[Vulkan_Device] Indirect drawing enabled (multiDrawIndirect, drawIndirectFirstInstance, "
+            "drawIndirectCount; maxDrawIndirectCount " << max_draw_indirect_count << "). fillModeNonSolid "
+            << (fill_mode_non_solid_enabled ? "enabled" : "not available") << ".\n";
+
+        if (timestamp_valid_bits > 0)
+            std::cout << "[Vulkan_Device] Timestamps: " << timestamp_valid_bits << " valid bits, "
+                      << timestamp_period << " ns per tick.\n";
+        else
+            std::cout << "[Vulkan_Device] Timestamps not supported on the graphics queue family: GPU timings disabled.\n";
 
         // ── Descriptor limits ─────────────────────────────────────
         bindless_limits = best_support.bindless_limits;
@@ -228,42 +272,52 @@ namespace Renderer_System {
         bindless_enabled = best_support.bindless;
 
         // ── Feature structs (pNext chain) ─────────────────────────
-        VkPhysicalDeviceDescriptorIndexingFeatures descriptor_indexing_features{};
-        descriptor_indexing_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+        // Vulkan 1.2 features go through VkPhysicalDeviceVulkan12Features,
+        // the only structure that holds drawIndirectCount. The descriptor
+        // indexing features live in it as well: chaining it together with
+        // VkPhysicalDeviceDescriptorIndexingFeatures (or any other
+        // structure it aggregates) is invalid usage, so the bindless
+        // features are set here and that structure is no longer used.
+        VkPhysicalDeviceVulkan12Features vulkan12_features{};
+        vulkan12_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
 
         const VkBool32 bindless_feature = bindless_enabled ? VK_TRUE : VK_FALSE;
 
         // Array size known only at runtime.
-        descriptor_indexing_features.runtimeDescriptorArray = bindless_feature;
+        vulkan12_features.runtimeDescriptorArray = bindless_feature;
 
         // Allow unbound slots in the array (not every texture slot
         // needs to be filled as long as the shader never accesses it).
-        descriptor_indexing_features.descriptorBindingPartiallyBound = bindless_feature;
+        vulkan12_features.descriptorBindingPartiallyBound = bindless_feature;
 
         // Allow non-uniform indexing in shaders (each invocation can
         // use a different texture index).
-        descriptor_indexing_features.shaderSampledImageArrayNonUniformIndexing = bindless_feature;
+        vulkan12_features.shaderSampledImageArrayNonUniformIndexing = bindless_feature;
 
         // Allow writing descriptors after the set was bound in a command
         // buffer that is still being recorded; the submission sees them.
-        descriptor_indexing_features.descriptorBindingSampledImageUpdateAfterBind = bindless_feature;
+        vulkan12_features.descriptorBindingSampledImageUpdateAfterBind = bindless_feature;
 
         // Allow writing descriptors that no pending command buffer reads
         // while frames that use the set are still executing, so bindless
         // slots can be registered, rewritten and released without waiting
         // for the device to go idle.
-        descriptor_indexing_features.descriptorBindingUpdateUnusedWhilePending = bindless_feature;
+        vulkan12_features.descriptorBindingUpdateUnusedWhilePending = bindless_feature;
+
+        // vkCmdDrawIndexedIndirectCount: the opaque pass draws as many
+        // commands as the culling pass wrote. Required by device selection.
+        vulkan12_features.drawIndirectCount = VK_TRUE;
 
         VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR swapchain_maintenance1_features{};
         swapchain_maintenance1_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_KHR;
         swapchain_maintenance1_features.swapchainMaintenance1 = VK_TRUE;
 
-        // Chain: descriptor_indexing -> [swapchain_maintenance1] -> null.
+        // Chain: vulkan12 -> [swapchain_maintenance1] -> null.
         // The maintenance1 struct is chained only when its extension is
         // enabled; chaining a feature struct of a disabled extension is
         // invalid usage.
-        void* chain_head = &descriptor_indexing_features;
-        descriptor_indexing_features.pNext = swapchain_maintenance1_enabled ? &swapchain_maintenance1_features : nullptr;
+        void* chain_head = &vulkan12_features;
+        vulkan12_features.pNext = swapchain_maintenance1_enabled ? &swapchain_maintenance1_features : nullptr;
 
         std::cout << "[Vulkan_Device] Bindless descriptor indexing "
             << (bindless_enabled ? "enabled" : "not available") << ".\n";
@@ -324,6 +378,10 @@ namespace Renderer_System {
         sampler_anisotropy_enabled(_other.sampler_anisotropy_enabled),
         max_sampler_anisotropy(_other.max_sampler_anisotropy),
         bindless_enabled(_other.bindless_enabled),
+        fill_mode_non_solid_enabled(_other.fill_mode_non_solid_enabled),
+        max_draw_indirect_count(_other.max_draw_indirect_count),
+        timestamp_valid_bits(_other.timestamp_valid_bits),
+        timestamp_period(_other.timestamp_period),
         bindless_limits(_other.bindless_limits)
     {
     
@@ -348,6 +406,10 @@ namespace Renderer_System {
             sampler_anisotropy_enabled = _other.sampler_anisotropy_enabled;
             max_sampler_anisotropy = _other.max_sampler_anisotropy;
             bindless_enabled = _other.bindless_enabled;
+            fill_mode_non_solid_enabled = _other.fill_mode_non_solid_enabled;
+            max_draw_indirect_count = _other.max_draw_indirect_count;
+            timestamp_valid_bits = _other.timestamp_valid_bits;
+            timestamp_period = _other.timestamp_period;
             bindless_limits = _other.bindless_limits;
 
             _other.physical_device = VK_NULL_HANDLE;
@@ -402,6 +464,22 @@ namespace Renderer_System {
 
     float Vulkan_Device::Get_max_sampler_anisotropy() const {
         return max_sampler_anisotropy;
+    }
+
+    bool Vulkan_Device::Is_fill_mode_non_solid_enabled() const {
+        return fill_mode_non_solid_enabled;
+    }
+
+    uint32_t Vulkan_Device::Get_max_draw_indirect_count() const {
+        return max_draw_indirect_count;
+    }
+
+    uint32_t Vulkan_Device::Get_timestamp_valid_bits() const {
+        return timestamp_valid_bits;
+    }
+
+    float Vulkan_Device::Get_timestamp_period() const {
+        return timestamp_period;
     }
 
     const Bindless_Limits& Vulkan_Device::Get_bindless_limits() const {
@@ -472,6 +550,10 @@ namespace Renderer_System {
         support.api_version = properties.apiVersion;
         support.max_sampler_anisotropy = properties.limits.maxSamplerAnisotropy;
         support.max_bound_descriptor_sets = properties.limits.maxBoundDescriptorSets;
+        support.max_draw_indirect_count = properties.limits.maxDrawIndirectCount;
+        support.max_per_stage_storage_buffers = properties.limits.maxPerStageDescriptorStorageBuffers;
+        support.max_set_storage_buffers = properties.limits.maxDescriptorSetStorageBuffers;
+        support.timestamp_period = properties.limits.timestampPeriod;
 
         // Descriptor indexing limits. The properties struct is core only
         // from Vulkan 1.2, and chaining it on an older device is invalid;
@@ -510,23 +592,39 @@ namespace Renderer_System {
         // Features, through one chained query. The swapchain maintenance1
         // struct is chained only when the extension exists (and its
         // instance half is present), as required for a feature query.
-        VkPhysicalDeviceDescriptorIndexingFeatures indexing_features{};
-        indexing_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+        // VkPhysicalDeviceVulkan12Features is chained only on a Vulkan 1.2
+        // device, where the structure is defined; older devices keep every
+        // Vulkan 1.2 feature false and are rejected anyway. It is the same
+        // structure the device is created with, so the query and the
+        // creation read the features from one place.
+        VkPhysicalDeviceVulkan12Features vulkan12_features{};
+        vulkan12_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
 
         VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR maintenance1_features{};
         maintenance1_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_KHR;
 
+        const bool query_vulkan12 = properties.apiVersion >= VK_API_VERSION_1_2;
         const bool query_maintenance1 = support.swapchain_maintenance1_extension != nullptr && _instance.Is_surface_maintenance1_enabled();
 
-        indexing_features.pNext = query_maintenance1 ? &maintenance1_features : nullptr;
+        void* feature_chain = query_maintenance1 ? &maintenance1_features : nullptr;
+
+        if (query_vulkan12)
+        {
+            vulkan12_features.pNext = feature_chain;
+            feature_chain = &vulkan12_features;
+        }
 
         VkPhysicalDeviceFeatures2 features2{};
         features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-        features2.pNext = &indexing_features;
+        features2.pNext = feature_chain;
 
         vkGetPhysicalDeviceFeatures2(_device, &features2);
 
         support.sampler_anisotropy = features2.features.samplerAnisotropy == VK_TRUE;
+        support.multi_draw_indirect = features2.features.multiDrawIndirect == VK_TRUE;
+        support.draw_indirect_first_instance = features2.features.drawIndirectFirstInstance == VK_TRUE;
+        support.fill_mode_non_solid = features2.features.fillModeNonSolid == VK_TRUE;
+        support.draw_indirect_count = vulkan12_features.drawIndirectCount == VK_TRUE;
         support.vertex_formats = true;
         for (VkFormat format : Vulkan_Vertex_Layout::OPTIONAL_VERTEX_FORMATS)
         {
@@ -536,18 +634,34 @@ namespace Renderer_System {
             if ((format_properties.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT) == 0)
                 support.vertex_formats = false;
         }
-        support.bindless = indexing_features.runtimeDescriptorArray == VK_TRUE &&
-                           indexing_features.descriptorBindingPartiallyBound == VK_TRUE &&
-                           indexing_features.shaderSampledImageArrayNonUniformIndexing == VK_TRUE &&
-                           indexing_features.descriptorBindingSampledImageUpdateAfterBind == VK_TRUE &&
-                           indexing_features.descriptorBindingUpdateUnusedWhilePending == VK_TRUE;
-           
+        support.bindless = vulkan12_features.runtimeDescriptorArray == VK_TRUE &&
+                           vulkan12_features.descriptorBindingPartiallyBound == VK_TRUE &&
+                           vulkan12_features.shaderSampledImageArrayNonUniformIndexing == VK_TRUE &&
+                           vulkan12_features.descriptorBindingSampledImageUpdateAfterBind == VK_TRUE &&
+                           vulkan12_features.descriptorBindingUpdateUnusedWhilePending == VK_TRUE;
+
 
         support.swapchain_maintenance1_feature =
             query_maintenance1 && maintenance1_features.swapchainMaintenance1 == VK_TRUE;
 
         // Queues and surface.
         support.queue_families = Find_queue_families(_device, _surface);
+
+        // Timestamp support belongs to the queue family that records the
+        // frame: the graphics family, which also records every dispatch.
+        if (support.queue_families.graphics_family.has_value())
+        {
+            uint32_t family_count = 0;
+            vkGetPhysicalDeviceQueueFamilyProperties(_device, &family_count, nullptr);
+
+            std::vector<VkQueueFamilyProperties> families(family_count);
+            vkGetPhysicalDeviceQueueFamilyProperties(_device, &family_count, families.data());
+
+            const uint32_t graphics_family = support.queue_families.graphics_family.value();
+
+            if (graphics_family < family_count)
+                support.timestamp_valid_bits = families[graphics_family].timestampValidBits;
+        }
 
         if (support.swapchain_extension) {
             uint32_t format_count = 0;

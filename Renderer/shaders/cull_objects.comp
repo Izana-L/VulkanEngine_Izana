@@ -1,0 +1,111 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+// Frustum culling and draw generation of the opaque pass.
+//
+// One invocation per object of the frame's object buffer. An object that
+// is active, belongs to the pass and whose bounding sphere is not entirely
+// outside a frustum plane reserves a slot with one atomicAdd and writes a
+// complete indexed draw command there: its mesh range in the geometry pool
+// and firstInstance = its object index, which mesh.vert receives as
+// gl_InstanceIndex. The CPU then records a single
+// vkCmdDrawIndexedIndirectCount, reading the number of draws from
+// draw_count, without knowing how many objects survived.
+//
+// The slots are taken in no particular order, so the draw order changes
+// from frame to frame: opaque surfaces lose their front-to-back order, and
+// coplanar surfaces with equal depth may flicker between each other.
+//
+// Recorded before the render pass, after the reset of draw_count (fill +
+// barrier TRANSFER -> COMPUTE) and followed by a barrier COMPUTE ->
+// DRAW_INDIRECT (Renderer::Record_command_buffer).
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#include "common/frame_set.glsl"
+#include "common/scene_data.glsl"
+#include "common/mesh_table.glsl"
+
+// EXACT mirror of Renderer_System::Cull_Push_Constants (C++), 16 bytes.
+layout(push_constant) uniform Cull_Push_Constants
+{
+    uint object_count;       // offset 0: objects [0, object_count) are processed
+    uint command_capacity;   // offset 4: entries of draw_commands
+    uint pass_bit;           // offset 8: RENDER_PASS_* an object needs
+    uint frustum_culling;    // offset 12: 0 = every active object is drawn
+} push;
+
+// Mirror of VkDrawIndexedIndirectCommand: five 32-bit values, std430
+// stride 20, the stride the indirect draw is recorded with.
+struct Draw_Command
+{
+    uint index_count;
+    uint instance_count;
+    uint first_index;
+    int  vertex_offset;
+    uint first_instance;
+};
+
+// Set 0, binding 6 (Binding_Per_Frame::Draw_Commands).
+layout(set = 0, binding = 6, std430) writeonly buffer Draw_Command_Buffer
+{
+    Draw_Command commands[];
+} draw_commands;
+
+// Set 0, binding 7 (Binding_Per_Frame::Draw_Count). EXACT mirror of
+// Renderer_System::Draw_Count_GPU; the count buffer of the indirect draw.
+layout(set = 0, binding = 7, std430) buffer Draw_Count
+{
+    uint draw_count;
+    uint _pad0;
+    uint _pad1;
+    uint _pad2;
+} draw_count;
+
+// False when the sphere lies entirely on the outer side of one plane.
+// Planes are normalized, so the signed distance compares directly with the
+// radius. A sphere crossing the near plane is kept: it is partly visible.
+bool Sphere_in_frustum(vec4 _sphere)
+{
+    for (int p = 0; p < FRUSTUM_PLANE_COUNT; ++p)
+    {
+        const vec4 plane = frame.frustum_planes[p];
+
+        if (dot(plane.xyz, _sphere.xyz) + plane.w < -_sphere.w)
+            return false;
+    }
+
+    return true;
+}
+
+void main()
+{
+    const uint object_index = gl_GlobalInvocationID.x;
+
+    // The dispatch is rounded up to whole groups.
+    if (object_index >= push.object_count)
+        return;
+
+    const Object object = object_buffer.objects[object_index];
+
+    if ((object.flags & OBJECT_FLAG_ACTIVE) == 0u || (object.flags & push.pass_bit) == 0u)
+        return;
+
+    const Mesh_Info mesh = mesh_table.meshes[object.mesh_index];
+
+    if (push.frustum_culling != 0u && !Sphere_in_frustum(World_bounding_sphere(object.model, mesh.bounding_sphere)))
+        return;
+
+    const uint slot = atomicAdd(draw_count.draw_count, 1u);
+
+    // Cannot happen while object_count <= command_capacity, which the
+    // Renderer guarantees; the guard keeps a broken invariant from writing
+    // past the buffer.
+    if (slot >= push.command_capacity)
+        return;
+
+    draw_commands.commands[slot].index_count    = mesh.index_count;
+    draw_commands.commands[slot].instance_count = 1u;
+    draw_commands.commands[slot].first_index    = mesh.first_index;
+    draw_commands.commands[slot].vertex_offset  = mesh.vertex_offset;
+    draw_commands.commands[slot].first_instance = object_index;
+}

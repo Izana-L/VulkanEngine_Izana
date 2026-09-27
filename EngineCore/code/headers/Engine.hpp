@@ -109,6 +109,13 @@ namespace EngineCore
         // Creates the initial test scene: camera, a textured sphere, a cube
         // and a directional light. Temporary until the editor exists.
         void Setup_scene();
+
+        // Adds the stress content of the GPU-driven roadmap to the scene: a
+        // floor, a grid of thousands of opaque and transparent objects
+        // (some non-uniformly scaled) and hundreds of point lights. Every
+        // value is deterministic, so the scene is the same on every run and
+        // the old and new render paths can be compared on it.
+        void Setup_test_scene();
     };
 
 } // namespace EngineCore

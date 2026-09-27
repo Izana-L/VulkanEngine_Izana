@@ -36,7 +36,9 @@ namespace EngineCore
     // What it does each frame:
     //   1. Finds the active camera (lowest render_order Camera_Component
     //      with is_active=true) and builds the RenderView from its WORLD
-    //      transform, plus the clear color.
+    //      transform, plus the clear color, the near plane distance and the
+    //      world space culling planes (CoreTypes::Frustum), built from the
+    //      camera parameters and the same basis as the view matrix.
     //   2. Iterates entities with Transform_Component + Mesh_Component,
     //      resolves Asset_Handle -> gpu_id, reads the optional
     //      Material_Component (its material table slot, and the tint alpha

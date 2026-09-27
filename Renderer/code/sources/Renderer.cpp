@@ -1,16 +1,23 @@
 #include <Renderer.hpp>
 #include <Vulkan_Utils.hpp>
 #include <Vulkan_Image_Utils.hpp>
+#include <Cluster_Grid.hpp>
+#include <Vertex_Packing.hpp>
+#include <MathConstants.hpp>
 #include <Window.hpp>
 
 #include <glm/glm.hpp>
 
+#include <algorithm>
 #include <stdexcept>
 #include <iostream>
+#include <iomanip>
+#include <cmath>
 #include <cstring>
 #include <array>
 #include <cassert>
 #include <string>
+#include <utility>
 
 namespace Renderer_System
 {
@@ -26,6 +33,125 @@ namespace Renderer_System
         // before giving up on it (nanoseconds). A driver never signaling a
         // present fence is a driver fault; the wait must not hang forever.
         constexpr uint64_t PRESENT_FENCE_TIMEOUT_NS = 1'000'000'000ull;
+
+        // local_size_x of cluster_lights.comp and cull_objects.comp.
+        constexpr uint32_t CLUSTER_GROUP_SIZE = 64;
+        constexpr uint32_t CULL_GROUP_SIZE = 64;
+
+        // Stride of every indirect command buffer: tightly packed
+        // VkDrawIndexedIndirectCommand, the layout cull_objects.comp writes.
+        constexpr uint32_t DRAW_COMMAND_STRIDE = static_cast<uint32_t>(sizeof(VkDrawIndexedIndirectCommand));
+
+        // vkCmdUpdateBuffer accepts at most 65536 bytes per call.
+        constexpr VkDeviceSize UPDATE_BUFFER_MAX_BYTES = 65536;
+
+        // Segments and rings of the unit sphere of the bounding sphere view.
+        constexpr uint32_t BOUNDS_SPHERE_SEGMENTS = 16;
+        constexpr uint32_t BOUNDS_SPHERE_RINGS = 8;
+
+        // Time between two statistics prints.
+        constexpr std::chrono::milliseconds STATISTICS_PRINT_INTERVAL{ 1000 };
+
+        static_assert(FRUSTUM_PLANE_COUNT == CoreTypes::Frustum::PLANE_COUNT,
+            "Frame_UBO::frustum_planes and CoreTypes::Frustum must hold the same planes");
+
+        VkDeviceSize Align_up(VkDeviceSize _value, VkDeviceSize _alignment)
+        {
+            return (_value + _alignment - 1) / _alignment * _alignment;
+        }
+
+        // Largest scale the upper 3x3 of _model applies along any axis (its
+        // longest column). Same computation as Max_axis_scale in
+        // mesh_table.glsl, so the CPU and the GPU culling agree.
+        float Max_axis_scale(const MathLib::Matrix4& _model)
+        {
+            const float x = glm::dot(MathLib::Vector3(_model[0]), MathLib::Vector3(_model[0]));
+            const float y = glm::dot(MathLib::Vector3(_model[1]), MathLib::Vector3(_model[1]));
+            const float z = glm::dot(MathLib::Vector3(_model[2]), MathLib::Vector3(_model[2]));
+            return std::sqrt(std::max({ x, y, z }));
+        }
+
+        // Unit sphere (radius 1, centered at the origin) as a latitude /
+        // longitude grid. Only positions matter to bounds.vert; the other
+        // attributes get neutral values.
+        CoreTypes::MeshData Build_unit_sphere(uint32_t _segments, uint32_t _rings)
+        {
+            CoreTypes::MeshData mesh;
+            mesh.index_type = CoreTypes::Index_Type::UINT32;
+
+            for (uint32_t ring = 0; ring <= _rings; ++ring)
+            {
+                const float phi = MathLib::Constants::PI * static_cast<float>(ring) / static_cast<float>(_rings);
+
+                for (uint32_t segment = 0; segment <= _segments; ++segment)
+                {
+                    const float theta = MathLib::Constants::TWO_PI * static_cast<float>(segment) / static_cast<float>(_segments);
+
+                    CoreTypes::Vertex_Static_Mesh_CPU vertex{};
+                    vertex.position = { std::sin(phi) * std::cos(theta), std::cos(phi), std::sin(phi) * std::sin(theta) };
+                    vertex.normal = vertex.position;
+                    vertex.tangent = { 1.0f, 0.0f, 0.0f, 1.0f };
+                    vertex.uv = { static_cast<float>(segment) / static_cast<float>(_segments),
+                                  static_cast<float>(ring) / static_cast<float>(_rings) };
+                    vertex.color = { 1.0f, 1.0f, 1.0f, 1.0f };
+
+                    mesh.vertices.push_back(vertex);
+                }
+            }
+
+            const uint32_t stride = _segments + 1;
+
+            for (uint32_t ring = 0; ring < _rings; ++ring)
+            {
+                for (uint32_t segment = 0; segment < _segments; ++segment)
+                {
+                    const uint32_t a = ring * stride + segment;
+                    const uint32_t b = a + stride;
+
+                    mesh.indices.insert(mesh.indices.end(), { a, b, a + 1, a + 1, b, b + 1 });
+                }
+            }
+
+            return mesh;
+        }
+    }
+
+    // =========================================================
+    // Debug names
+    // =========================================================
+
+    const char* To_string(Light_Culling_Mode _mode)
+    {
+        switch (_mode)
+        {
+        case Light_Culling_Mode::Clustered:   return "clustered";
+        case Light_Culling_Mode::Brute_Force: return "brute force (every light)";
+        default:                              return "unknown";
+        }
+    }
+
+    const char* To_string(Cluster_Debug_View _view)
+    {
+        switch (_view)
+        {
+        case Cluster_Debug_View::None:          return "none";
+        case Cluster_Debug_View::Light_Heatmap: return "light count heatmap";
+        case Cluster_Debug_View::Depth_Slices:  return "depth slices";
+        case Cluster_Debug_View::Clusters:      return "clusters (tiles x slices)";
+        default:                                return "unknown";
+        }
+    }
+
+    const char* To_string(Opaque_Draw_Path _path)
+    {
+        switch (_path)
+        {
+        case Opaque_Draw_Path::Direct:       return "direct draws";
+        case Opaque_Draw_Path::Cpu_Indirect: return "indirect, commands written by the CPU";
+        case Opaque_Draw_Path::Gpu_Indirect: return "indirect count, commands written by the GPU (no culling)";
+        case Opaque_Draw_Path::Gpu_Culled:   return "indirect count, GPU frustum culling";
+        default:                             return "unknown";
+        }
     }
 
     // =========================================================
@@ -38,6 +164,35 @@ namespace Renderer_System
         config.vertex_shader_path = "..\\..\\Renderer\\shaders\\compiled\\mesh.vert.spv";
         config.fragment_shader_path = "..\\..\\Renderer\\shaders\\compiled\\mesh.frag.spv";
         config.blend_enable = false;
+        return config;
+    }
+
+    Pipeline_Config Renderer::Make_bounds_config(bool _wireframe)
+    {
+        Pipeline_Config config;
+        config.vertex_shader_path = "..\\..\\Renderer\\shaders\\compiled\\bounds.vert.spv";
+        config.fragment_shader_path = "..\\..\\Renderer\\shaders\\compiled\\bounds.frag.spv";
+
+        if (_wireframe)
+        {
+            // Edges only: every sphere stays readable where many overlap.
+            config.polygon_mode = VK_POLYGON_MODE_LINE;
+            config.blend_enable = false;
+        }
+        else
+        {
+            // Without fillModeNonSolid: faint filled spheres, standard
+            // "over" blending with the alpha of bounds.frag.
+            config.polygon_mode = VK_POLYGON_MODE_FILL;
+            config.blend_enable = true;
+            config.src_color_blend_factor = VK_BLEND_FACTOR_SRC_ALPHA;
+            config.dst_color_blend_factor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            config.color_blend_op = VK_BLEND_OP_ADD;
+            config.src_alpha_blend_factor = VK_BLEND_FACTOR_ONE;
+            config.dst_alpha_blend_factor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            config.alpha_blend_op = VK_BLEND_OP_ADD;
+        }
+
         return config;
     }
 
@@ -66,6 +221,9 @@ namespace Renderer_System
                         surface(instance, _window),
                         device(instance, surface),
                         allocator(instance, device),
+                        debug_utils(instance, device),
+                        geometry_pool(allocator.Get_handle(), GEOMETRY_POOL_VERTICES, GEOMETRY_POOL_INDICES),
+                        gpu_timer(device, FRAMES_IN_FLIGHT, Timestamp_Count),
                         swapchain(device, surface, _window, 3, false),
                         render_pass(device, swapchain.Get_image_format(), device.Find_supported_depth_format()),
                         // The depth format is negotiated once, by the render pass; the
@@ -77,10 +235,13 @@ namespace Renderer_System
                         descriptor_layouts(device, bindless_registry.Get_layout()),
                         pipeline_layout(device, descriptor_layouts),
                         pipeline_registry(device, render_pass, pipeline_cache.Get_handle(), pipeline_layout.Get_handle()),
-                        compute_pipeline_layout(device, descriptor_layouts, VK_SHADER_STAGE_COMPUTE_BIT, static_cast<uint32_t>(sizeof(Procedural_Push_Constants))),
+                        compute_pipeline_layout(device, descriptor_layouts, VK_SHADER_STAGE_COMPUTE_BIT, COMPUTE_PUSH_CONSTANT_SIZE),
                         procedural_pipeline(device, pipeline_cache.Get_handle(), compute_pipeline_layout.Get_handle(),"..\\..\\Renderer\\shaders\\compiled\\procedural.comp.spv"),
+                        cluster_pipeline(device, pipeline_cache.Get_handle(), compute_pipeline_layout.Get_handle(), "..\\..\\Renderer\\shaders\\compiled\\cluster_lights.comp.spv"),
+                        cull_pipeline(device, pipeline_cache.Get_handle(), compute_pipeline_layout.Get_handle(), "..\\..\\Renderer\\shaders\\compiled\\cull_objects.comp.spv"),
                         opaque_config(Make_opaque_config()),
                         transparent_config(Make_transparent_config()),
+                        bounds_config(Make_bounds_config(device.Is_fill_mode_non_solid_enabled())),
                         sampler_cache(device),
                         transfer_command_pool(device, 0, VK_COMMAND_POOL_CREATE_TRANSIENT_BIT)
     {
@@ -100,9 +261,10 @@ namespace Renderer_System
 
             pipeline_registry.Warm_up(Build_pipeline_manifest());
 
-            // Pure lookups: both pipelines already exist after the warm-up.
+            // Pure lookups: every pipeline already exists after the warm-up.
             opaque_pipeline_id = pipeline_registry.Get_id(opaque_config);
             transparent_pipeline_id = pipeline_registry.Get_id(transparent_config);
+            bounds_pipeline_id = pipeline_registry.Get_id(bounds_config);
 
             // ── Frame resources ────────────────────────────────────────
             frames.reserve(FRAMES_IN_FLIGHT);
@@ -129,16 +291,32 @@ namespace Renderer_System
             // so the defaults take the reserved bindless slots.
             Upload_default_textures();
 
-            // ── Material table ─────────────────────────────────────────
+            // ── Material and mesh tables ───────────────────────────────
             // After the defaults: the default material samples
             // Default_Texture::White, and registration checks that its
             // slot exists. After the descriptor pool (per_material_set).
-            Init_material_table();
+            // Before any mesh upload: uploads write the mesh table.
+            Init_global_tables();
 
             // ── Compute pass resources ─────────────────────────────────
             // After the defaults (its bindless slot comes after theirs) and
             // after the descriptor pool (per_pass_set is allocated from it).
             Init_procedural_pass();
+
+            // After Init_procedural_pass, which allocates per_pass_set.
+            Init_light_clusters();
+
+            // After the mesh table exists.
+            Init_debug_meshes();
+
+            Name_debug_objects();
+
+            // Per-frame lists at their maximum size once, instead of
+            // growing during the first frames.
+            opaque_draws.reserve(MAX_OBJECTS);
+            transparent_draws.reserve(MAX_OBJECTS);
+            timer_intervals.reserve(GPU_TIMER_INTERVALS);
+            statistics.last_print = std::chrono::steady_clock::now();
         }
         catch (...)
         {
@@ -184,14 +362,18 @@ namespace Renderer_System
         Flush_retired_sync(true);
 
         // Assets first: they hold GPU buffers/images that may still be
-        // referenced by in-flight command buffers otherwise.
+        // referenced by in-flight command buffers otherwise. Mesh records
+        // own no memory: their ranges are released with the Geometry_Pool.
         meshes.clear();
+        retired_meshes.clear();
         textures.clear();
         procedural_image.reset();
 
-        // Tolerates a buffer that was never created (constructor failure
-        // before Init_material_table).
+        // Tolerate buffers that were never created (constructor failure
+        // before Init_global_tables / Init_light_clusters).
         Vulkan_Buffer_Utils::Destroy_buffer(allocator.Get_handle(), material_buffer);
+        Vulkan_Buffer_Utils::Destroy_buffer(allocator.Get_handle(), mesh_table_buffer);
+        Vulkan_Buffer_Utils::Destroy_buffer(allocator.Get_handle(), cluster_aabb_buffer);
         registered_materials.clear();
 
         if (transfer_fence != VK_NULL_HANDLE) {
@@ -370,6 +552,8 @@ namespace Renderer_System
                 throw std::invalid_argument("Upload_batch: null MeshData pointer");
             if (mesh_data->vertices.empty() || mesh_data->indices.empty())
                 throw std::invalid_argument("Upload_batch: MeshData has no vertices or no indices");
+            if (mesh_data->vertices.size() > UINT32_MAX || mesh_data->indices.size() > UINT32_MAX)
+                throw std::invalid_argument("Upload_batch: MeshData has more than 2^32 - 1 vertices or indices");
         }
 
         for (const Texture_Upload& upload : _batch.textures)
@@ -378,6 +562,14 @@ namespace Renderer_System
                 throw std::invalid_argument("Upload_batch: null ImageData pointer");
             if (upload.data->pixels.empty() || upload.data->width == 0 || upload.data->height == 0)
                 throw std::invalid_argument("Upload_batch: ImageData has no pixel data or zero dimensions");
+        }
+
+        // Every mesh of the batch needs an entry in the mesh table: its gpu
+        // id is the entry index.
+        if (meshes.size() + mesh_count > MAX_MESHES)
+        {
+            throw std::runtime_error("Upload_batch: the batch holds " + std::to_string(mesh_count) + " mesh(es) but the mesh table has " +
+                                     std::to_string(MAX_MESHES - meshes.size()) + " free entries; raise MAX_MESHES in Frame_Data.hpp");
         }
 
         // Every texture of the batch needs a bindless slot after the
@@ -394,9 +586,10 @@ namespace Renderer_System
         }
 
         // Reserve before recording. Otherwise emplace_back can reallocate
-        // mid-batch and move every Mesh_GPU / Texture_GPU already recorded.
-        // Those moves are safe (both null out the source), but reserving
-        // avoids the churn and keeps the registries stable while we build.
+        // mid-batch and move every Texture_GPU already recorded. Those
+        // moves are safe (they null out the source), but reserving avoids
+        // the churn, keeps the registries stable while the batch is built,
+        // and makes the push_backs below unable to throw.
         meshes.reserve(meshes.size() + mesh_count);
         textures.reserve(textures.size() + texture_count);
 
@@ -408,28 +601,150 @@ namespace Renderer_System
         const size_t first_mesh = meshes.size();
         const size_t first_texture = textures.size();
 
-        // ── One command buffer for the whole batch ────────────────
-        VkCommandBuffer transfer_cmd = transfer_command_pool.Allocate_primary();
+        Vulkan_Buffer_Utils::Buffer_Allocation staging{};
+        VkCommandBuffer                        transfer_cmd = VK_NULL_HANDLE;
+
+        VkDeviceSize batch_vertices = 0;
+        VkDeviceSize batch_indices = 0;
 
         try
         {
+            // ── Geometry ranges ───────────────────────────────────────
+            // Allocated before anything is recorded: a full pool rejects
+            // the batch with only the ranges of this batch to give back.
+            for (const CoreTypes::MeshData* mesh_data : _batch.meshes)
+            {
+                Mesh_GPU mesh;
+                mesh.geometry = geometry_pool.Allocate(static_cast<uint32_t>(mesh_data->vertices.size()),
+                                                       static_cast<uint32_t>(mesh_data->indices.size()));
+
+                // From the full-precision positions, before packing.
+                Mesh_GPU::Compute_bounding_sphere(*mesh_data, mesh.bounds_center, mesh.bounds_radius);
+
+                meshes.push_back(mesh);
+
+                batch_vertices += mesh_data->vertices.size();
+                batch_indices += mesh_data->indices.size();
+            }
+
+            // ── Staging buffer: vertices | indices | mesh table entries ──
+            // One buffer for the whole batch. Each section starts on a
+            // 16-byte boundary; the copies below take one region per mesh.
+            std::vector<VkBufferCopy> vertex_copies;
+            std::vector<VkBufferCopy> index_copies;
+            VkBufferCopy              table_copy{};
+
+            if (mesh_count > 0)
+            {
+                const VkDeviceSize vertex_section_size = batch_vertices * sizeof(Geometry_Pool::Vertex);
+                const VkDeviceSize index_section = Align_up(vertex_section_size, 16);
+                const VkDeviceSize table_section = Align_up(index_section + batch_indices * sizeof(Geometry_Pool::Index), 16);
+                const VkDeviceSize staging_size = table_section + mesh_count * sizeof(Mesh_Info_GPU);
+
+                // Host-coherent and persistently mapped (Cpu_To_Gpu): the
+                // writes below need no flush before the submit.
+                staging = Vulkan_Buffer_Utils::Create_buffer(allocator.Get_handle(), staging_size,
+                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT, Vulkan_Buffer_Utils::Buffer_Access::Cpu_To_Gpu, true);
+
+                uint8_t* const       staging_bytes = static_cast<uint8_t*>(staging.mapped_ptr);
+                Mesh_Info_GPU* const table_entries = reinterpret_cast<Mesh_Info_GPU*>(staging_bytes + table_section);
+
+                VkDeviceSize vertex_cursor = 0;
+                VkDeviceSize index_cursor = index_section;
+
+                vertex_copies.reserve(mesh_count);
+                index_copies.reserve(mesh_count);
+
+                for (size_t i = 0; i < mesh_count; ++i)
+                {
+                    const CoreTypes::MeshData& mesh_data = *_batch.meshes[i];
+                    const Mesh_GPU&            mesh = meshes[first_mesh + i];
+
+                    // Vertices, packed into the layout the pool (and
+                    // mesh.vert) reads.
+                    Geometry_Pool::Vertex* const packed = reinterpret_cast<Geometry_Pool::Vertex*>(staging_bytes + vertex_cursor);
+
+                    for (size_t v = 0; v < mesh_data.vertices.size(); ++v)
+                        packed[v] = CoreTypes::Vertex_Packing::Pack(mesh_data.vertices[v]);
+
+                    const VkDeviceSize vertex_size = mesh_data.vertices.size() * sizeof(Geometry_Pool::Vertex);
+                    vertex_copies.push_back({ vertex_cursor, Geometry_Pool::Vertex_byte_offset(mesh.geometry), vertex_size });
+                    vertex_cursor += vertex_size;
+
+                    // Indices: MeshData keeps them as uint32_t whatever its
+                    // index_type says, and the pool has a single index type,
+                    // VK_INDEX_TYPE_UINT32, so they are copied unchanged.
+                    // They stay local to the mesh: vertexOffset rebases them.
+                    const VkDeviceSize index_size = mesh_data.indices.size() * sizeof(Geometry_Pool::Index);
+                    std::memcpy(staging_bytes + index_cursor, mesh_data.indices.data(), static_cast<size_t>(index_size));
+
+                    index_copies.push_back({ index_cursor, Geometry_Pool::Index_byte_offset(mesh.geometry), index_size });
+                    index_cursor += index_size;
+
+                    // Mesh table entry, the GPU copy of the record.
+                    Mesh_Info_GPU& entry = table_entries[i];
+                    entry.bounding_sphere = MathLib::Vector4(mesh.bounds_center, mesh.bounds_radius);
+                    entry.first_index = mesh.geometry.first_index;
+                    entry.index_count = mesh.geometry.index_count;
+                    entry.vertex_offset = static_cast<int32_t>(mesh.geometry.first_vertex);
+                    entry.vertex_count = mesh.geometry.vertex_count;
+                }
+
+                // The gpu ids of one batch are consecutive, so their table
+                // entries are one contiguous region.
+                table_copy.srcOffset = table_section;
+                table_copy.dstOffset = static_cast<VkDeviceSize>(first_mesh) * sizeof(Mesh_Info_GPU);
+                table_copy.size = static_cast<VkDeviceSize>(mesh_count) * sizeof(Mesh_Info_GPU);
+            }
+
+            // ── Frames in flight ──────────────────────────────────────
+            // They read the geometry pool and the mesh table while this
+            // batch writes them. The ranges written are new, so no frame
+            // reads them, but each buffer is a single resource: an indexed
+            // or indirect draw is modeled by validation tools as reading the
+            // whole bound vertex buffer, and a descriptor as reading its
+            // whole range. Waiting for the frames in flight first orders the
+            // copies after every earlier read without relying on the ranges
+            // being disjoint. Uploads are synchronous anyway, and the copies
+            // would queue behind those frames.
+            if (mesh_count > 0)
+                Wait_for_frames_in_flight();
+
+            // ── One command buffer for the whole batch ────────────────
+            transfer_cmd = transfer_command_pool.Allocate_primary();
+
             VkCommandBufferBeginInfo begin_info{};
             begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
             begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
             VK_CHECK(vkBeginCommandBuffer(transfer_cmd, &begin_info), "Upload_batch: begin transfer command buffer");
 
-            // ── Record every asset into that one command buffer ───────
-            // No barriers are needed BETWEEN assets: each Mesh_GPU writes its
-            // own buffers and each Texture_GPU barriers its own image, so the
-            // recordings touch disjoint resources. The barriers that do exist
-            // (layout transitions, mip generation) are internal to each
-            // Texture_GPU and already correct.
-            for (const CoreTypes::MeshData* mesh_data : _batch.meshes)
+            if (mesh_count > 0)
             {
-                meshes.emplace_back(allocator.Get_handle(), transfer_cmd, *mesh_data);
-                result.mesh_gpu_ids.push_back(static_cast<uint32_t>(meshes.size() - 1));
+                // Three copies for the whole batch, one region per mesh.
+                // The ranges were just allocated, so no frame in flight
+                // reads them: no barrier is needed before the copies.
+                vkCmdCopyBuffer(transfer_cmd, staging.buffer, geometry_pool.Get_vertex_buffer(),
+                    static_cast<uint32_t>(vertex_copies.size()), vertex_copies.data());
+                vkCmdCopyBuffer(transfer_cmd, staging.buffer, geometry_pool.Get_index_buffer(),
+                    static_cast<uint32_t>(index_copies.size()), index_copies.data());
+                vkCmdCopyBuffer(transfer_cmd, staging.buffer, mesh_table_buffer.buffer, 1, &table_copy);
+
+                // A barrier's second scope reaches every later submission
+                // of the queue, so this makes the copies visible to all the
+                // frames that will read them: vertex and index fetch of the
+                // draws, the vertex shader of the bounds view and the
+                // culling pass (mesh table).
+                Vulkan_Buffer_Utils::Record_memory_barrier(transfer_cmd,
+                    { VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT },
+                    { VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                      VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_SHADER_READ_BIT });
             }
 
+            // ── Textures ───────────────────────────────────────────────
+            // No barriers are needed BETWEEN assets: each Texture_GPU
+            // barriers its own image, so the recordings touch disjoint
+            // resources. The barriers that do exist (layout transitions,
+            // mip generation) are internal to each Texture_GPU.
             for (const Texture_Upload& upload : _batch.textures)
             {
                 textures.emplace_back(device, allocator.Get_handle(), transfer_cmd, *upload.data, upload.format);
@@ -440,15 +755,24 @@ namespace Renderer_System
         }
         catch (...)
         {
-            // Nothing of this batch reached the GPU in a usable state:
-            // drop the registry entries added above (their destructors
-            // free the buffers; the transfer either never ran or was
-            // waited for by Submit_and_wait_transfer before it threw) and
-            // give the command buffer back.
+            // Nothing of this batch reached the GPU in a usable state: give
+            // back the ranges and drop the registry entries added above
+            // (Texture_GPU destructors free their images; the transfer
+            // either never ran or was waited for by Submit_and_wait_transfer
+            // before it threw), then the staging buffer and the command
+            // buffer.
             vkDeviceWaitIdle(device.Get_logical_device_handle());
+
+            for (size_t i = first_mesh; i < meshes.size(); ++i)
+                geometry_pool.Free(meshes[i].geometry);
+
             meshes.erase(meshes.begin() + static_cast<std::ptrdiff_t>(first_mesh), meshes.end());
             textures.erase(textures.begin() + static_cast<std::ptrdiff_t>(first_texture), textures.end());
-            transfer_command_pool.Free(transfer_cmd);
+            Vulkan_Buffer_Utils::Destroy_buffer(allocator.Get_handle(), staging);
+
+            if (transfer_cmd != VK_NULL_HANDLE)
+                transfer_command_pool.Free(transfer_cmd);
+
             throw;
         }
 
@@ -457,9 +781,10 @@ namespace Renderer_System
         // ── Post-upload ───────────────────────────────────────────
         // The fence is signaled, so the GPU has consumed every staging
         // buffer in the batch and they can all be freed now.
+        Vulkan_Buffer_Utils::Destroy_buffer(allocator.Get_handle(), staging);
 
         for (size_t i = first_mesh; i < meshes.size(); ++i)
-            meshes[i].Release_staging_buffers();
+            result.mesh_gpu_ids.push_back(static_cast<uint32_t>(i));
 
         for (size_t i = first_texture; i < textures.size(); ++i)
         {
@@ -480,7 +805,7 @@ namespace Renderer_System
         }
 
         std::cout << "[Renderer] Batch uploaded: "
-            << mesh_count << " mesh(es), "
+            << mesh_count << " mesh(es) (" << batch_vertices << " vertices, " << batch_indices << " indices into the geometry pool), "
             << texture_count << " texture(s) - 1 command buffer, 1 submit.\n";
 
         return result;
@@ -516,6 +841,64 @@ namespace Renderer_System
     {
         return Upload_texture(_image_data, Vulkan_Image_Utils::To_vk_format(_image_data.format));
     }
+    void Renderer::Release_mesh(uint32_t _gpu_id)
+    {
+        if (_gpu_id >= meshes.size() || meshes[_gpu_id].released)
+            return;
+
+        // The unit sphere of the bounds view is internal: releasing it
+        // would leave that view drawing a freed range.
+        if (_gpu_id == bounds_sphere_mesh_id)
+        {
+            std::cerr << "[Renderer] Release_mesh: mesh " << _gpu_id << " is internal to the Renderer and is not released.\n";
+            return;
+        }
+
+        // Frames recorded from now on skip it. Every frame submitted so far
+        // may still draw it, so its range waits for the last of them.
+        meshes[_gpu_id].released = true;
+        retired_meshes.push_back({ _gpu_id, submitted_frames });
+
+        // Freed at once when every submitted frame has already completed.
+        Free_retired_meshes();
+    }
+
+    void Renderer::Wait_for_frames_in_flight()
+    {
+        if (frames.empty())
+            return;
+
+        std::array<VkFence, FRAMES_IN_FLIGHT> fences{};
+
+        for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; ++i)
+            fences[i] = frames[i].in_flight_fence;
+
+        VK_CHECK(vkWaitForFences(device.Get_logical_device_handle(), FRAMES_IN_FLIGHT, fences.data(), VK_TRUE, UINT64_MAX),
+            "Wait_for_frames_in_flight: wait for the frame fences");
+
+        // Every submitted frame has completed: released geometry can go.
+        completed_frames = submitted_frames;
+        Free_retired_meshes();
+    }
+
+    void Renderer::Free_retired_meshes()
+    {
+        for (size_t i = 0; i < retired_meshes.size(); )
+        {
+            if (retired_meshes[i].last_frame_serial <= completed_frames)
+            {
+                geometry_pool.Free(meshes[retired_meshes[i].gpu_id].geometry);
+
+                retired_meshes[i] = retired_meshes.back();
+                retired_meshes.pop_back();
+            }
+            else
+            {
+                ++i;
+            }
+        }
+    }
+
     void Renderer::Upload_default_textures()
     {
         namespace Default = CoreTypes::Default_Texture;
@@ -653,18 +1036,24 @@ namespace Renderer_System
     }
 
     // =========================================================
-    // Material table
+    // Material and mesh tables
     // =========================================================
 
-    void Renderer::Init_material_table()
+    void Renderer::Init_global_tables()
     {
         VkDevice dev = device.Get_logical_device_handle();
 
-        // ── Buffer ─────────────────────────────────────────────────
-        // Host-visible and coherent (Cpu_To_Gpu), persistently mapped:
-        // Register_material writes each new slot in place.
+        // ── Buffers ────────────────────────────────────────────────
+        // Material table: host-visible and coherent (Cpu_To_Gpu),
+        // persistently mapped: Register_material writes each new slot in
+        // place.
         material_buffer = Vulkan_Buffer_Utils::Create_buffer(allocator.Get_handle(), sizeof(Material_GPU) * MAX_MATERIALS,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, Vulkan_Buffer_Utils::Buffer_Access::Cpu_To_Gpu, true);
+
+        // Mesh table: device-local, written by the transfer of the upload
+        // that creates each mesh (Upload_batch), never by the CPU directly.
+        mesh_table_buffer = Vulkan_Buffer_Utils::Create_buffer(allocator.Get_handle(), sizeof(Mesh_Info_GPU) * MAX_MESHES,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, Vulkan_Buffer_Utils::Buffer_Access::Gpu_Only);
 
         // Reserved up front: Register_material then never reallocates, so
         // its push_back cannot throw after the capacity check.
@@ -680,25 +1069,39 @@ namespace Renderer_System
         alloc_info.pSetLayouts = &per_material_layout;
 
         VK_CHECK(vkAllocateDescriptorSets(dev, &alloc_info, &per_material_set),
-            "Init_material_table: failed to allocate the set 2 descriptor set");
+            "Init_global_tables: failed to allocate the set 2 descriptor set");
 
-        // The range is the whole CAPACITY: the descriptor is written once
-        // and slots are added in place afterwards.
-        VkDescriptorBufferInfo buffer_info{};
-        buffer_info.buffer = material_buffer.buffer;
-        buffer_info.offset = 0;
-        buffer_info.range = sizeof(Material_GPU) * MAX_MATERIALS;
+        // Both ranges are the whole CAPACITY: the descriptors are written
+        // once and entries are added in place afterwards.
+        VkDescriptorBufferInfo material_info{};
+        material_info.buffer = material_buffer.buffer;
+        material_info.offset = 0;
+        material_info.range = sizeof(Material_GPU) * MAX_MATERIALS;
 
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = per_material_set;
-        write.dstBinding = Binding_Per_Material::Materials;
-        write.dstArrayElement = 0;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        write.descriptorCount = 1;
-        write.pBufferInfo = &buffer_info;
+        VkDescriptorBufferInfo mesh_info{};
+        mesh_info.buffer = mesh_table_buffer.buffer;
+        mesh_info.offset = 0;
+        mesh_info.range = sizeof(Mesh_Info_GPU) * MAX_MESHES;
 
-        vkUpdateDescriptorSets(dev, 1, &write, 0, nullptr);
+        std::array<VkWriteDescriptorSet, 2> writes{};
+
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = per_material_set;
+        writes[0].dstBinding = Binding_Per_Material::Materials;
+        writes[0].dstArrayElement = 0;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[0].descriptorCount = 1;
+        writes[0].pBufferInfo = &material_info;
+
+        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet = per_material_set;
+        writes[1].dstBinding = Binding_Per_Material::Meshes;
+        writes[1].dstArrayElement = 0;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[1].descriptorCount = 1;
+        writes[1].pBufferInfo = &mesh_info;
+
+        vkUpdateDescriptorSets(dev, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 
         // ── Default material ───────────────────────────────────────
         // A default-constructed Material_Desc is the default material.
@@ -711,7 +1114,114 @@ namespace Renderer_System
                 + std::to_string(CoreTypes::Default_Material) + "; something was registered before it");
 
         std::cout << "[Renderer] Material table: " << MAX_MATERIALS << " slots, default material in slot "
-            << CoreTypes::Default_Material << ".\n";
+            << CoreTypes::Default_Material << ". Mesh table: " << MAX_MESHES << " entries.\n";
+    }
+
+    // =========================================================
+    // Clustered lighting resources
+    // =========================================================
+
+    void Renderer::Init_light_clusters()
+    {
+        assert(per_pass_set != VK_NULL_HANDLE && "Init_light_clusters: Init_procedural_pass() allocates per_pass_set and must run first");
+
+        // Device-local: written by vkCmdUpdateBuffer inside the frames
+        // (TRANSFER_DST), read by cluster_lights.comp (STORAGE_BUFFER).
+        cluster_aabb_buffer = Vulkan_Buffer_Utils::Create_buffer(allocator.Get_handle(), sizeof(Cluster_AABB_GPU) * CLUSTER_COUNT,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, Vulkan_Buffer_Utils::Buffer_Access::Gpu_Only);
+
+        cluster_aabb_scratch.resize(CLUSTER_COUNT);
+
+        // Built by the first frame: nothing reads the buffer before it.
+        cluster_aabbs_valid = false;
+
+        VkDescriptorBufferInfo aabb_info{};
+        aabb_info.buffer = cluster_aabb_buffer.buffer;
+        aabb_info.offset = 0;
+        aabb_info.range = sizeof(Cluster_AABB_GPU) * CLUSTER_COUNT;
+
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = per_pass_set;
+        write.dstBinding = Binding_Per_Pass::Cluster_AABBs;
+        write.dstArrayElement = 0;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write.descriptorCount = 1;
+        write.pBufferInfo = &aabb_info;
+
+        // Written once, before any frame is recorded.
+        vkUpdateDescriptorSets(device.Get_logical_device_handle(), 1, &write, 0, nullptr);
+
+        std::cout << "[Renderer] Clustered lighting: " << CLUSTER_TILES_X << "x" << CLUSTER_TILES_Y << "x" << CLUSTER_SLICES
+            << " clusters, slices up to " << CLUSTER_MAX_DISTANCE << " units, " << CLUSTER_LIGHT_INDEX_CAPACITY
+            << " light index entries per frame, " << MAX_LIGHTS << " lights max.\n";
+    }
+
+    // =========================================================
+    // Debug resources
+    // =========================================================
+
+    void Renderer::Init_debug_meshes()
+    {
+        const CoreTypes::MeshData unit_sphere = Build_unit_sphere(BOUNDS_SPHERE_SEGMENTS, BOUNDS_SPHERE_RINGS);
+
+        bounds_sphere_mesh_id = Upload_mesh(unit_sphere);
+
+        std::cout << "[Renderer] Bounding sphere view: unit sphere uploaded as mesh " << bounds_sphere_mesh_id
+            << (device.Is_fill_mode_non_solid_enabled() ? " (wireframe).\n" : " (filled, blended: fillModeNonSolid unavailable).\n");
+    }
+
+    void Renderer::Name_debug_objects()
+    {
+        if (!debug_utils.Is_enabled())
+            return;
+
+        for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; ++i)
+        {
+            const Frame_Data&  frame = frames[i];
+            const std::string suffix = "_Frame" + std::to_string(i);
+
+            const auto name_buffer = [&](const Vulkan_Buffer_Utils::Buffer_Allocation& _buffer, const char* _name)
+                {
+                    debug_utils.Set_name(_buffer.buffer, VK_OBJECT_TYPE_BUFFER, (std::string(_name) + suffix).c_str());
+                };
+
+            name_buffer(frame.uniform_buffer, "Frame_UBO");
+            name_buffer(frame.light_buffer, "Lights");
+            name_buffer(frame.object_buffer, "Objects");
+            name_buffer(frame.cpu_draw_command_buffer, "Cpu_Draw_Commands");
+            name_buffer(frame.cluster_grid_buffer, "Cluster_Grid");
+            name_buffer(frame.cluster_light_index_buffer, "Cluster_Light_Indices");
+            name_buffer(frame.cluster_counter_buffer, "Cluster_Counters");
+            name_buffer(frame.gpu_draw_command_buffer, "Gpu_Draw_Commands");
+            name_buffer(frame.gpu_draw_count_buffer, "Gpu_Draw_Count");
+            name_buffer(frame.stats_readback_buffer, "Stats_Readback");
+
+            debug_utils.Set_name(frame.Get_command_buffer(), VK_OBJECT_TYPE_COMMAND_BUFFER, ("Frame_Commands" + suffix).c_str());
+            debug_utils.Set_name(descriptor_sets[i], VK_OBJECT_TYPE_DESCRIPTOR_SET, ("Per_Frame_Set" + suffix).c_str());
+        }
+
+        debug_utils.Set_name(geometry_pool.Get_vertex_buffer(), VK_OBJECT_TYPE_BUFFER, "Geometry_Pool_Vertices");
+        debug_utils.Set_name(geometry_pool.Get_index_buffer(), VK_OBJECT_TYPE_BUFFER, "Geometry_Pool_Indices");
+        debug_utils.Set_name(material_buffer.buffer, VK_OBJECT_TYPE_BUFFER, "Material_Table");
+        debug_utils.Set_name(mesh_table_buffer.buffer, VK_OBJECT_TYPE_BUFFER, "Mesh_Table");
+        debug_utils.Set_name(cluster_aabb_buffer.buffer, VK_OBJECT_TYPE_BUFFER, "Cluster_AABBs");
+
+        debug_utils.Set_name(per_pass_set, VK_OBJECT_TYPE_DESCRIPTOR_SET, "Per_Pass_Set");
+        debug_utils.Set_name(per_material_set, VK_OBJECT_TYPE_DESCRIPTOR_SET, "Per_Material_Set");
+
+        debug_utils.Set_name(procedural_pipeline.Get_handle(), VK_OBJECT_TYPE_PIPELINE, "Procedural_Compute");
+        debug_utils.Set_name(cluster_pipeline.Get_handle(), VK_OBJECT_TYPE_PIPELINE, "Cluster_Lights_Compute");
+        debug_utils.Set_name(cull_pipeline.Get_handle(), VK_OBJECT_TYPE_PIPELINE, "Cull_Objects_Compute");
+        debug_utils.Set_name(pipeline_registry.Get_by_id(opaque_pipeline_id), VK_OBJECT_TYPE_PIPELINE, "Mesh_Opaque");
+        debug_utils.Set_name(pipeline_registry.Get_by_id(transparent_pipeline_id), VK_OBJECT_TYPE_PIPELINE, "Mesh_Transparent");
+        debug_utils.Set_name(pipeline_registry.Get_by_id(bounds_pipeline_id), VK_OBJECT_TYPE_PIPELINE, "Bounds_Debug");
+
+        if (procedural_image.has_value())
+            debug_utils.Set_name(procedural_image->Get_image(), VK_OBJECT_TYPE_IMAGE, "Procedural_Texture");
+
+        if (gpu_timer.Is_supported())
+            debug_utils.Set_name(gpu_timer.Get_query_pool(), VK_OBJECT_TYPE_QUERY_POOL, "Gpu_Timer_Queries");
     }
 
     uint32_t Renderer::Register_material(const Material_Desc& _desc)
@@ -810,6 +1320,15 @@ namespace Renderer_System
         VK_CHECK(vkWaitForFences(dev, 1, &frame.in_flight_fence, VK_TRUE, UINT64_MAX),
             "Render: wait for frame fence");
 
+        // ── Work of the previous use of this slot ─────────────────
+        // Its fence is signaled: that frame and every earlier submission
+        // have completed (a fence signal includes all the work submitted
+        // before it). Geometry released before then can go back to the
+        // pool, and the GPU results of that frame can be read.
+        completed_frames = std::max(completed_frames, slot_frame_serial[current_frame]);
+        Free_retired_meshes();
+        Read_frame_statistics(current_frame);
+
         // ── Acquire swapchain image ───────────────────────────────
         uint32_t image_index = 0;
         const VkResult acquire_result = vkAcquireNextImageKHR(
@@ -848,6 +1367,7 @@ namespace Renderer_System
         }
 
         // ── Update per-frame buffers ──────────────────────────────
+        Update_culling_frustum(_packet);
         Write_frame_uniforms(frame, _packet);
 
         // ── Record commands ───────────────────────────────────────
@@ -881,6 +1401,11 @@ namespace Renderer_System
 
         VK_CHECK(vkQueueSubmit(device.Get_graphics_queue(), 1, &submit_info, frame.in_flight_fence),
             "Render: failed to submit command buffer");
+
+        // The frame is in flight from here on: its serial is what released
+        // geometry waits for, and what its record is read back against.
+        slot_frame_serial[current_frame] = ++submitted_frames;
+        frame_records[current_frame].recorded = true;
 
         // ── Present ───────────────────────────────────────────────
         VkPresentInfoKHR present_info{};
@@ -942,8 +1467,6 @@ namespace Renderer_System
         ubo.camera_position = _packet.view.camera_position;
 
         const uint32_t packet_lights = static_cast<uint32_t>(_packet.lights.size());
-        const uint32_t light_count = (packet_lights > MAX_LIGHTS) ? MAX_LIGHTS : packet_lights;
-        ubo.light_count = static_cast<int32_t>(light_count);
 
         // Reported when the overflow starts and whenever the light count
         // changes while it lasts, so a scene that stays over the limit
@@ -952,8 +1475,8 @@ namespace Renderer_System
         {
             if (packet_lights != reported_light_overflow)
             {
-                std::cerr << "[Renderer] " << packet_lights << " lights in the packet, only the first "
-                    << MAX_LIGHTS << " are uploaded.\n";
+                std::cerr << "[Renderer] " << packet_lights << " lights in the packet, only "
+                    << MAX_LIGHTS << " are uploaded (directional lights first).\n";
                 reported_light_overflow = packet_lights;
             }
         }
@@ -965,26 +1488,94 @@ namespace Renderer_System
         // Lights go to their own buffer, written straight into the mapped
         // memory: the destination already is a contiguous array of the
         // right type, so no intermediate array is needed.
+        //
+        // Directional lights first, then the point and spot lights, each
+        // group in packet order. Directional lights reach every fragment
+        // and are never clustered: mesh.frag loops over the first
+        // directional_light_count entries, and the cluster pass only
+        // distributes the rest. Filling them first also means that an
+        // overflow drops local lights, never a sun.
         Light_GPU* gpu_lights = static_cast<Light_GPU*>(_frame.light_buffer.mapped_ptr);
 
-        for (uint32_t i = 0; i < light_count; ++i)
-        {
-            const CoreTypes::GPU_Light& src = _packet.lights[i];
-            Light_GPU& dst = gpu_lights[i];
+        uint32_t light_count = 0;
+        uint32_t directional_count = 0;
 
-            dst.position_or_direction = src.position_or_direction;
-            dst.intensity = src.intensity;
-            dst.color = src.color;
-            dst.range = src.range;
-            dst.spot_direction = src.spot_direction;
-            dst.inner_angle = src.inner_angle;
-            dst.outer_angle = src.outer_angle;
-            dst.type = static_cast<int32_t>(src.type);
-            dst._padding0 = 0.0f;
-            dst._padding1 = 0.0f;
+        const auto write_light = [&](const CoreTypes::GPU_Light& _src)
+            {
+                Light_GPU& dst = gpu_lights[light_count++];
+
+                dst.position_or_direction = _src.position_or_direction;
+                dst.intensity = _src.intensity;
+                dst.color = _src.color;
+                dst.range = _src.range;
+                dst.spot_direction = _src.spot_direction;
+                dst.inner_angle = _src.inner_angle;
+                dst.outer_angle = _src.outer_angle;
+                dst.type = static_cast<int32_t>(_src.type);
+                dst._padding0 = 0.0f;
+                dst._padding1 = 0.0f;
+            };
+
+        for (const CoreTypes::GPU_Light& light : _packet.lights)
+        {
+            if (light.type == 0 && light_count < MAX_LIGHTS)
+            {
+                write_light(light);
+                ++directional_count;
+            }
         }
 
+        for (const CoreTypes::GPU_Light& light : _packet.lights)
+        {
+            if (light.type != 0 && light_count < MAX_LIGHTS)
+                write_light(light);
+        }
+
+        ubo.light_count = static_cast<int32_t>(light_count);
+
+        // Also the range the cluster pass distributes (its push constants).
+        uploaded_light_count = light_count;
+        uploaded_directional_light_count = directional_count;
+
+        // ── Clustered lighting ────────────────────────────────────
+        const Cluster_Grid::Slice_Mapping slices = Cluster_Grid::Make_slice_mapping(_packet.view.near_plane);
+        const VkExtent2D                  extent = swapchain.Get_extent();
+
+        ubo.cluster_tiles_x = CLUSTER_TILES_X;
+        ubo.cluster_tiles_y = CLUSTER_TILES_Y;
+        ubo.cluster_slices = CLUSTER_SLICES;
+        ubo.directional_light_count = directional_count;
+
+        ubo.render_width = static_cast<float>(extent.width);
+        ubo.render_height = static_cast<float>(extent.height);
+        ubo.cluster_slice_scale = slices.scale;
+        ubo.cluster_slice_bias = slices.bias;
+
+        ubo.light_culling_mode = static_cast<uint32_t>(debug_settings.light_culling);
+        ubo.cluster_debug_view = static_cast<uint32_t>(debug_settings.cluster_view);
+        ubo.heatmap_max_lights = debug_settings.heatmap_max_lights;
+        ubo._padding0 = 0;
+
+        // ── Culling ───────────────────────────────────────────────
+        // The frustum of this frame, or the frozen one.
+        for (uint32_t i = 0; i < FRUSTUM_PLANE_COUNT; ++i)
+            ubo.frustum_planes[i] = culling_frustum.planes[i];
+
         std::memcpy(_frame.uniform_buffer.mapped_ptr, &ubo, sizeof(ubo));
+    }
+
+    void Renderer::Update_culling_frustum(const CoreTypes::RenderPacket& _packet)
+    {
+        // The first frame after the freeze was enabled provides the frozen
+        // planes; later frames keep testing against them while the view
+        // moves on.
+        if (capture_frozen_frustum)
+        {
+            frozen_frustum = _packet.view.frustum;
+            capture_frozen_frustum = false;
+        }
+
+        culling_frustum = debug_settings.freeze_culling ? frozen_frustum : _packet.view.frustum;
     }
 
     // =========================================================
@@ -995,10 +1586,29 @@ namespace Renderer_System
     {
         const VkCommandBuffer command_buffer = _frame.Get_command_buffer();
 
+        // ── CPU side of the frame ─────────────────────────────────
+        // The path that can draw this frame's opaque objects, then the
+        // object buffer and the draw lists everything below consumes. The
+        // transparent items are culled on the CPU exactly when the opaque
+        // ones are culled on the GPU, with the same planes, so both
+        // passes discard the same objects.
+        const Opaque_Draw_Path opaque_path = Resolve_opaque_path(debug_settings.opaque_path, _packet);
+        const bool             gpu_draws = opaque_path == Opaque_Draw_Path::Gpu_Indirect || opaque_path == Opaque_Draw_Path::Gpu_Culled;
+        const bool             frustum_culling = opaque_path == Opaque_Draw_Path::Gpu_Culled;
+
+        Prepare_objects(_frame, _packet, frustum_culling);
+
+        const uint32_t opaque_count = static_cast<uint32_t>(opaque_draws.size());
+
+        if (opaque_path == Opaque_Draw_Path::Cpu_Indirect)
+            Write_cpu_draw_commands(_frame);
+
         VkCommandBufferBeginInfo begin_info{};
         begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 
         VK_CHECK(vkBeginCommandBuffer(command_buffer, &begin_info), "Record_command_buffer: begin");
+
+        gpu_timer.Begin_frame(command_buffer, current_frame);
 
         // ── Compute work: always before the render pass ───────────
         // Every compute pass that writes an image registered in the
@@ -1011,33 +1621,36 @@ namespace Renderer_System
         //   - End_write must execute before any draw that may read the
         //     bindless set (declared layout rule,
         //     Bindless_Registry::Register_texture).
-                // Compute passes bind their pipeline and descriptor sets at
+        // The same holds for the buffers the compute passes write for the
+        // draws (cluster lists, indirect commands): their barriers are
+        // recorded here, outside the render pass.
+        //
+        // Compute passes bind their pipeline and descriptor sets at
         // VK_PIPELINE_BIND_POINT_COMPUTE: the sets bound below for
         // GRAPHICS are not visible to dispatches, and binding compute sets
-        // does not disturb them.
+        // does not disturb them. Every compute pipeline is built against
+        // compute_pipeline_layout, so the four sets bound once here stay
+        // bound across the pipeline changes of the passes below. Set 0 uses
+        // the same handle as the graphics pass (same set layout in both
+        // pipeline layouts).
+        const std::array<VkDescriptorSet, Descriptor_Set::Count> compute_sets = {
+            descriptor_sets[current_frame], per_pass_set, per_material_set, bindless_registry.Get_set() };
 
-                // ── Procedural texture pass ───────────────────────────────
+        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pipeline_layout.Get_handle(),
+            Descriptor_Set::Per_Frame, static_cast<uint32_t>(compute_sets.size()), compute_sets.data(), 0, nullptr);
+
+        // ── Procedural texture pass ───────────────────────────────
         // Writes every texel of procedural_image; the draws below sample it
         // through its bindless slot.
         constexpr uint32_t PROCEDURAL_GROUP_SIZE = 8;   // local_size_x / local_size_y of procedural.comp
         {
             assert(procedural_image.has_value() && "Record_command_buffer: Init_procedural_pass() has not run");
 
+            const Debug_Label_Scope label(debug_utils, command_buffer, "Procedural texture", 0.9f, 0.6f, 0.1f);
+
             const VkExtent2D procedural_extent = procedural_image->Get_extent();
 
             vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, procedural_pipeline.Get_handle());
-
-            // Sets 0 and 1 are consecutive, so both go in one call. Set 0
-            // uses the same handle as the graphics pass (same set layout in
-            // both pipeline layouts); set 1 holds the storage image.
-            const std::array<VkDescriptorSet, 2> compute_low_sets = { descriptor_sets[current_frame], per_pass_set };
-            vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pipeline_layout.Get_handle(),
-                Descriptor_Set::Per_Frame, static_cast<uint32_t>(compute_low_sets.size()),
-                compute_low_sets.data(), 0, nullptr);
-
-            const VkDescriptorSet compute_bindless_set = bindless_registry.Get_set();
-            vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pipeline_layout.Get_handle(),
-                Descriptor_Set::Bindless, 1, &compute_bindless_set, 0, nullptr);
 
             Procedural_Push_Constants procedural_push{};
             procedural_push.image_width = procedural_extent.width;
@@ -1062,6 +1675,107 @@ namespace Renderer_System
             // GENERAL -> SHADER_READ_ONLY_OPTIMAL, compute writes made
             // visible to the fragment stage before the render pass begins.
             procedural_image->End_write(command_buffer);
+        }
+
+        gpu_timer.Write(command_buffer, current_frame, Timestamp_After_Procedural);
+
+        // ── Transfer: cluster boxes and counter resets ────────────
+        // The boxes are rewritten only when the projection changed. The
+        // atomic counters of both passes start every frame at zero; the
+        // barrier after the fills also covers the box update, and reaches
+        // every stage that reads what was reset: the atomics of the
+        // compute passes, the indirect draw (draw count) and the
+        // statistics copy. Its transfer write access also orders the
+        // statistics copy of this frame after the copies earlier frames
+        // made into the same readback buffer (write-after-write), with a
+        // barrier instead of relying on the fence wait alone.
+        {
+            const Debug_Label_Scope label(debug_utils, command_buffer, "Cluster boxes and counter reset", 0.5f, 0.5f, 0.5f);
+
+            Record_cluster_aabb_update(command_buffer, _packet);
+
+            Vulkan_Buffer_Utils::Record_zero_fill_and_barrier(command_buffer,
+                { { _frame.cluster_counter_buffer.buffer, 0, sizeof(Cluster_Counters_GPU) },
+                  { _frame.gpu_draw_count_buffer.buffer, 0, sizeof(Draw_Count_GPU) } },
+                { VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                  VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT |
+                  VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT });
+        }
+
+        // ── Light assignment to clusters ──────────────────────────
+        {
+            const Debug_Label_Scope label(debug_utils, command_buffer, "Light clusters", 1.0f, 0.9f, 0.2f);
+
+            vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, cluster_pipeline.Get_handle());
+
+            Cluster_Push_Constants cluster_push{};
+            cluster_push.cluster_count = CLUSTER_COUNT;
+            cluster_push.light_index_capacity = CLUSTER_LIGHT_INDEX_CAPACITY;
+            cluster_push.first_local_light = uploaded_directional_light_count;
+            cluster_push.light_count = uploaded_light_count;
+
+            vkCmdPushConstants(command_buffer, compute_pipeline_layout.Get_handle(), VK_SHADER_STAGE_COMPUTE_BIT,
+                0, sizeof(Cluster_Push_Constants), &cluster_push);
+
+            // One invocation per cluster, rounded up to whole groups.
+            vkCmdDispatch(command_buffer, (CLUSTER_COUNT + CLUSTER_GROUP_SIZE - 1) / CLUSTER_GROUP_SIZE, 1, 1);
+        }
+
+        gpu_timer.Write(command_buffer, current_frame, Timestamp_After_Light_Clusters);
+
+        // ── Frustum culling and draw generation ───────────────────
+        // Only for the GPU paths; the opaque objects are entries
+        // [0, opaque_count) of the object buffer.
+        if (gpu_draws && opaque_count > 0)
+        {
+            const Debug_Label_Scope label(debug_utils, command_buffer, "Frustum culling", 0.2f, 0.8f, 1.0f);
+
+            vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, cull_pipeline.Get_handle());
+
+            Cull_Push_Constants cull_push{};
+            cull_push.object_count = opaque_count;
+            cull_push.command_capacity = MAX_OBJECTS;
+            cull_push.pass_bit = CoreTypes::Render_Pass_Bit::Opaque;
+            cull_push.frustum_culling = frustum_culling ? 1u : 0u;
+
+            vkCmdPushConstants(command_buffer, compute_pipeline_layout.Get_handle(), VK_SHADER_STAGE_COMPUTE_BIT,
+                0, sizeof(Cull_Push_Constants), &cull_push);
+
+            vkCmdDispatch(command_buffer, (opaque_count + CULL_GROUP_SIZE - 1) / CULL_GROUP_SIZE, 1, 1);
+        }
+
+        // Written every frame, culling or not: a point that is missing from
+        // one frame makes the timer skip that whole frame.
+        gpu_timer.Write(command_buffer, current_frame, Timestamp_After_Culling);
+
+        // ── Compute results -> consumers ──────────────────────────
+        // One barrier for both passes: the cluster lists to the fragment
+        // shader, the draw commands and their count to the indirect draw,
+        // and the counters to the statistics copy. Forgetting the indirect
+        // part works "almost always", which is why it is spelled out.
+        Vulkan_Buffer_Utils::Record_compute_to_consumer_barrier(command_buffer,
+            { VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+              VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT });
+
+        // ── Statistics readback ───────────────────────────────────
+        // The counters of this frame are copied into its host-visible
+        // readback buffer, read when this frame slot comes around again
+        // (Read_frame_statistics), so the CPU never waits for them.
+        {
+            const Debug_Label_Scope label(debug_utils, command_buffer, "Statistics readback", 0.5f, 0.5f, 0.5f);
+
+            const VkBufferCopy cluster_copy{ 0, offsetof(Frame_Stats_GPU, cluster_light_references),
+                                             sizeof(uint32_t) * 2 };   // light_index_count, dropped_light_count
+            const VkBufferCopy draw_copy{ 0, offsetof(Frame_Stats_GPU, gpu_opaque_draws), sizeof(uint32_t) };
+
+            vkCmdCopyBuffer(command_buffer, _frame.cluster_counter_buffer.buffer, _frame.stats_readback_buffer.buffer, 1, &cluster_copy);
+            vkCmdCopyBuffer(command_buffer, _frame.gpu_draw_count_buffer.buffer, _frame.stats_readback_buffer.buffer, 1, &draw_copy);
+
+            // Device writes reach host reads only through a barrier with the
+            // host as destination; the fence wait then orders the read.
+            Vulkan_Buffer_Utils::Record_memory_barrier(command_buffer,
+                { VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT },
+                { VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT });
         }
 
         // ── Render pass ───────────────────────────────────────────
@@ -1119,10 +1833,10 @@ namespace Renderer_System
         vkCmdSetDepthCompareOp(command_buffer, raster_state.depth_compare_op);
 
         // ── Bind descriptor sets ─────────────────────────────────
-// Set 0: per-frame view/projection UBO, light buffer and object
-//        buffer of this frame slot.
+// Set 0: per-frame view/projection UBO, light buffer, object
+//        buffer and cluster lists of this frame slot.
 // Set 2: global material table, indexed through each object's
-//        material_index.
+//        material_index, and mesh table (bounds view).
 // Set 3: global bindless texture array, indexed through each
 //        material's albedo_texture_index.
 // Set 1 is not bound: it only holds compute pass resources.
@@ -1137,30 +1851,31 @@ namespace Renderer_System
         vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout.Get_handle(),
             Descriptor_Set::Bindless, 1, &bindless_set, 0, nullptr);
 
+        // ── Geometry: one bind for the whole frame ────────────────
+        // Every mesh lives in the pool; the draws select theirs through
+        // firstIndex / vertexOffset.
+        geometry_pool.Bind(command_buffer);
+
         uint8_t  bound_pipeline_id = 0xFF;
         uint32_t bind_count = 0;
 
-        // ── Object buffer of this frame slot ──────────────────────
-        // Rewritten from entry 0 every frame: the GPU finished reading
-        // this slot's copy before its fence was waited on in Render().
-        // Shared counter: opaque items take [0, opaque), transparent items
-        // continue from there.
-        Object_GPU* const objects = static_cast<Object_GPU*>(_frame.object_buffer.mapped_ptr);
-        uint32_t          object_count = 0;
-
         // ── Opaque pass: depth write on ───────────────────────────
-        Draw_items(command_buffer, _packet.opaque_items, CoreTypes::Render_Pass_Bit::Opaque, _packet,
-            objects, object_count, bound_pipeline_id, bind_count);
+        {
+            const Debug_Label_Scope label(debug_utils, command_buffer, "Opaque", 0.3f, 0.9f, 0.3f);
+            Record_opaque_draws(command_buffer, _frame, opaque_path, bound_pipeline_id, bind_count);
+        }
 
         // ── Transparent pass: depth test only, back-to-front ──────
-        // The list arrives sorted back-to-front by the extract; blending
-        // needs the opaque depth to occlude but must not write its own.
-        if (!_packet.transparent_items.empty())
         {
-            vkCmdSetDepthWriteEnable(command_buffer, VK_FALSE);
+            const Debug_Label_Scope label(debug_utils, command_buffer, "Transparent", 0.3f, 0.5f, 1.0f);
+            Record_transparent_draws(command_buffer, bound_pipeline_id, bind_count);
+        }
 
-            Draw_items(command_buffer, _packet.transparent_items, CoreTypes::Render_Pass_Bit::Transparent, _packet,
-                objects, object_count, bound_pipeline_id, bind_count);
+        // ── Bounding spheres (debug) ──────────────────────────────
+        if (debug_settings.show_bounds)
+        {
+            const Debug_Label_Scope label(debug_utils, command_buffer, "Bounding spheres", 1.0f, 1.0f, 1.0f);
+            Record_bounds_draw(command_buffer, bound_pipeline_id, bind_count);
         }
 
         if (bind_count != last_reported_binds)
@@ -1173,102 +1888,364 @@ namespace Renderer_System
 
         vkCmdEndRenderPass(command_buffer);
 
+        gpu_timer.Write(command_buffer, current_frame, Timestamp_After_Render_Pass);
+
         // The driver reports recording errors here, not at the individual
         // vkCmd* calls.
         VK_CHECK(vkEndCommandBuffer(command_buffer), "Record_command_buffer: end");
+
+        // Context of this frame's counters, read back with them. Marked as
+        // recorded by Render once the submit succeeded.
+        Frame_Record& record = frame_records[current_frame];
+        record.recorded = false;
+        record.opaque_path = opaque_path;
+        record.opaque_objects = opaque_count;
+        record.transparent_candidates = transparent_candidates;
+        record.transparent_drawn = static_cast<uint32_t>(transparent_draws.size());
     }
 
     // =========================================================
-    // Draw_items
+    // Frame preparation (CPU)
     // =========================================================
 
-    void Renderer::Draw_items(VkCommandBuffer _command_buffer,
-        const std::vector<CoreTypes::Draw_Item>& _items,
-        uint8_t _pass_bit,
-        const CoreTypes::RenderPacket& _packet,
-        Object_GPU* _objects,
-        uint32_t& _object_count,
-        uint8_t& _bound_pipeline_id,
-        uint32_t& _bind_count)
+    Opaque_Draw_Path Renderer::Resolve_opaque_path(Opaque_Draw_Path _requested, const CoreTypes::RenderPacket& _packet)
     {
-        assert(_objects != nullptr && "Draw_items: the object buffer of the frame is not mapped");
+        if (_requested != Opaque_Draw_Path::Gpu_Indirect && _requested != Opaque_Draw_Path::Gpu_Culled)
+            return _requested;
 
-        for (const CoreTypes::Draw_Item& item : _items)
+        // The GPU paths write every command into one bucket, drawn with one
+        // pipeline by one vkCmdDrawIndexedIndirectCount.
+        bool     single_pipeline = true;
+        bool     first_found = false;
+        uint8_t  first_pipeline_id = 0;
+        uint32_t opaque_items = 0;
+
+        for (const CoreTypes::Draw_Item& item : _packet.opaque_items)
         {
-            // An item that does not take part in this pass is skipped, so a
-            // pass_mask actually selects passes instead of being decoration.
-            if ((item.pass_mask & _pass_bit) == 0) continue;
-
-            const uint8_t item_pipeline_id = CoreTypes::Get_pipeline_id(item.sort_key);
-            const VkPipeline pipeline = pipeline_registry.Get_by_id(item_pipeline_id);
-
-            // Every reference is validated in every build, before its entry
-            // is written: an out-of-range transform index would read past
-            // the packet's array, and an out-of-range material index would
-            // read past the written slots of the material table.
-            const bool valid =
-                pipeline != VK_NULL_HANDLE &&
-                item.mesh_gpu_id < meshes.size() &&
-                item.transform_idx < _packet.transform_count &&
-                item.material_index < registered_materials.size();
-
-            if (!valid)
-            {
-                if (!warned_invalid_item)
-                {
-                    std::cerr << "[Renderer] Draw item skipped: pipeline " << int(item_pipeline_id)
-                        << ", mesh " << item.mesh_gpu_id << ", transform " << item.transform_idx
-                        << ", material " << item.material_index
-                        << " (registered meshes: " << meshes.size() << ", transforms in packet: "
-                        << _packet.transform_count << ", registered materials: " << registered_materials.size()
-                        << "). Further occurrences are not reported.\n";
-                    warned_invalid_item = true;
-                }
+            if ((item.pass_mask & CoreTypes::Render_Pass_Bit::Opaque) == 0)
                 continue;
-            }
 
-            // The object buffer is full: this and every later item of the
-            // frame are skipped.
-            if (_object_count >= MAX_OBJECTS)
+            ++opaque_items;
+
+            const uint8_t pipeline_id = CoreTypes::Get_pipeline_id(item.sort_key);
+
+            if (!first_found)
             {
-                if (!warned_object_overflow)
-                {
-                    std::cerr << "[Renderer] More than " << MAX_OBJECTS << " draws in one frame: the rest are skipped. "
-                        "Raise MAX_OBJECTS in Frame_Data.hpp. Further occurrences are not reported.\n";
-                    warned_object_overflow = true;
-                }
-                return;
+                first_pipeline_id = pipeline_id;
+                first_found = true;
             }
-
-            if (item_pipeline_id != _bound_pipeline_id)
+            else if (pipeline_id != first_pipeline_id)
             {
-                vkCmdBindPipeline(_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-                _bound_pipeline_id = item_pipeline_id;
-                ++_bind_count;
+                single_pipeline = false;
             }
-
-            // ── Object entry ──────────────────────────────────────
-            // Its index is the draw's firstInstance, which the vertex shader
-            // receives as gl_InstanceIndex. No push constants: the shaders
-            // read everything per draw from this entry and the material
-            // table.
-            const uint32_t object_index = _object_count++;
-            const MathLib::Matrix4& model = _packet.transforms[item.transform_idx];
-
-            Object_GPU& object = _objects[object_index];
-            object.model = model;
-            // Inverse-transpose computed once per draw here instead of once
-            // per vertex in mesh.vert; correct under non-uniform scale.
-            object.normal_matrix = glm::transpose(glm::inverse(model));
-            object.material_index = item.material_index;
-            object.mesh_index = item.mesh_gpu_id;
-            object.flags = item.pass_mask;
-            object._padding0 = 0;
-
-            const Mesh_GPU& mesh = meshes[item.mesh_gpu_id];
-            mesh.Bind(_command_buffer);
-            mesh.Draw(_command_buffer, object_index);
         }
+
+        if (single_pipeline && opaque_items <= device.Get_max_draw_indirect_count())
+            return _requested;
+
+        if (!warned_gpu_path_fallback)
+        {
+            std::cerr << "[Renderer] The GPU draw path needs every opaque item on one pipeline and at most maxDrawIndirectCount ("
+                << device.Get_max_draw_indirect_count() << ") of them; frames that break it use CPU-written indirect "
+                "commands instead. Further occurrences are not reported.\n";
+            warned_gpu_path_fallback = true;
+        }
+
+        return Opaque_Draw_Path::Cpu_Indirect;
+    }
+
+    void Renderer::Prepare_objects(Frame_Data& _frame, const CoreTypes::RenderPacket& _packet, bool _cull_transparents)
+    {
+        Object_GPU* const objects = static_cast<Object_GPU*>(_frame.object_buffer.mapped_ptr);
+        assert(objects != nullptr && "Prepare_objects: the object buffer of the frame is not mapped");
+
+        // Rewritten from entry 0 every frame: the GPU finished reading this
+        // slot's copy before its fence was waited on in Render().
+        opaque_draws.clear();
+        transparent_draws.clear();
+        transparent_candidates = 0;
+
+        uint32_t object_count = 0;
+
+        // _candidates, when not null, counts the valid items of the list
+        // before the frustum test.
+        const auto add_items = [&](const std::vector<CoreTypes::Draw_Item>& _items, uint8_t _pass_bit,
+                                   std::vector<Draw_Record>& _out, bool _frustum_test, uint32_t* _candidates)
+            {
+                for (const CoreTypes::Draw_Item& item : _items)
+                {
+                    // An item that does not take part in this pass is skipped,
+                    // so a pass_mask actually selects passes instead of being
+                    // decoration.
+                    if ((item.pass_mask & _pass_bit) == 0) continue;
+
+                    const uint8_t    item_pipeline_id = CoreTypes::Get_pipeline_id(item.sort_key);
+                    const VkPipeline pipeline = pipeline_registry.Get_by_id(item_pipeline_id);
+
+                    // Every reference is validated in every build, before its
+                    // entry is written: an out-of-range transform index would
+                    // read past the packet's array, an out-of-range material
+                    // index past the written slots of the material table, and
+                    // a released mesh may already have lost its geometry.
+                    const bool valid =
+                        pipeline != VK_NULL_HANDLE &&
+                        item.mesh_gpu_id < meshes.size() &&
+                        !meshes[item.mesh_gpu_id].released &&
+                        item.transform_idx < _packet.transform_count &&
+                        item.material_index < registered_materials.size();
+
+                    if (!valid)
+                    {
+                        if (!warned_invalid_item)
+                        {
+                            std::cerr << "[Renderer] Draw item skipped: pipeline " << int(item_pipeline_id)
+                                << ", mesh " << item.mesh_gpu_id << ", transform " << item.transform_idx
+                                << ", material " << item.material_index
+                                << " (registered meshes: " << meshes.size() << ", transforms in packet: "
+                                << _packet.transform_count << ", registered materials: " << registered_materials.size()
+                                << "; a released mesh is also skipped). Further occurrences are not reported.\n";
+                            warned_invalid_item = true;
+                        }
+                        continue;
+                    }
+
+                    const MathLib::Matrix4& model = _packet.transforms[item.transform_idx];
+                    const Mesh_GPU&         mesh = meshes[item.mesh_gpu_id];
+
+                    if (_candidates != nullptr)
+                        ++(*_candidates);
+
+                    // CPU culling: the sphere test of cull_objects.comp, on the
+                    // same planes (culling_frustum is what the UBO carries).
+                    if (_frustum_test)
+                    {
+                        const MathLib::Vector3 center = MathLib::Vector3(model * MathLib::Vector4(mesh.bounds_center, 1.0f));
+                        const float            radius = mesh.bounds_radius * Max_axis_scale(model);
+
+                        if (!culling_frustum.Intersects_sphere(center, radius))
+                            continue;
+                    }
+
+                    // The object buffer is full: this and every later item of
+                    // the frame are skipped.
+                    if (object_count >= MAX_OBJECTS)
+                    {
+                        if (!warned_object_overflow)
+                        {
+                            std::cerr << "[Renderer] More than " << MAX_OBJECTS << " draws in one frame: the rest are skipped. "
+                                "Raise MAX_OBJECTS in Frame_Data.hpp. Further occurrences are not reported.\n";
+                            warned_object_overflow = true;
+                        }
+                        return;
+                    }
+
+                    // ── Object entry ──────────────────────────────────
+                    // Its index is the draw's firstInstance, which the vertex
+                    // shader receives as gl_InstanceIndex. No push constants:
+                    // the shaders read everything per draw from this entry,
+                    // the material table and the mesh table.
+                    const uint32_t object_index = object_count++;
+
+                    Object_GPU& object = objects[object_index];
+                    object.model = model;
+                    // Inverse-transpose computed once per draw here instead of
+                    // once per vertex in mesh.vert; correct under non-uniform
+                    // scale.
+                    object.normal_matrix = glm::transpose(glm::inverse(model));
+                    object.material_index = item.material_index;
+                    object.mesh_index = item.mesh_gpu_id;
+                    object.flags = (static_cast<uint32_t>(item.pass_mask) & Object_Flag::Pass_Mask) | Object_Flag::Active;
+                    object._padding0 = 0;
+
+                    _out.push_back({ object_index, item.mesh_gpu_id, item_pipeline_id });
+                }
+            };
+
+        // Opaque items take entries [0, opaque) and transparent items
+        // continue from there. The culling pass relies on it: it processes
+        // [0, opaque) only.
+        add_items(_packet.opaque_items, CoreTypes::Render_Pass_Bit::Opaque, opaque_draws, false, nullptr);
+        add_items(_packet.transparent_items, CoreTypes::Render_Pass_Bit::Transparent, transparent_draws, _cull_transparents, &transparent_candidates);
+    }
+
+    void Renderer::Write_cpu_draw_commands(Frame_Data& _frame) const
+    {
+        VkDrawIndexedIndirectCommand* const commands = static_cast<VkDrawIndexedIndirectCommand*>(_frame.cpu_draw_command_buffer.mapped_ptr);
+        assert(commands != nullptr && "Write_cpu_draw_commands: the command buffer of the frame is not mapped");
+
+        // Same order as opaque_draws, so the commands of one pipeline are
+        // contiguous (the list is sorted by pipeline through the sort key).
+        // Host-coherent memory written before the submit: no barrier.
+        for (size_t i = 0; i < opaque_draws.size(); ++i)
+            commands[i] = meshes[opaque_draws[i].mesh_id].Make_indirect_command(opaque_draws[i].object_index);
+    }
+
+    void Renderer::Record_cluster_aabb_update(VkCommandBuffer _command_buffer, const CoreTypes::RenderPacket& _packet)
+    {
+        const float near_plane = _packet.view.near_plane;
+
+        if (cluster_aabbs_valid && _packet.view.projection == cluster_aabb_projection && near_plane == cluster_aabb_near)
+            return;
+
+        Cluster_Grid::Build_aabbs(_packet.view.projection, Cluster_Grid::Make_slice_mapping(near_plane), cluster_aabb_scratch.data());
+
+        // Write-after-read: the cluster pass of earlier frames, possibly
+        // still executing, reads the single copy of the boxes. An
+        // execution dependency is enough: nothing written before has to
+        // become visible to the update.
+        Vulkan_Buffer_Utils::Record_memory_barrier(_command_buffer,
+            { VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0 },
+            { VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT });
+
+        // vkCmdUpdateBuffer copies the data into the command buffer at
+        // record time, so the CPU array is free again as soon as this
+        // returns. At most 65536 bytes per call.
+        const uint8_t* const data = reinterpret_cast<const uint8_t*>(cluster_aabb_scratch.data());
+        const VkDeviceSize   total_size = sizeof(Cluster_AABB_GPU) * CLUSTER_COUNT;
+
+        for (VkDeviceSize offset = 0; offset < total_size; offset += UPDATE_BUFFER_MAX_BYTES)
+        {
+            const VkDeviceSize chunk = std::min(UPDATE_BUFFER_MAX_BYTES, total_size - offset);
+            vkCmdUpdateBuffer(_command_buffer, cluster_aabb_buffer.buffer, offset, chunk, data + offset);
+        }
+
+        // Made visible to the cluster pass by the barrier that follows the
+        // counter resets, which covers every transfer write before it.
+
+        cluster_aabb_projection = _packet.view.projection;
+        cluster_aabb_near = near_plane;
+        cluster_aabbs_valid = true;
+    }
+
+    // =========================================================
+    // Draw recording
+    // =========================================================
+
+    void Renderer::Bind_graphics_pipeline(VkCommandBuffer _command_buffer, uint8_t _pipeline_id,
+                                          uint8_t& _bound_pipeline_id, uint32_t& _bind_count)
+    {
+        if (_pipeline_id == _bound_pipeline_id)
+            return;
+
+        // Every id reaching here was validated by Prepare_objects, or is
+        // one of the Renderer's own pipelines.
+        vkCmdBindPipeline(_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_registry.Get_by_id(_pipeline_id));
+        _bound_pipeline_id = _pipeline_id;
+        ++_bind_count;
+    }
+
+    void Renderer::Record_opaque_draws(VkCommandBuffer _command_buffer, Frame_Data& _frame, Opaque_Draw_Path _path,
+                                       uint8_t& _bound_pipeline_id, uint32_t& _bind_count)
+    {
+        if (opaque_draws.empty())
+            return;
+
+        switch (_path)
+        {
+        case Opaque_Draw_Path::Direct:
+        {
+            // One draw per object, straight from the pool.
+            for (const Draw_Record& draw : opaque_draws)
+            {
+                Bind_graphics_pipeline(_command_buffer, draw.pipeline_id, _bound_pipeline_id, _bind_count);
+                meshes[draw.mesh_id].Draw(_command_buffer, draw.object_index);
+            }
+            break;
+        }
+
+        case Opaque_Draw_Path::Cpu_Indirect:
+        {
+            // One vkCmdDrawIndexedIndirect per run of commands sharing a
+            // pipeline, split at maxDrawIndirectCount.
+            const size_t max_per_call = std::max<uint32_t>(1u, device.Get_max_draw_indirect_count());
+            size_t       run_begin = 0;
+
+            while (run_begin < opaque_draws.size())
+            {
+                const uint8_t pipeline_id = opaque_draws[run_begin].pipeline_id;
+                size_t        run_end = run_begin + 1;
+
+                while (run_end < opaque_draws.size() && opaque_draws[run_end].pipeline_id == pipeline_id)
+                    ++run_end;
+
+                Bind_graphics_pipeline(_command_buffer, pipeline_id, _bound_pipeline_id, _bind_count);
+
+                for (size_t first = run_begin; first < run_end; first += max_per_call)
+                {
+                    const uint32_t draw_count = static_cast<uint32_t>(std::min(max_per_call, run_end - first));
+
+                    vkCmdDrawIndexedIndirect(_command_buffer, _frame.cpu_draw_command_buffer.buffer,
+                        static_cast<VkDeviceSize>(first) * DRAW_COMMAND_STRIDE, draw_count, DRAW_COMMAND_STRIDE);
+                }
+
+                run_begin = run_end;
+            }
+            break;
+        }
+
+        case Opaque_Draw_Path::Gpu_Indirect:
+        case Opaque_Draw_Path::Gpu_Culled:
+        {
+            // One bucket (Resolve_opaque_path guarantees a single pipeline).
+            // The culling pass wrote draw_count commands; maxDrawCount is an
+            // upper bound, not the number drawn.
+            Bind_graphics_pipeline(_command_buffer, opaque_draws.front().pipeline_id, _bound_pipeline_id, _bind_count);
+
+            vkCmdDrawIndexedIndirectCount(_command_buffer,
+                _frame.gpu_draw_command_buffer.buffer, 0,
+                _frame.gpu_draw_count_buffer.buffer, offsetof(Draw_Count_GPU, draw_count),
+                static_cast<uint32_t>(opaque_draws.size()), DRAW_COMMAND_STRIDE);
+            break;
+        }
+
+        default:
+            break;
+        }
+    }
+
+    void Renderer::Record_transparent_draws(VkCommandBuffer _command_buffer, uint8_t& _bound_pipeline_id, uint32_t& _bind_count)
+    {
+        if (transparent_draws.empty())
+            return;
+
+        // The list arrives sorted back-to-front by the extract, and direct
+        // draws keep that order; blending needs the opaque depth to occlude
+        // but must not write its own.
+        vkCmdSetDepthWriteEnable(_command_buffer, VK_FALSE);
+
+        for (const Draw_Record& draw : transparent_draws)
+        {
+            Bind_graphics_pipeline(_command_buffer, draw.pipeline_id, _bound_pipeline_id, _bind_count);
+            meshes[draw.mesh_id].Draw(_command_buffer, draw.object_index);
+        }
+    }
+
+    void Renderer::Record_bounds_draw(VkCommandBuffer _command_buffer, uint8_t& _bound_pipeline_id, uint32_t& _bind_count)
+    {
+        // Entries [0, object_count) of the object buffer: the opaque objects
+        // and the transparent ones that survived the CPU culling. Opaque
+        // objects culled on the GPU keep their sphere, which is what shows
+        // the culling at work.
+        const uint32_t object_count = static_cast<uint32_t>(opaque_draws.size() + transparent_draws.size());
+
+        if (object_count == 0 || bounds_sphere_mesh_id >= meshes.size())
+            return;
+
+        const Mesh_GPU& sphere = meshes[bounds_sphere_mesh_id];
+
+        if (sphere.released || !sphere.geometry.Is_valid())
+            return;
+
+        Bind_graphics_pipeline(_command_buffer, bounds_pipeline_id, _bound_pipeline_id, _bind_count);
+
+        // Seen from inside as well, and never occluding what follows.
+        vkCmdSetCullMode(_command_buffer, VK_CULL_MODE_NONE);
+        vkCmdSetDepthWriteEnable(_command_buffer, VK_FALSE);
+
+        // One instanced draw: firstInstance 0 and one instance per object
+        // entry, so gl_InstanceIndex is the object index in bounds.vert.
+        vkCmdDrawIndexed(_command_buffer, sphere.geometry.index_count, object_count, sphere.geometry.first_index,
+            static_cast<int32_t>(sphere.geometry.first_vertex), 0);
     }
 
     // =========================================================
@@ -1280,6 +2257,10 @@ namespace Renderer_System
         VK_CHECK(vkDeviceWaitIdle(device.Get_logical_device_handle()),
             "Recreate_swapchain: wait for device idle");
 
+        // Every submitted frame has completed: released geometry can go.
+        completed_frames = submitted_frames;
+        Free_retired_meshes();
+
         // vkDeviceWaitIdle covers queue work, not presentation: the
         // per-image objects are retired through their present fences (or
         // a grace period without them), never reset while pending.
@@ -1289,6 +2270,11 @@ namespace Renderer_System
         depth_resources.Recreate(swapchain.Get_extent());
         framebuffers.Recreate(render_pass, swapchain, depth_resources);
 
+        // The cluster boxes need nothing here: they depend on the
+        // projection, and the next frame rebuilds them when the new aspect
+        // ratio changes it (Record_cluster_aabb_update). The grid itself
+        // has a fixed tile count, so no buffer depends on the resolution.
+        //
         // Resolution-dependent images registered in the bindless set (the
         // Storage_Image outputs of compute passes) belong here as well,
         // after the idle wait above: Storage_Image::Recreate, with its
@@ -1343,18 +2329,24 @@ namespace Renderer_System
 
     void Renderer::Init_descriptor_pool()
     {
-        // Set 0: one uniform buffer and two storage buffers (lights,
-        // objects) per frame-in-flight. Set 1: one storage image for the
-        // procedural pass (per_pass_set). Set 2: one storage buffer for the
-        // material table (per_material_set). Sets 1 and 2 are shared by
-        // every frame slot.
+        // Set 0: one uniform buffer and seven storage buffers (lights,
+        // objects, cluster grid, cluster light indices, cluster counters,
+        // draw commands, draw count) per frame-in-flight. Set 1: one
+        // storage image for the procedural pass and one storage buffer for
+        // the cluster boxes (per_pass_set). Set 2: two storage buffers,
+        // the material and mesh tables (per_material_set). Sets 1 and 2
+        // are shared by every frame slot.
+        constexpr uint32_t PER_FRAME_STORAGE_BUFFERS = 7;
+        constexpr uint32_t PER_PASS_STORAGE_BUFFERS = 1;
+        constexpr uint32_t PER_MATERIAL_STORAGE_BUFFERS = 2;
+
         std::array<VkDescriptorPoolSize, 3> pool_sizes{};
 
         pool_sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         pool_sizes[0].descriptorCount = FRAMES_IN_FLIGHT;
 
         pool_sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        pool_sizes[1].descriptorCount = 2 * FRAMES_IN_FLIGHT + 1;
+        pool_sizes[1].descriptorCount = PER_FRAME_STORAGE_BUFFERS * FRAMES_IN_FLIGHT + PER_PASS_STORAGE_BUFFERS + PER_MATERIAL_STORAGE_BUFFERS;
 
         pool_sizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         pool_sizes[2].descriptorCount = 1;
@@ -1402,6 +2394,7 @@ namespace Renderer_System
             // change by memcpy. Frame_UBO::light_count says how many entries
             // are valid.
             light_info.range = sizeof(Light_GPU) * MAX_LIGHTS;
+
             // Same rule as the lights: the whole capacity. Only the entries
             // written this frame are read, because every draw indexes its own
             // entry through firstInstance.
@@ -1410,36 +2403,221 @@ namespace Renderer_System
             object_info.offset = 0;
             object_info.range = sizeof(Object_GPU) * MAX_OBJECTS;
 
-            std::array<VkWriteDescriptorSet, 3> writes{};
- 
+            // Buffers written by the compute passes of this frame slot,
+            // whole capacity as well.
+            VkDescriptorBufferInfo cluster_grid_info{};
+            cluster_grid_info.buffer = frames[i].cluster_grid_buffer.buffer;
+            cluster_grid_info.offset = 0;
+            cluster_grid_info.range = sizeof(Cluster_Range_GPU) * CLUSTER_COUNT;
 
-            writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[0].dstSet = descriptor_sets[i];
-            writes[0].dstBinding = Binding_Per_Frame::Frame_UBO;
-            writes[0].dstArrayElement = 0;
-            writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            writes[0].descriptorCount = 1;
-            writes[0].pBufferInfo = &ubo_info;
+            VkDescriptorBufferInfo cluster_indices_info{};
+            cluster_indices_info.buffer = frames[i].cluster_light_index_buffer.buffer;
+            cluster_indices_info.offset = 0;
+            cluster_indices_info.range = sizeof(uint32_t) * CLUSTER_LIGHT_INDEX_CAPACITY;
 
-            writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[1].dstSet = descriptor_sets[i];
-            writes[1].dstBinding = Binding_Per_Frame::Lights;
-            writes[1].dstArrayElement = 0;
-            writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            writes[1].descriptorCount = 1;
-            writes[1].pBufferInfo = &light_info;
+            VkDescriptorBufferInfo cluster_counters_info{};
+            cluster_counters_info.buffer = frames[i].cluster_counter_buffer.buffer;
+            cluster_counters_info.offset = 0;
+            cluster_counters_info.range = sizeof(Cluster_Counters_GPU);
 
-            writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[2].dstSet = descriptor_sets[i];
-            writes[2].dstBinding = Binding_Per_Frame::Objects;
-            writes[2].dstArrayElement = 0;
-            writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            writes[2].descriptorCount = 1;
-            writes[2].pBufferInfo = &object_info;
+            VkDescriptorBufferInfo draw_commands_info{};
+            draw_commands_info.buffer = frames[i].gpu_draw_command_buffer.buffer;
+            draw_commands_info.offset = 0;
+            draw_commands_info.range = sizeof(VkDrawIndexedIndirectCommand) * MAX_OBJECTS;
+
+            VkDescriptorBufferInfo draw_count_info{};
+            draw_count_info.buffer = frames[i].gpu_draw_count_buffer.buffer;
+            draw_count_info.offset = 0;
+            draw_count_info.range = sizeof(Draw_Count_GPU);
+
+            // Binding and buffer of every descriptor of set 0, in binding
+            // order; binding 0 is the uniform buffer, the rest are storage
+            // buffers.
+            constexpr size_t PER_FRAME_BINDING_COUNT = 8;
+
+            const std::array<std::pair<uint32_t, const VkDescriptorBufferInfo*>, PER_FRAME_BINDING_COUNT> bindings = { {
+                { Binding_Per_Frame::Frame_UBO,             &ubo_info },
+                { Binding_Per_Frame::Lights,                &light_info },
+                { Binding_Per_Frame::Objects,               &object_info },
+                { Binding_Per_Frame::Cluster_Grid,          &cluster_grid_info },
+                { Binding_Per_Frame::Cluster_Light_Indices, &cluster_indices_info },
+                { Binding_Per_Frame::Cluster_Counters,      &cluster_counters_info },
+                { Binding_Per_Frame::Draw_Commands,         &draw_commands_info },
+                { Binding_Per_Frame::Draw_Count,            &draw_count_info } } };
+
+            std::array<VkWriteDescriptorSet, PER_FRAME_BINDING_COUNT> writes{};
+
+            for (size_t b = 0; b < PER_FRAME_BINDING_COUNT; ++b)
+            {
+                writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[b].dstSet = descriptor_sets[i];
+                writes[b].dstBinding = bindings[b].first;
+                writes[b].dstArrayElement = 0;
+                writes[b].descriptorType = (bindings[b].first == Binding_Per_Frame::Frame_UBO)
+                                           ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                writes[b].descriptorCount = 1;
+                writes[b].pBufferInfo = bindings[b].second;
+            }
 
             vkUpdateDescriptorSets(device.Get_logical_device_handle(),
                 static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
         }
+    }
+
+    // =========================================================
+    // Statistics
+    // =========================================================
+
+    void Renderer::Read_frame_statistics(uint32_t _frame_slot)
+    {
+        Frame_Record& record = frame_records[_frame_slot];
+
+        // Nothing submitted from this slot since its last read.
+        if (!record.recorded)
+            return;
+
+        record.recorded = false;
+
+        Frame_Stats_GPU counters{};
+        Vulkan_Buffer_Utils::Read_from_buffer(allocator.Get_handle(), frames[_frame_slot].stats_readback_buffer, &counters, sizeof(counters));
+
+        // Reported whether statistics are printed or not: a full list
+        // silently removes lights from clusters.
+        if (counters.cluster_lights_dropped > 0 && !warned_cluster_overflow)
+        {
+            std::cerr << "[Renderer] The cluster light index list overflowed: " << counters.cluster_light_references
+                << " entries requested, " << CLUSTER_LIGHT_INDEX_CAPACITY << " available; " << counters.cluster_lights_dropped
+                << " light references dropped (magenta in the heatmap). Raise CLUSTER_AVERAGE_LIGHTS or lower the light ranges. "
+                "Further occurrences are not reported.\n";
+            warned_cluster_overflow = true;
+        }
+
+        Frame_Statistics& stats = statistics;
+
+        ++stats.frames;
+
+        if (gpu_timer.Read_intervals(_frame_slot, timer_intervals))
+        {
+            ++stats.timed_frames;
+
+            for (uint32_t i = 0; i < GPU_TIMER_INTERVALS; ++i)
+                stats.gpu_ms_sum[i] += timer_intervals[i];
+        }
+
+        stats.last_counters = counters;
+        stats.last_record = record;
+
+        const auto now = std::chrono::steady_clock::now();
+
+        if (now - stats.last_print < STATISTICS_PRINT_INTERVAL)
+            return;
+
+        if (debug_settings.print_stats)
+        {
+            const std::ios_base::fmtflags previous_flags = std::cout.flags();
+            const std::streamsize         previous_precision = std::cout.precision();
+
+            std::cout << std::fixed << std::setprecision(3);
+
+            if (stats.timed_frames > 0)
+            {
+                const double frames = static_cast<double>(stats.timed_frames);
+                const double procedural = stats.gpu_ms_sum[Timestamp_Frame_Start] / frames;
+                const double clusters = stats.gpu_ms_sum[Timestamp_After_Procedural] / frames;
+                const double culling = stats.gpu_ms_sum[Timestamp_After_Light_Clusters] / frames;
+                const double render_pass = stats.gpu_ms_sum[Timestamp_After_Culling] / frames;
+
+                std::cout << "[Renderer] GPU ms (average of " << stats.timed_frames << " frames): procedural " << procedural
+                    << " | light clusters " << clusters << " | culling " << culling << " | render pass " << render_pass
+                    << " | total " << (procedural + clusters + culling + render_pass) << "\n";
+            }
+            else
+            {
+                std::cout << "[Renderer] GPU timings unavailable (no timestamp support, or no frame measured yet).\n";
+            }
+
+            const Frame_Record& last = stats.last_record;
+            const bool gpu_path = last.opaque_path == Opaque_Draw_Path::Gpu_Indirect || last.opaque_path == Opaque_Draw_Path::Gpu_Culled;
+
+            // The GPU paths report what the culling pass kept; the CPU paths
+            // draw every object they wrote.
+            const uint32_t opaque_drawn = gpu_path ? stats.last_counters.gpu_opaque_draws : last.opaque_objects;
+
+            std::cout << "[Renderer] Opaque drawn " << opaque_drawn << " / " << last.opaque_objects << " (" << To_string(last.opaque_path)
+                << ") | transparent drawn " << last.transparent_drawn << " / " << last.transparent_candidates
+                << " | cluster light references " << stats.last_counters.cluster_light_references << " / " << CLUSTER_LIGHT_INDEX_CAPACITY
+                << " (dropped " << stats.last_counters.cluster_lights_dropped << ") | geometry pool "
+                << geometry_pool.Get_used_vertices() << " / " << geometry_pool.Get_vertex_capacity() << " vertices, "
+                << geometry_pool.Get_used_indices() << " / " << geometry_pool.Get_index_capacity() << " indices\n";
+
+            std::cout.flags(previous_flags);
+            std::cout.precision(previous_precision);
+        }
+
+        stats.frames = 0;
+        stats.timed_frames = 0;
+        stats.gpu_ms_sum.fill(0.0);
+        stats.last_print = now;
+    }
+
+    // =========================================================
+    // Debug switches
+    // =========================================================
+
+    void Renderer::Set_debug_settings(const Render_Debug_Settings& _settings)
+    {
+        Render_Debug_Settings settings = _settings;
+
+        // Values that reach the shaders or select a code path are sanitized:
+        // an unknown enumerator falls back to the default.
+        if (static_cast<uint32_t>(settings.light_culling) >= static_cast<uint32_t>(Light_Culling_Mode::Count))
+            settings.light_culling = Light_Culling_Mode::Clustered;
+
+        if (static_cast<uint32_t>(settings.cluster_view) >= static_cast<uint32_t>(Cluster_Debug_View::Count))
+            settings.cluster_view = Cluster_Debug_View::None;
+
+        if (static_cast<uint32_t>(settings.opaque_path) >= static_cast<uint32_t>(Opaque_Draw_Path::Count))
+            settings.opaque_path = Opaque_Draw_Path::Gpu_Culled;
+
+        if (settings.heatmap_max_lights == 0)
+            settings.heatmap_max_lights = 1;
+
+        if (settings.light_culling != debug_settings.light_culling)
+            std::cout << "[Renderer] Light culling: " << To_string(settings.light_culling) << ".\n";
+
+        if (settings.cluster_view != debug_settings.cluster_view)
+            std::cout << "[Renderer] Cluster debug view: " << To_string(settings.cluster_view) << ".\n";
+
+        if (settings.heatmap_max_lights != debug_settings.heatmap_max_lights)
+            std::cout << "[Renderer] Heatmap: red at " << settings.heatmap_max_lights << " lights per cluster.\n";
+
+        if (settings.opaque_path != debug_settings.opaque_path)
+            std::cout << "[Renderer] Opaque draw path: " << To_string(settings.opaque_path) << ".\n";
+
+        if (settings.freeze_culling != debug_settings.freeze_culling)
+        {
+            // The frustum of the next frame becomes the frozen one.
+            if (settings.freeze_culling)
+                capture_frozen_frustum = true;
+
+            std::cout << "[Renderer] Culling camera " << (settings.freeze_culling ? "frozen" : "follows the view") << ".\n";
+        }
+
+        if (settings.show_bounds != debug_settings.show_bounds)
+            std::cout << "[Renderer] Bounding spheres " << (settings.show_bounds ? "shown" : "hidden") << ".\n";
+
+        if (settings.print_stats != debug_settings.print_stats)
+        {
+            // The first print covers only frames measured from now on.
+            statistics.frames = 0;
+            statistics.timed_frames = 0;
+            statistics.gpu_ms_sum.fill(0.0);
+            statistics.last_print = std::chrono::steady_clock::now();
+
+            std::cout << "[Renderer] Statistics " << (settings.print_stats ? "printed every second" : "off") << ".\n";
+        }
+
+        debug_settings = settings;
     }
 
     // =========================================================
@@ -1448,7 +2626,7 @@ namespace Renderer_System
 
     std::vector<Pipeline_Config> Renderer::Build_pipeline_manifest() const
     {
-        return { opaque_config, transparent_config };
+        return { opaque_config, transparent_config, bounds_config };
     }
 
 } // namespace Renderer_System

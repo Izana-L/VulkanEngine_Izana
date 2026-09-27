@@ -34,11 +34,20 @@ namespace Renderer_System
     }
 
     // Bindings dentro del set 0.
+    //
+    // Bindings 3-7 hold buffers written on the GPU every frame. Each frame
+    // slot has its own copy, so a frame never writes what the previous
+    // frame, possibly still executing, reads.
     namespace Binding_Per_Frame
     {
         inline constexpr uint32_t Frame_UBO = 0;   // camara, inversas, tiempo
         inline constexpr uint32_t Lights = 1;   // SSBO con el array de luces
         inline constexpr uint32_t Objects = 2;     // SSBO of Object_GPU, one entry per draw, indexed by gl_InstanceIndex
+        inline constexpr uint32_t Cluster_Grid = 3;            // SSBO of Cluster_Range_GPU, one per cluster: offset and count in the light index list
+        inline constexpr uint32_t Cluster_Light_Indices = 4;   // SSBO of uint, compacted light indices of every cluster
+        inline constexpr uint32_t Cluster_Counters = 5;        // SSBO of Cluster_Counters_GPU, atomic allocation counter of the list
+        inline constexpr uint32_t Draw_Commands = 6;           // SSBO of VkDrawIndexedIndirectCommand written by the culling pass
+        inline constexpr uint32_t Draw_Count = 7;              // SSBO of Draw_Count_GPU, atomic draw counter of the culling pass
     }
 
     // Bindings inside set 1. Visible to the compute stage only: graphics
@@ -47,14 +56,25 @@ namespace Renderer_System
     namespace Binding_Per_Pass
     {
         inline constexpr uint32_t Procedural_Output = 0;   // STORAGE_IMAGE written by procedural.comp (layout GENERAL)
+        inline constexpr uint32_t Cluster_AABBs = 1;       // SSBO of Cluster_AABB_GPU, view space, rebuilt when the projection changes
     }
 
-    // Bindings inside set 2. One set for every frame: the table is
+    // Bindings inside set 2. One set for every frame: both tables are
     // append-only, so a frame in flight never reads a slot being written.
     namespace Binding_Per_Material
     {
         inline constexpr uint32_t Materials = 0;   // SSBO of Material_GPU, indexed by Object_GPU::material_index
+        inline constexpr uint32_t Meshes = 1;      // SSBO of Mesh_Info_GPU, indexed by Object_GPU::mesh_index
     }
+
+    // Storage buffer descriptors the device must allow one shader stage to
+    // access across sets 0-2 (maxPerStageDescriptorStorageBuffers), and a
+    // pipeline layout to hold in total (maxDescriptorSetStorageBuffers).
+    // The compute stage sees the most: seven buffers of set 0, one of set
+    // 1 and two of set 2. The specification only guarantees 4 per stage,
+    // so Vulkan_Device requires this value explicitly, and
+    // Descriptor_Layout_Cache refuses layouts that exceed it.
+    inline constexpr uint32_t Required_Storage_Buffers = 10;
 
 
 

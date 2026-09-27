@@ -3,124 +3,69 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
-#include <Vulkan_Buffer_Utils.hpp>
+#include <Geometry_Pool.hpp>
 #include <MeshData.hpp>
+#include <Vector.hpp>
 
 #include <cstdint>
 
 namespace Renderer_System
 {
 
-    // Mesh_GPU: GPU-resident geometry for a single mesh.
+    // Mesh_GPU: the Renderer's record of one uploaded mesh.
     //
-    // Owns a vertex buffer and an index buffer uploaded from a
-    // CoreTypes::MeshData. The upload is recorded into a caller-provided
-    // command buffer (already open) — the caller is responsible for
-    // submitting and waiting on that command buffer before using the mesh
-    // for rendering.
+    // A lightweight record, not a resource owner: the vertices and indices
+    // live in the shared Geometry_Pool, and this only says where (the
+    // range) plus the bounding volume the culling needs. Copying it copies
+    // a description; freeing the geometry is Geometry_Pool::Free on the
+    // range, scheduled by the Renderer once no frame in flight draws it.
     //
-    // Because the copy hasn't happened yet when the constructor returns,
-    // staging buffers are kept alive as members until the caller explicitly
-    // releases them via Release_staging_buffers() after the submit+wait.
+    // The same data is mirrored on the GPU in the mesh table
+    // (Mesh_Info_GPU, set 2), indexed by the same gpu id, for the passes
+    // that build draws without the CPU.
     //
-    // Typical usage:
+    // Drawing assumes the pool is bound (Geometry_Pool::Bind) in the
+    // command buffer:
     //
-    //   vkBeginCommandBuffer(cmd, ...);
-    //   Mesh_GPU mesh(allocator, cmd, mesh_data);
-    //   vkEndCommandBuffer(cmd);
-    //   vkQueueSubmit(...);
-    //   vkQueueWaitIdle(queue);
-    //   mesh.Release_staging_buffers();   // staging memory freed here
-    //
-    //   // Now safe to use mesh for rendering:
-    //   mesh.Bind(cmd);
-    //   mesh.Draw(cmd);
-    class Mesh_GPU
+    //   geometry_pool.Bind(cmd);
+    //   mesh.Draw(cmd, object_index);
+    struct Mesh_GPU
     {
+        Geometry_Range   geometry;
 
+        // Bounding sphere in mesh space: center of the AABB of the
+        // positions, radius to the farthest vertex. Transformed by the
+        // object's model matrix before any test.
+        MathLib::Vector3 bounds_center = { 0.0f, 0.0f, 0.0f };
+        float            bounds_radius = 0.0f;
 
-        // =========================================================
-        // Data
-        // =========================================================
+        // Set by Renderer::Release_mesh. A released mesh is never drawn
+        // again; its range is returned to the pool when the frames in
+        // flight that may still read it have completed.
+        bool             released = false;
 
-        VmaAllocator allocator;
+        // Bounding sphere of the positions of _mesh_data, computed from the
+        // full-precision CPU vertices: the positions reach the vertex
+        // buffer as 32-bit floats, so the sphere encloses exactly what the
+        // shader reconstructs. Not the minimal sphere, but at most sqrt(3)
+        // times its radius and computed in one pass.
+        //
+        // _mesh_data must have at least one vertex.
+        static void Compute_bounding_sphere(const CoreTypes::MeshData& _mesh_data, MathLib::Vector3& _out_center, float& _out_radius);
 
-        // Final GPU-local buffers — used every frame for rendering.
-        Vulkan_Buffer_Utils::Buffer_Allocation vertex_buffer;
-        Vulkan_Buffer_Utils::Buffer_Allocation index_buffer;
-
-        // Staging buffers — CPU-visible, used only during upload.
-        // Kept alive until Release_staging_buffers() is called.
-        Vulkan_Buffer_Utils::Buffer_Allocation vertex_staging;
-        Vulkan_Buffer_Utils::Buffer_Allocation index_staging;
-
-        uint32_t    vertex_count;
-        uint32_t    index_count;
-        VkIndexType index_type;     // translated from CoreTypes::Index_Type
-
-    public:
-
-        // Records the upload of _mesh_data into _transfer_cmd. If it
-        // throws, every buffer created so far is released, and the copies
-        // already recorded into _transfer_cmd must not be submitted.
-        Mesh_GPU(
-            VmaAllocator               _allocator,
-            VkCommandBuffer            _transfer_cmd,
-            const CoreTypes::MeshData& _mesh_data
-        );
-
-        ~Mesh_GPU();
-
-        Mesh_GPU(const Mesh_GPU&) = delete;
-        Mesh_GPU& operator=(const Mesh_GPU&) = delete;
-
-        Mesh_GPU(Mesh_GPU&& _other) noexcept;
-        Mesh_GPU& operator=(Mesh_GPU&& _other) noexcept;
-
-        // =========================================================
-        // Upload lifecycle
-        // =========================================================
-
-        // Frees the staging buffers used during upload.
-        // Must be called after the transfer command buffer has been
-        // submitted and the queue has finished (vkQueueWaitIdle or fence).
-        // Calling this before the GPU has consumed the copy will corrupt
-        // the upload — the assert in debug catches moved-from states but
-        // not premature release.
-        void Release_staging_buffers();
-
-        // =========================================================
-        // Render
-        // =========================================================
-
-        // Binds the vertex and index buffers into _command_buffer.
-        // Must be called before Draw() within the same command buffer.
-        void Bind(VkCommandBuffer _command_buffer) const;
-
-        // Records an indexed draw call for the full mesh, one instance.
-        // Bind() must have been called first in this command buffer.
+        // Records an indexed draw of the whole mesh, one instance.
         //
         // _first_instance is the value gl_InstanceIndex takes in the vertex
-        // shader (Vulkan includes firstInstance in it): the Renderer passes
-        // the index of the draw's entry in the object buffer. A non-zero
-        // value needs no device feature on a direct draw.
-        void Draw(VkCommandBuffer _command_buffer, uint32_t _first_instance = 0) const;
+        // shader (Vulkan includes firstInstance in it): the index of the
+        // draw's entry in the object buffer. A non-zero value needs no
+        // device feature on a direct draw.
+        void Draw(VkCommandBuffer _command_buffer, uint32_t _first_instance) const;
 
-        // =========================================================
-        // Query
-        // =========================================================
-
-        uint32_t Get_index_count()  const;
-        uint32_t Get_vertex_count() const;
-
-    private:
-
-        // Creates the staging and final buffers and records both copies.
-        // Called once by the constructor, which releases every buffer
-        // created so far if this throws.
-        void Record_upload(VkCommandBuffer _transfer_cmd, const CoreTypes::MeshData& _mesh_data);
-
-        void Destroy();
+        // The same draw as an indirect command, for a buffer consumed by
+        // vkCmdDrawIndexedIndirect. A non-zero firstInstance in an
+        // indirect command needs drawIndirectFirstInstance, which device
+        // selection requires.
+        VkDrawIndexedIndirectCommand Make_indirect_command(uint32_t _first_instance) const;
     };
 
-} // namespace Renderer
+} // namespace Renderer_System

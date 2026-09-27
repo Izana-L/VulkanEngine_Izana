@@ -70,7 +70,41 @@ namespace Renderer_System {
         // frame reads while other frames are still executing. It belongs
         // to the minimum descriptor indexing feature set, so every device
         // with the Vulkan 1.2 descriptorIndexing capability supports it.
+        //
+        // Queried and enabled through VkPhysicalDeviceVulkan12Features, not
+        // VkPhysicalDeviceDescriptorIndexingFeatures: drawIndirectCount
+        // only exists in the former, and the specification forbids
+        // chaining VkPhysicalDeviceVulkan12Features together with any of
+        // the individual structures it aggregates.
         bool bindless = false;
+
+        // Indirect drawing, all three REQUIRED:
+        //   multiDrawIndirect         - drawCount greater than 1 in one
+        //                               vkCmdDrawIndexedIndirect call
+        //                               (VkPhysicalDeviceFeatures);
+        //   drawIndirectFirstInstance - firstInstance other than 0 in an
+        //                               indirect command. firstInstance
+        //                               carries the object index to
+        //                               gl_InstanceIndex, so without it
+        //                               every indirect draw would read
+        //                               object 0 (VkPhysicalDeviceFeatures);
+        //   drawIndirectCount         - vkCmdDrawIndexedIndirectCount, the
+        //                               draw count read from a GPU buffer
+        //                               written by the culling pass
+        //                               (VkPhysicalDeviceVulkan12Features).
+        bool multi_draw_indirect = false;
+        bool draw_indirect_first_instance = false;
+        bool draw_indirect_count = false;
+
+        // VkPhysicalDeviceLimits::maxDrawIndirectCount: upper bound of
+        // drawCount / maxDrawCount in one indirect call. At least 2^16 - 1
+        // when multiDrawIndirect is supported.
+        uint32_t max_draw_indirect_count = 0;
+
+        // fillModeNonSolid: OPTIONAL. Enables VK_POLYGON_MODE_LINE, used by
+        // the wireframe of the bounding sphere debug view; without it that
+        // view falls back to blended filled spheres.
+        bool fill_mode_non_solid = false;
 
         bool sampler_anisotropy = false;
         float max_sampler_anisotropy = 1.0f;
@@ -79,6 +113,23 @@ namespace Renderer_System {
         // (VkPhysicalDeviceLimits::maxBoundDescriptorSets). REQUIRED to be
         // at least Descriptor_Set::Count.
         uint32_t max_bound_descriptor_sets = 0;
+
+        // Storage buffer descriptors one shader stage may access across all
+        // the sets of a pipeline layout (maxPerStageDescriptorStorageBuffers)
+        // and a pipeline layout may hold in total
+        // (maxDescriptorSetStorageBuffers). REQUIRED to be at least
+        // Required_Storage_Buffers (Descriptor_Sets.hpp): the specification
+        // only guarantees 4 and 24.
+        uint32_t max_per_stage_storage_buffers = 0;
+        uint32_t max_set_storage_buffers = 0;
+
+        // Timestamp support of the graphics queue family: bits a timestamp
+        // query writes (VkQueueFamilyProperties::timestampValidBits, 0 when
+        // timestamps are not supported) and nanoseconds per tick
+        // (VkPhysicalDeviceLimits::timestampPeriod). OPTIONAL: without
+        // them the GPU timings are simply not reported.
+        uint32_t timestamp_valid_bits = 0;
+        float    timestamp_period = 0.0f;
 
         Bindless_Limits bindless_limits;
         // Every format in Vulkan_Vertex_Layout::OPTIONAL_VERTEX_FORMATS
@@ -112,6 +163,11 @@ namespace Renderer_System {
     //   - samplerAnisotropy is enabled when supported;
     //     Is_sampler_anisotropy_enabled() tells Sampler_Cache whether it
     //     may set anisotropyEnable.
+    //   - fillModeNonSolid is enabled when supported;
+    //     Is_fill_mode_non_solid_enabled() tells the Renderer whether a
+    //     pipeline may use VK_POLYGON_MODE_LINE.
+    //   - timestamps are reported through Get_timestamp_valid_bits() and
+    //     Get_timestamp_period(); 0 valid bits means no GPU timings.
     class Vulkan_Device
     {
         VkPhysicalDevice     physical_device;
@@ -128,6 +184,11 @@ namespace Renderer_System {
         // Whether the descriptor indexing features of Device_Support::bindless
         // were enabled when the logical device was created.
         bool  bindless_enabled;
+
+        bool     fill_mode_non_solid_enabled;
+        uint32_t max_draw_indirect_count;
+        uint32_t timestamp_valid_bits;
+        float    timestamp_period;
 
         Bindless_Limits bindless_limits;
     public:
@@ -166,6 +227,21 @@ namespace Renderer_System {
         // True when the samplerAnisotropy feature was enabled.
         bool  Is_sampler_anisotropy_enabled() const;
         float Get_max_sampler_anisotropy() const;
+
+        // True when the fillModeNonSolid feature was enabled
+        // (VK_POLYGON_MODE_LINE and VK_POLYGON_MODE_POINT are allowed).
+        bool Is_fill_mode_non_solid_enabled() const;
+
+        // VkPhysicalDeviceLimits::maxDrawIndirectCount of the selected
+        // device. multiDrawIndirect, drawIndirectFirstInstance and
+        // drawIndirectCount are always enabled: device selection requires
+        // them.
+        uint32_t Get_max_draw_indirect_count() const;
+
+        // Timestamp support of the graphics queue family. A valid bit count
+        // of 0 means timestamp queries are not supported on it.
+        uint32_t Get_timestamp_valid_bits() const;
+        float    Get_timestamp_period() const;   // nanoseconds per timestamp tick
 
         // Update-after-bind descriptor limits of the selected device.
         // Bindless_Registry clamps its array sizes to them.

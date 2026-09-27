@@ -18,15 +18,19 @@
 #include <Pipeline_Cache.hpp>
 #include <Pipeline_Registry.hpp>
 #include <Pipeline_Layout.hpp>
+#include <Geometry_Pool.hpp>
 #include <Mesh_GPU.hpp>
 #include <Texture_GPU.hpp>
 #include <Storage_Image.hpp>
 #include <Sampler_Cache.hpp>
 #include <Bindless_Registry.hpp>
+#include <Gpu_Timer.hpp>
+#include <Vulkan_Debug_Utils.hpp>
 #include <RenderPacket.hpp>
 #include <ImageData.hpp>
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -89,6 +93,67 @@ namespace Renderer_System
         }
     };
 
+    // Path of the opaque pass. Every path draws the same objects from the
+    // same Geometry_Pool with the same shaders; they differ in who builds
+    // the draw commands, which is what makes them comparable at runtime.
+    //   Direct       - one vkCmdDrawIndexed per object, recorded by the CPU
+    //                  (roadmap milestone 3.1).
+    //   Cpu_Indirect - the CPU writes the commands into a host-visible
+    //                  buffer; one vkCmdDrawIndexedIndirect per pipeline
+    //                  (milestone 3.4).
+    //   Gpu_Indirect - cull_objects.comp writes one command per active
+    //                  opaque object, without frustum test; one
+    //                  vkCmdDrawIndexedIndirectCount (milestone 4.1).
+    //   Gpu_Culled   - the same with the frustum test: objects outside the
+    //                  culling frustum get no command (milestone 4.2), and
+    //                  the transparent items are culled on the CPU against
+    //                  the same planes (milestone 4.3).
+    // The GPU paths need every opaque item on one pipeline (one command
+    // bucket); a frame that mixes opaque pipelines, or has more opaque
+    // objects than maxDrawIndirectCount, uses Cpu_Indirect instead.
+    enum class Opaque_Draw_Path : uint32_t
+    {
+        Direct = 0,
+        Cpu_Indirect = 1,
+        Gpu_Indirect = 2,
+        Gpu_Culled = 3,
+        Count
+    };
+
+    // Runtime switches between the old and the new path of each roadmap
+    // step, and the debug views that validate them. Read and written
+    // between frames (Renderer::Get_debug_settings / Set_debug_settings);
+    // a change applies from the next Render call.
+    struct Render_Debug_Settings
+    {
+        // Light selection of mesh.frag (clustered, or every light).
+        Light_Culling_Mode light_culling = Light_Culling_Mode::Clustered;
+
+        // Overlay of the cluster grid.
+        Cluster_Debug_View cluster_view = Cluster_Debug_View::None;
+
+        // Light count the heatmap shows as full red.
+        uint32_t           heatmap_max_lights = 32;
+
+        Opaque_Draw_Path   opaque_path = Opaque_Draw_Path::Gpu_Culled;
+
+        // Culling camera frozen: the frustum of the frame the freeze was
+        // enabled on keeps being used for culling while the view moves,
+        // so what is discarded becomes visible.
+        bool               freeze_culling = false;
+
+        // Wireframe of the bounding sphere of every object (bounds.vert).
+        bool               show_bounds = false;
+
+        // Print GPU timings and counters to the console once per second.
+        bool               print_stats = false;
+    };
+
+    // Readable names, for logs.
+    const char* To_string(Light_Culling_Mode _mode);
+    const char* To_string(Cluster_Debug_View _view);
+    const char* To_string(Opaque_Draw_Path _path);
+
     // Renderer: the only Vulkan-facing class that EngineCore knows about.
     //
     // Owns the entire Vulkan stack (instance -> device -> swapchain ->
@@ -105,6 +170,18 @@ namespace Renderer_System
     //     swapchain is rebuilt on the next Recreate_swapchain_if_needed()
     //     or Render() call, before the frame's aspect ratio is computed;
     //   - the driver reported OUT_OF_DATE / SUBOPTIMAL.
+    //
+    // Frame structure (Record_command_buffer), everything GPU-driven
+    // recorded before the render pass:
+    //   compute  - procedural texture;
+    //   transfer - cluster boxes (when the projection changed) and counter
+    //              resets;
+    //   compute  - light assignment to clusters, frustum culling of the
+    //              opaque objects;
+    //   barrier  - compute writes to the fragment stage, the indirect
+    //              command read and the statistics copy;
+    //   render   - one geometry bind, opaque draws (direct, CPU indirect or
+    //              GPU indirect count), transparent draws, debug spheres.
     //
     // Presentation synchronization: the "render finished" semaphore and
     // the present fence belong to each SWAPCHAIN IMAGE, not to the frame
@@ -139,6 +216,16 @@ namespace Renderer_System
         // before the device.
         Vulkan_Allocator       allocator;
 
+        // Object names and command labels (no-op without VK_EXT_debug_utils).
+        Vulkan_Debug_Utils     debug_utils;
+
+        // Vertex and index buffers shared by every mesh. Declared after the
+        // allocator: it holds two allocations and must be destroyed first.
+        Geometry_Pool          geometry_pool;
+
+        // Timestamps around the passes of every frame.
+        Gpu_Timer              gpu_timer;
+
         Vulkan_Swapchain       swapchain;
         Vulkan_Render_Pass     render_pass;
         Vulkan_Depth_Resources depth_resources;
@@ -162,17 +249,20 @@ namespace Renderer_System
 
         // Layout of the compute pipelines: the same four set layouts as
         // pipeline_layout, with a push constant range of
-        // Procedural_Push_Constants for the compute stage only. Declared
-        // before the compute pipelines, which are built against it and
-        // must be destroyed before it.
+        // COMPUTE_PUSH_CONSTANT_SIZE bytes for the compute stage only,
+        // shared by every compute pipeline (each shader declares its own
+        // block inside it). Declared before the compute pipelines, which
+        // are built against it and must be destroyed before it.
         Pipeline_Layout        compute_pipeline_layout;
 
         // Compute pipelines, held as direct members (no registry: their
         // number is small and fixed). Recorded before the render pass in
         // Record_command_buffer.
         Vulkan_Compute_Pipeline procedural_pipeline;
+        Vulkan_Compute_Pipeline cluster_pipeline;     // cluster_lights.comp
+        Vulkan_Compute_Pipeline cull_pipeline;        // cull_objects.comp
 
-        // The two pipelines that exist today: opaque (no blending, depth
+        // The two pipelines of the mesh passes: opaque (no blending, depth
         // write) and transparent (alpha blending, depth test only). Held
         // as members so the per-frame lookup never rebuilds and hashes
         // two std::strings.
@@ -180,6 +270,12 @@ namespace Renderer_System
         Pipeline_Config        transparent_config;
         uint8_t                opaque_pipeline_id = 0;
         uint8_t                transparent_pipeline_id = 0;
+
+        // Debug pipeline of the bounding spheres (bounds.vert/.frag):
+        // wireframe when fillModeNonSolid is enabled, blended filled
+        // spheres otherwise.
+        Pipeline_Config        bounds_config;
+        uint8_t                bounds_pipeline_id = 0;
 
         // Last bind count printed, so the log only speaks when it changes.
         // A member, not a function-level static: a static would be shared
@@ -204,6 +300,13 @@ namespace Renderer_System
         // and whenever the count changes, not on every frame.
         uint32_t               reported_light_overflow = 0;
 
+        // A GPU draw path was requested for a frame whose opaque items use
+        // several pipelines (or exceed maxDrawIndirectCount); reported once.
+        bool                   warned_gpu_path_fallback = false;
+
+        // The cluster light index list overflowed; reported once.
+        bool                   warned_cluster_overflow = false;
+
         // Rasterization state shared by every batch; the transparent pass
         // only overrides depth writes.
         Raster_State           raster_state;
@@ -216,6 +319,26 @@ namespace Renderer_System
         // =========================================================
 
         static constexpr uint32_t FRAMES_IN_FLIGHT = 2;
+
+        // Fixed capacity of the Geometry_Pool, in elements: 2M vertices
+        // (64 MB of Vertex_Static_Mesh) and 8M indices (32 MB of uint32).
+        // An upload that does not fit throws; the pool does not grow.
+        static constexpr uint32_t GEOMETRY_POOL_VERTICES = 2u * 1024u * 1024u;
+        static constexpr uint32_t GEOMETRY_POOL_INDICES = 8u * 1024u * 1024u;
+
+        // Timestamps written by every frame (Gpu_Timer points). Interval i
+        // is the time between point i and point i + 1.
+        enum Gpu_Timestamp : uint32_t
+        {
+            Timestamp_Frame_Start = 0,
+            Timestamp_After_Procedural,
+            Timestamp_After_Light_Clusters,
+            Timestamp_After_Culling,
+            Timestamp_After_Render_Pass,
+            Timestamp_Count
+        };
+
+        static constexpr uint32_t GPU_TIMER_INTERVALS = Timestamp_Count - 1;
 
         // Requested sizes of the two bindless arrays (set 3); the registry
        // clamps them to the device limits and logs both. 1024 textures
@@ -322,16 +445,140 @@ namespace Renderer_System
         // table. Used by Register_material to deduplicate by value.
         std::vector<Material_Desc>                        registered_materials;
 
+        // =========================================================
+        // Mesh table (set 2)
+        // =========================================================
+
+        // MAX_MESHES entries of Mesh_Info_GPU, device-local, written by the
+        // upload that creates each mesh (entry = mesh gpu id). Read by the
+        // culling pass and the bounding sphere debug draw. Entries are
+        // written once and never while a frame may read them.
+        Vulkan_Buffer_Utils::Buffer_Allocation            mesh_table_buffer;
+
+        // =========================================================
+        // Clustered lighting (set 1)
+        // =========================================================
+
+        // CLUSTER_COUNT view space boxes, device-local, one copy for every
+        // frame in flight. Rewritten inside the frame's command buffer
+        // (vkCmdUpdateBuffer) when the projection or the near plane
+        // changes, after a barrier against the reads of earlier frames.
+        Vulkan_Buffer_Utils::Buffer_Allocation            cluster_aabb_buffer;
+
+        // CPU build of the boxes (Cluster_Grid::Build_aabbs), reused.
+        std::vector<Cluster_AABB_GPU>                     cluster_aabb_scratch;
+
+        // Projection and near plane the boxes were built for.
+        MathLib::Matrix4                                  cluster_aabb_projection{ 0.0f };
+        float                                             cluster_aabb_near = 0.0f;
+        bool                                              cluster_aabbs_valid = false;
+
+        // =========================================================
+        // Culling and debug state
+        // =========================================================
+
+        Render_Debug_Settings                             debug_settings;
+
+        // Frustum used for culling this frame: the packet's, or the frozen
+        // one (Render_Debug_Settings::freeze_culling).
+        CoreTypes::Frustum                                culling_frustum;
+        CoreTypes::Frustum                                frozen_frustum;
+
+        // Set when the freeze is enabled: the next frame copies its frustum
+        // into frozen_frustum.
+        bool                                              capture_frozen_frustum = false;
+
+        // One drawn object of the frame: its entry in the object buffer, its
+        // mesh and its pipeline. Rebuilt every frame by Prepare_objects;
+        // members so the capacity is reused instead of reallocated.
+        struct Draw_Record
+        {
+            uint32_t object_index = 0;
+            uint32_t mesh_id = 0;
+            uint8_t  pipeline_id = 0;
+        };
+
+        std::vector<Draw_Record>                          opaque_draws;
+        std::vector<Draw_Record>                          transparent_draws;
+
+        // Transparent items of the frame before the CPU frustum test, for
+        // the statistics.
+        uint32_t                                          transparent_candidates = 0;
+
+        // Lights written to the light buffer this frame, and how many of
+        // them (the first ones) are directional: the range the cluster
+        // pass distributes is [directional, count).
+        uint32_t                                          uploaded_light_count = 0;
+        uint32_t                                          uploaded_directional_light_count = 0;
+
+        // Mesh of the unit sphere drawn by the bounding sphere debug view.
+        uint32_t                                          bounds_sphere_mesh_id = 0;
+
+        // =========================================================
+        // Statistics
+        // =========================================================
+
+        // What a frame slot recorded, kept until its fence is waited on so
+        // the GPU counters can be read with their context.
+        struct Frame_Record
+        {
+            bool             recorded = false;
+            Opaque_Draw_Path opaque_path = Opaque_Draw_Path::Direct;
+            uint32_t         opaque_objects = 0;
+            uint32_t         transparent_candidates = 0;
+            uint32_t         transparent_drawn = 0;
+        };
+
+        std::array<Frame_Record, FRAMES_IN_FLIGHT>        frame_records{};
+
+        // Accumulated between two prints (Render_Debug_Settings::print_stats).
+        struct Frame_Statistics
+        {
+            uint32_t                                  frames = 0;
+            uint32_t                                  timed_frames = 0;
+            std::array<double, GPU_TIMER_INTERVALS>   gpu_ms_sum{};
+            Frame_Stats_GPU                           last_counters{};
+            Frame_Record                              last_record{};
+            std::chrono::steady_clock::time_point     last_print{};
+        };
+
+        Frame_Statistics                                  statistics;
+
+        // Scratch for Gpu_Timer::Read_intervals.
+        std::vector<double>                               timer_intervals;
+
 
         // =========================================================
         // Asset registries
         // =========================================================
 
         // gpu_id = index into this vector.
-        // Meshes/textures are never removed during a session (no gpu_id
-        // recycling).
+        // gpu ids are never recycled: a released mesh keeps its entry
+        // (Mesh_GPU::released), so a stale id is skipped instead of drawing
+        // another mesh. Its geometry range does return to the pool.
+        // Textures are never removed during a session.
         std::vector<Mesh_GPU>    meshes;
         std::vector<Texture_GPU> textures;
+
+        // Released meshes whose geometry range may still be read by a frame
+        // in flight. The range goes back to the pool once every frame
+        // submitted before the release has completed.
+        struct Retired_Mesh
+        {
+            uint32_t gpu_id = 0;
+            uint64_t last_frame_serial = 0;   // submitted_frames at release time
+        };
+
+        std::vector<Retired_Mesh> retired_meshes;
+
+        // Serial of the last frame submitted (0 before the first one), the
+        // serial each frame slot submitted last, and the highest serial
+        // known to be complete. A fence wait on a slot completes its
+        // serial and, since fence signals include every earlier
+        // submission, all the serials before it.
+        uint64_t                                  submitted_frames = 0;
+        std::array<uint64_t, FRAMES_IN_FLIGHT>    slot_frame_serial{};
+        uint64_t                                  completed_frames = 0;
 
         // Dedicated transient command pool for transfer operations
         // (Upload_batch). Separate from the per-frame render command pools
@@ -354,6 +601,10 @@ namespace Renderer_System
         static Pipeline_Config Make_opaque_config();
         static Pipeline_Config Make_transparent_config();
 
+        // _wireframe: VK_POLYGON_MODE_LINE (needs fillModeNonSolid);
+        // otherwise filled spheres with alpha blending.
+        static Pipeline_Config Make_bounds_config(bool _wireframe);
+
         void Init_descriptor_pool();
         void Init_descriptor_sets();
 
@@ -371,14 +622,46 @@ namespace Renderer_System
         // and the transfer fence exist.
         void Init_procedural_pass();
 
-        // Creates material_buffer, allocates and writes per_material_set,
-        // and registers the default material, checking that it lands in
-        // slot CoreTypes::Default_Material. Called once from the
-        // constructor, after the descriptor pool exists, after
-        // Upload_default_textures (the default material samples
-        // Default_Texture::White) and before any other material is
-        // registered.
-        void Init_material_table();
+        // Creates material_buffer and mesh_table_buffer, allocates
+        // per_material_set and writes both of its bindings, and registers
+        // the default material, checking that it lands in slot
+        // CoreTypes::Default_Material. Called once from the constructor,
+        // after the descriptor pool exists, after Upload_default_textures
+        // (the default material samples Default_Texture::White), before
+        // any other material is registered and before any mesh upload
+        // (uploads write the mesh table).
+        void Init_global_tables();
+
+        // Creates cluster_aabb_buffer and writes it into per_pass_set
+        // (Binding_Per_Pass::Cluster_AABBs). Called once from the
+        // constructor, after Init_procedural_pass allocated per_pass_set.
+        void Init_light_clusters();
+
+        // Uploads the unit sphere of the bounding sphere debug view. Called
+        // once from the constructor, after Init_global_tables.
+        void Init_debug_meshes();
+
+        // Names the resources created at startup (VK_EXT_debug_utils).
+        void Name_debug_objects();
+
+        // Returns to the pool the geometry of the released meshes whose
+        // last possible reader (serial) has completed.
+        void Free_retired_meshes();
+
+        // Blocks until every submitted frame has completed (the fences of
+        // all frame slots), then frees the retired geometry. Used before
+        // an upload writes buffers that frames in flight read.
+        void Wait_for_frames_in_flight();
+
+        // Reads what the GPU measured for the last frame recorded in
+        // _frame_slot (timestamps and counters), accumulates it and prints
+        // it once per second when enabled. Called right after the fence of
+        // the slot was waited on.
+        void Read_frame_statistics(uint32_t _frame_slot);
+
+        // Frustum used for culling this frame: the packet's, or the frozen
+        // one while Render_Debug_Settings::freeze_culling is set.
+        void Update_culling_frustum(const CoreTypes::RenderPacket& _packet);
 
         std::vector<Pipeline_Config> Build_pipeline_manifest() const;
 
@@ -414,20 +697,47 @@ namespace Renderer_System
         // buffer of the given frame slot.
         void Record_command_buffer(Frame_Data& _frame, const CoreTypes::RenderPacket& _packet, uint32_t _image_index);
 
-        // Records the draws of one item list for one pass. Items whose
-        // pass_mask lacks _pass_bit are skipped, and so are items that
-        // reference a pipeline, mesh, transform or material that does not
-        // exist.
+        // Writes the object buffer of _frame and fills opaque_draws and
+        // transparent_draws. Items whose pass_mask lacks the bit of their
+        // list are skipped, and so are items that reference a pipeline,
+        // mesh, transform or material that does not exist, or a released
+        // mesh.
         //
-        // Every drawn item gets the next entry of _objects (the mapped
-        // object buffer of the frame being recorded): the entry index,
-        // _object_count before the increment, is the draw's firstInstance.
-        // _object_count is shared by all the calls of one frame, so the
-        // opaque pass takes indices [0, opaque) and the transparent pass
-        // continues from there. Items beyond MAX_OBJECTS are skipped.
-            void Draw_items(VkCommandBuffer _command_buffer, const std::vector<CoreTypes::Draw_Item>&_items, uint8_t _pass_bit,
-                            const CoreTypes::RenderPacket & _packet, Object_GPU * _objects, uint32_t & _object_count, uint8_t & 
-                            _bound_pipeline_id, uint32_t & _bind_count);
+        // Every kept item gets the next entry of the object buffer; the
+        // entry index is the draw's firstInstance. Opaque items take
+        // indices [0, opaque) and transparent items continue from there,
+        // which is what lets the culling pass process [0, opaque) only.
+        // Items beyond MAX_OBJECTS are skipped.
+        //
+        // _cull_transparents: transparent items whose bounding sphere lies
+        // outside culling_frustum get no entry (CPU culling, milestone 4.3).
+        void Prepare_objects(Frame_Data& _frame, const CoreTypes::RenderPacket& _packet, bool _cull_transparents);
+
+        // Opaque path that can actually be used for _packet: the requested
+        // one, or Cpu_Indirect when a GPU path cannot represent the frame
+        // (see Opaque_Draw_Path).
+        Opaque_Draw_Path Resolve_opaque_path(Opaque_Draw_Path _requested, const CoreTypes::RenderPacket& _packet);
+
+        // Writes one VkDrawIndexedIndirectCommand per opaque draw into the
+        // host-visible command buffer of _frame, in opaque_draws order.
+        void Write_cpu_draw_commands(Frame_Data& _frame) const;
+
+        // Rebuilds the cluster boxes and records their upload when the
+        // projection or the near plane changed since the last build.
+        void Record_cluster_aabb_update(VkCommandBuffer _command_buffer, const CoreTypes::RenderPacket& _packet);
+
+        // Draw recording inside the render pass. The geometry pool and the
+        // descriptor sets are already bound. _bound_pipeline_id is the id
+        // of the graphics pipeline currently bound (0xFF: none);
+        // _bind_count counts pipeline binds for the log.
+        void Record_opaque_draws(VkCommandBuffer _command_buffer, Frame_Data& _frame, Opaque_Draw_Path _path,
+                                 uint8_t& _bound_pipeline_id, uint32_t& _bind_count);
+        void Record_transparent_draws(VkCommandBuffer _command_buffer, uint8_t& _bound_pipeline_id, uint32_t& _bind_count);
+        void Record_bounds_draw(VkCommandBuffer _command_buffer, uint8_t& _bound_pipeline_id, uint32_t& _bind_count);
+
+        // Binds graphics pipeline _pipeline_id unless it is already bound.
+        void Bind_graphics_pipeline(VkCommandBuffer _command_buffer, uint8_t _pipeline_id,
+                                    uint8_t& _bound_pipeline_id, uint32_t& _bind_count);
 
         // Recreates the swapchain, depth resources, framebuffers and
         // per-image synchronization after a resize or OUT_OF_DATE error.
@@ -450,14 +760,23 @@ namespace Renderer_System
         // Asset upload
         // =========================================================
 
-        // Uploads a mesh (vertex and index buffers) to the GPU and returns
+        // Uploads a mesh into the Geometry_Pool (vertices, 32-bit indices
+        // and its mesh table entry, bounding sphere included) and returns
         // its gpu_id: the index into the Renderer's internal mesh registry,
         // which ResourceManager stores through Register_gpu_id() and
         // Draw_Item::mesh_gpu_id references.
         //
         // Throws std::invalid_argument if _mesh_data has no vertices or no
-        // indices.
+        // indices, and std::runtime_error if the mesh table (MAX_MESHES)
+        // or the Geometry_Pool is full.
         uint32_t Upload_mesh(const CoreTypes::MeshData& _mesh_data);
+
+        // Stops drawing mesh _gpu_id and returns its geometry to the pool
+        // once no frame in flight can read it any more. The id is not
+        // reused: Draw_Items that still reference it are skipped with a
+        // warning. Releasing an id twice, or an id that was never handed
+        // out, does nothing.
+        void Release_mesh(uint32_t _gpu_id);
 
         // Uploads a texture (with a full mip chain) to the GPU, registers
         // it in the global bindless texture array, and returns its
@@ -485,8 +804,11 @@ namespace Renderer_System
 
         // Uploads every mesh and texture in _batch using ONE command buffer
         // and ONE queue submission, instead of one of each per asset.
-        // Mesh_GPU and Texture_GPU only record into the command buffer they
-        // are handed; they never submit, which is what makes this possible.
+        // Meshes are copied into the Geometry_Pool from one staging buffer
+        // (one vkCmdCopyBuffer with a region per mesh for the vertices,
+        // another for the indices, a third for their mesh table entries);
+        // Texture_GPU only records into the command buffer it is handed and
+        // never submits, which is what makes this possible.
         //
         // Ids come back in the same order as the input lists:
         //   result.mesh_gpu_ids[i]             <- _batch.meshes[i]
@@ -502,13 +824,15 @@ namespace Renderer_System
         //
         // Strong exception guarantee: if any upload fails, nothing of the
         // batch stays registered. Every check that can reject the batch
-        // (null or empty data, a full bindless texture array) runs before
-        // anything is recorded; once the submit has completed, registering
-        // the textures in the bindless array cannot fail.
+        // (null or empty data, a full bindless texture array, a full mesh
+        // table or geometry pool) runs before anything is recorded; once
+        // the submit has completed, registering the textures in the
+        // bindless array cannot fail.
         //
         // Throws std::invalid_argument for a null or empty element, and
         // std::runtime_error if the bindless texture array does not have a
-        // free slot for every texture of the batch.
+        // free slot for every texture of the batch, or the mesh table or
+        // the geometry pool cannot hold its meshes.
         Upload_Batch_Result Upload_batch(const Upload_Batch& _batch);
 
         // =========================================================
@@ -548,6 +872,18 @@ namespace Renderer_System
 
         uint8_t Get_opaque_pipeline_id() const { return opaque_pipeline_id; }
         uint8_t Get_transparent_pipeline_id() const { return transparent_pipeline_id; }
+
+        // =========================================================
+        // Debug switches
+        // =========================================================
+
+        const Render_Debug_Settings& Get_debug_settings() const { return debug_settings; }
+
+        // Applies new switches from the next frame on and logs every value
+        // that changed. Out-of-range enumerators are replaced by their
+        // defaults. Enabling freeze_culling freezes the frustum of the next
+        // frame.
+        void Set_debug_settings(const Render_Debug_Settings& _settings);
 
         // =========================================================
         // Surface size
