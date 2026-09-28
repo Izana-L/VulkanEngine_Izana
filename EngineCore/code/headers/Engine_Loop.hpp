@@ -66,13 +66,16 @@ namespace EngineCore
 
         // Applies the debug actions pressed this frame to the Renderer's
         // runtime switches (Renderer_System::Render_Debug_Settings):
-        //   DebugLightCulling  - clustered lights <-> every light (reference)
-        //   DebugClusterView   - cycles the cluster grid overlays
-        //   DebugOpaquePath    - cycles direct / CPU indirect / GPU indirect /
-        //                        GPU culled opaque draws
-        //   DebugFreezeCulling - freezes the culling camera
-        //   DebugShowBounds    - bounding sphere wireframes
-        //   DebugStats         - GPU timings and counters every second
+        //   DebugLightCulling   - clustered lights <-> every light (reference)
+        //   DebugClusterView    - cycles the cluster grid overlays
+        //   DebugOpaquePath     - cycles direct / CPU indirect / GPU indirect /
+        //                         GPU culled opaque draws
+        //   DebugFreezeCulling  - freezes the culling camera
+        //   DebugShowBounds     - bounding volume wireframes (the ellipsoids
+        //                         the culling tests)
+        //   DebugStats          - GPU timings and counters every second
+        //   DebugIsolateTimings - isolated GPU timing scopes (a full barrier
+        //                         before each; the totals are not frame times)
         // Actions missing from the input JSON simply never fire.
         void Handle_debug_input(const Input_System::Input& _input, Renderer_System::Renderer& _renderer);
 
@@ -89,6 +92,7 @@ namespace EngineCore
             size_t freeze_culling = static_cast<size_t>(-1);
             size_t show_bounds = static_cast<size_t>(-1);
             size_t stats = static_cast<size_t>(-1);
+            size_t isolate_timings = static_cast<size_t>(-1);
         };
 
         Debug_Action_Ids debug_action_ids;

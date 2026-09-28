@@ -10,6 +10,7 @@
 #include <Vulkan_Swapchain.hpp>
 #include <Vulkan_Render_Pass.hpp>
 #include <Vulkan_Depth_Resources.hpp>
+#include <Vulkan_OIT_Resources.hpp>
 #include <Vulkan_Framebuffer.hpp>
 #include <Vulkan_Pipeline.hpp>
 #include <Vulkan_Compute_Pipeline.hpp>
@@ -142,11 +143,20 @@ namespace Renderer_System
         // so what is discarded becomes visible.
         bool               freeze_culling = false;
 
-        // Wireframe of the bounding sphere of every object (bounds.vert).
+        // Wireframe of the bounding volume the culling tests for every
+        // object: its mesh bounding sphere placed by the model matrix, an
+        // ellipsoid under non-uniform scale or shear (bounds.vert).
         bool               show_bounds = false;
 
         // Print GPU timings and counters to the console once per second.
         bool               print_stats = false;
+
+        // Isolated GPU timing (Gpu_Timer): a full barrier before every
+        // top-level timed scope, so each one measures its pass alone,
+        // without overlap. Changes the performance of the frame: the
+        // printed totals are not frame times. Meant to compare one pass
+        // before and after a change.
+        bool               isolate_gpu_timings = false;
     };
 
     // Readable names, for logs.
@@ -173,15 +183,28 @@ namespace Renderer_System
     //
     // Frame structure (Record_command_buffer), everything GPU-driven
     // recorded before the render pass:
-    //   compute  - procedural texture;
+    //   compute  - procedural texture, only in the frames where its content
+    //              changes (procedural_dirty): once at startup today;
     //   transfer - cluster boxes (when the projection changed) and counter
     //              resets;
     //   compute  - light assignment to clusters, frustum culling of the
     //              opaque objects;
     //   barrier  - compute writes to the fragment stage, the indirect
     //              command read and the statistics copy;
-    //   render   - one geometry bind, opaque draws (direct, CPU indirect or
-    //              GPU indirect count), transparent draws, debug spheres.
+    //   render   - one geometry bind, then three subpasses:
+    //                0 opaque      - opaque draws (direct, CPU indirect or
+    //                                GPU indirect count), depth written;
+    //                1 transparent - transparent draws accumulated into the
+    //                                OIT targets (weighted blended
+    //                                order-independent transparency), in
+    //                                any order, depth tested only;
+    //                2 composite   - the accumulated transparency blended
+    //                                over the opaque color, then the debug
+    //                                bounding volumes;
+    //   transfer - statistics copies into the readback buffer.
+    //
+    // Every block is a named Gpu_Scope: the same name labels it in captures
+    // and times it in the statistics (Render_Debug_Settings::print_stats).
     //
     // Presentation synchronization: the "render finished" semaphore and
     // the present fence belong to each SWAPCHAIN IMAGE, not to the frame
@@ -223,12 +246,18 @@ namespace Renderer_System
         // allocator: it holds two allocations and must be destroyed first.
         Geometry_Pool          geometry_pool;
 
-        // Timestamps around the passes of every frame.
+        // Timestamps around the named scopes of every frame.
         Gpu_Timer              gpu_timer;
 
         Vulkan_Swapchain       swapchain;
         Vulkan_Render_Pass     render_pass;
         Vulkan_Depth_Resources depth_resources;
+
+        // Accumulation and revealage targets of the transparent subpass,
+        // read by the composite subpass. Screen sized: recreated with the
+        // swapchain. Declared before the framebuffers, which reference them.
+        Vulkan_OIT_Resources   oit_resources;
+
         Vulkan_Framebuffer     framebuffers;
 
         // Bindless registry must exist BEFORE the pipeline layout, which
@@ -262,20 +291,26 @@ namespace Renderer_System
         Vulkan_Compute_Pipeline cluster_pipeline;     // cluster_lights.comp
         Vulkan_Compute_Pipeline cull_pipeline;        // cull_objects.comp
 
-        // The two pipelines of the mesh passes: opaque (no blending, depth
-        // write) and transparent (alpha blending, depth test only). Held
-        // as members so the per-frame lookup never rebuilds and hashes
-        // two std::strings.
+        // The two pipelines of the mesh passes: opaque (subpass 0, no
+        // blending, depth write) and transparent (subpass 1, accumulation
+        // into the two OIT targets, depth test only). Held as members so
+        // the per-frame lookup never rebuilds and hashes two std::strings.
         Pipeline_Config        opaque_config;
         Pipeline_Config        transparent_config;
         uint8_t                opaque_pipeline_id = 0;
         uint8_t                transparent_pipeline_id = 0;
 
-        // Debug pipeline of the bounding spheres (bounds.vert/.frag):
-        // wireframe when fillModeNonSolid is enabled, blended filled
-        // spheres otherwise.
+        // Debug pipeline of the bounding volumes (bounds.vert/.frag),
+        // subpass 2: wireframe when fillModeNonSolid is enabled, blended
+        // filled ellipsoids otherwise.
         Pipeline_Config        bounds_config;
         uint8_t                bounds_pipeline_id = 0;
+
+        // Composite of the weighted blended OIT (oit_composite.vert/.frag),
+        // subpass 2: one full-screen triangle, no vertex input, "over"
+        // blending onto the swapchain image.
+        Pipeline_Config        composite_config;
+        uint8_t                composite_pipeline_id = 0;
 
         // Last bind count printed, so the log only speaks when it changes.
         // A member, not a function-level static: a static would be shared
@@ -326,19 +361,12 @@ namespace Renderer_System
         static constexpr uint32_t GEOMETRY_POOL_VERTICES = 2u * 1024u * 1024u;
         static constexpr uint32_t GEOMETRY_POOL_INDICES = 8u * 1024u * 1024u;
 
-        // Timestamps written by every frame (Gpu_Timer points). Interval i
-        // is the time between point i and point i + 1.
-        enum Gpu_Timestamp : uint32_t
-        {
-            Timestamp_Frame_Start = 0,
-            Timestamp_After_Procedural,
-            Timestamp_After_Light_Clusters,
-            Timestamp_After_Culling,
-            Timestamp_After_Render_Pass,
-            Timestamp_Count
-        };
-
-        static constexpr uint32_t GPU_TIMER_INTERVALS = Timestamp_Count - 1;
+        // Timed scopes one frame may record (Gpu_Timer capacity). A frame
+        // records at most nine today: procedural texture, uploads and
+        // resets, light clusters, frustum culling and render pass, and
+        // inside the render pass opaque, transparent, OIT composite and
+        // bounding volumes.
+        static constexpr uint32_t GPU_TIMER_MAX_SCOPES = 16;
 
         // Requested sizes of the two bindless arrays (set 3); the registry
        // clamps them to the device limits and logs both. 1024 textures
@@ -394,11 +422,18 @@ namespace Renderer_System
         VkDescriptorPool                                  descriptor_pool = VK_NULL_HANDLE;
         std::array<VkDescriptorSet, FRAMES_IN_FLIGHT>     descriptor_sets{};
 
-        // Set 1 of the procedural pass: its storage image descriptor
-        // (Binding_Per_Pass::Procedural_Output). One set, not one per frame
-        // in flight: the descriptor never changes, and the image itself is
-        // shared by both frame slots (see procedural_image).
+        // Set 1 of the compute pipelines (Binding_Per_Pass): the storage
+        // image of the procedural pass and the cluster boxes. One set, not
+        // one per frame in flight: the descriptors never change, and the
+        // resources are shared by both frame slots (see procedural_image).
         VkDescriptorSet                                   per_pass_set = VK_NULL_HANDLE;
+
+        // Set 1 of the graphics pipelines (Binding_Graphics_Pass): the two
+        // OIT targets as input attachments of the composite subpass. One
+        // set: the targets are shared by both frame slots, like the depth
+        // buffer. Rewritten by Write_composite_input_set whenever the
+        // targets are recreated (after the idle wait of Recreate_swapchain).
+        VkDescriptorSet                                   composite_input_set = VK_NULL_HANDLE;
 
         // =========================================================
         // Compute pass resources
@@ -408,10 +443,17 @@ namespace Renderer_System
         // bindless slot. Fixed size, independent of the swapchain, so it is
         // never recreated on resize.
         //
-        // One image for both frames in flight: frame N+1 may write it while
-        // frame N still reads it. Storage_Image::Begin_write waits for the
-        // reader stages of earlier submissions before the write, which
-        // orders that write-after-read.
+        // Written only when its content changes (procedural_dirty), not in
+        // every frame: its content depends on nothing that changes per
+        // frame today, and every write serializes frames. The barrier of
+        // Storage_Image::Begin_write waits for the fragment and compute
+        // stages of everything submitted before (the previous frame
+        // included), and End_write makes the compute work of the same frame
+        // wait for the dispatch.
+        //
+        // One image for both frames in flight: in a frame that regenerates
+        // it, frame N+1 writes it while frame N may still read it.
+        // Begin_write orders that write-after-read.
         //
         // std::optional because the constructor records the initial clear
         // into a command buffer: it is emplaced by Init_procedural_pass(),
@@ -419,6 +461,19 @@ namespace Renderer_System
         // Destroy_owned_handles(). Declared after the allocator, so it is
         // always destroyed before it.
         std::optional<Storage_Image>                      procedural_image;
+
+        // The content of procedural_image is out of date: the next frame
+        // records the procedural pass. Set by Init_procedural_pass; to be
+        // set again whenever the content changes (new parameters of the
+        // pass, or the image recreated). Cleared only after the submit of a
+        // frame that recorded the pass succeeded, so a recording that
+        // throws or a failed submit leaves the pass for the next frame.
+        //
+        // An animated texture (milestone 1.3) changes every frame and would
+        // keep the flag set, bringing the serialization back; it then needs
+        // one image per frame in flight, or the pass moved after the
+        // culling with FRAGMENT as its only reader stage.
+        bool                                              procedural_dirty = false;
 
         // Bindless slot of procedural_image (set 3, binding 0): the value a
         // material stores as its albedo texture index. Starts at the Error
@@ -451,7 +506,7 @@ namespace Renderer_System
 
         // MAX_MESHES entries of Mesh_Info_GPU, device-local, written by the
         // upload that creates each mesh (entry = mesh gpu id). Read by the
-        // culling pass and the bounding sphere debug draw. Entries are
+        // culling pass and the bounding volume debug draw. Entries are
         // written once and never while a frame may read them.
         Vulkan_Buffer_Utils::Buffer_Allocation            mesh_table_buffer;
 
@@ -511,7 +566,10 @@ namespace Renderer_System
         uint32_t                                          uploaded_light_count = 0;
         uint32_t                                          uploaded_directional_light_count = 0;
 
-        // Mesh of the unit sphere drawn by the bounding sphere debug view.
+        // Mesh of the unit sphere drawn by the bounding volume debug view:
+        // bounds.vert places it on every object's local bounding sphere and
+        // transforms it by the model matrix, which yields the ellipsoid the
+        // culling tests.
         uint32_t                                          bounds_sphere_mesh_id = 0;
 
         // =========================================================
@@ -527,16 +585,37 @@ namespace Renderer_System
             uint32_t         opaque_objects = 0;
             uint32_t         transparent_candidates = 0;
             uint32_t         transparent_drawn = 0;
+
+            // The frame recorded the procedural pass: once its submit
+            // succeeds, procedural_image is up to date.
+            bool             procedural_recorded = false;
         };
 
         std::array<Frame_Record, FRAMES_IN_FLIGHT>        frame_records{};
+
+        // Accumulated time of one timed scope between two prints, keyed by
+        // name and parent name.
+        struct Scope_Statistics
+        {
+            const char* name = nullptr;
+            const char* parent = nullptr;
+            uint32_t    depth = 0;
+            uint32_t    frames = 0;       // timed frames that recorded the scope
+            double      ms_sum = 0.0;
+        };
 
         // Accumulated between two prints (Render_Debug_Settings::print_stats).
         struct Frame_Statistics
         {
             uint32_t                                  frames = 0;
             uint32_t                                  timed_frames = 0;
-            std::array<double, GPU_TIMER_INTERVALS>   gpu_ms_sum{};
+            double                                    total_ms_sum = 0.0;   // frame end - frame start
+            double                                    other_ms_sum = 0.0;   // total - top-level scopes
+
+            // In recording order; a scope first seen in a later frame is
+            // inserted after the scope that preceded it in that frame.
+            std::vector<Scope_Statistics>             scopes;
+
             Frame_Stats_GPU                           last_counters{};
             Frame_Record                              last_record{};
             std::chrono::steady_clock::time_point     last_print{};
@@ -544,8 +623,8 @@ namespace Renderer_System
 
         Frame_Statistics                                  statistics;
 
-        // Scratch for Gpu_Timer::Read_intervals.
-        std::vector<double>                               timer_intervals;
+        // Scratch for Gpu_Timer::Read_frame.
+        Gpu_Frame_Timings                                 timer_frame;
 
 
         // =========================================================
@@ -600,13 +679,24 @@ namespace Renderer_System
 
         static Pipeline_Config Make_opaque_config();
         static Pipeline_Config Make_transparent_config();
+        static Pipeline_Config Make_composite_config();
 
         // _wireframe: VK_POLYGON_MODE_LINE (needs fillModeNonSolid);
-        // otherwise filled spheres with alpha blending.
+        // otherwise filled ellipsoids with alpha blending.
         static Pipeline_Config Make_bounds_config(bool _wireframe);
 
         void Init_descriptor_pool();
         void Init_descriptor_sets();
+
+        // Allocates composite_input_set and writes it. Called once from the
+        // constructor, after the descriptor pool exists.
+        void Init_composite_input_set();
+
+        // Writes the views of the current OIT targets into
+        // composite_input_set. Precondition: no command buffer pending
+        // execution uses the set (before the first frame, or after the idle
+        // wait of Recreate_swapchain).
+        void Write_composite_input_set();
 
         // Uploads the CoreTypes::Default_Texture set in a single batch and
         // checks that each texture landed in its reserved bindless slot.
@@ -637,12 +727,15 @@ namespace Renderer_System
         // constructor, after Init_procedural_pass allocated per_pass_set.
         void Init_light_clusters();
 
-        // Uploads the unit sphere of the bounding sphere debug view. Called
+        // Uploads the unit sphere of the bounding volume debug view. Called
         // once from the constructor, after Init_global_tables.
         void Init_debug_meshes();
 
         // Names the resources created at startup (VK_EXT_debug_utils).
         void Name_debug_objects();
+
+        // Names the OIT targets, which are recreated with the swapchain.
+        void Name_oit_targets();
 
         // Returns to the pool the geometry of the released meshes whose
         // last possible reader (serial) has completed.
@@ -658,6 +751,17 @@ namespace Renderer_System
         // it once per second when enabled. Called right after the fence of
         // the slot was waited on.
         void Read_frame_statistics(uint32_t _frame_slot);
+
+        // Adds the scopes of timer_frame to statistics.scopes.
+        void Accumulate_scope_timings();
+
+        // Prints the average of every accumulated scope, the time outside
+        // the top-level scopes and the frame total (print_stats).
+        void Print_gpu_timings() const;
+
+        // Forgets everything accumulated since the last print; the next
+        // print covers only frames measured from now on.
+        void Reset_statistics();
 
         // Frustum used for culling this frame: the packet's, or the frozen
         // one while Render_Debug_Settings::freeze_culling is set.
@@ -700,8 +804,10 @@ namespace Renderer_System
         // Writes the object buffer of _frame and fills opaque_draws and
         // transparent_draws. Items whose pass_mask lacks the bit of their
         // list are skipped, and so are items that reference a pipeline,
-        // mesh, transform or material that does not exist, or a released
-        // mesh.
+        // mesh, transform or material that does not exist, a released
+        // mesh, or a pipeline built for another subpass than the one their
+        // list is drawn in (opaque items: Render_Subpass::Opaque,
+        // transparent items: Render_Subpass::Transparent).
         //
         // Every kept item gets the next entry of the object buffer; the
         // entry index is the draw's firstInstance. Opaque items take
@@ -709,8 +815,10 @@ namespace Renderer_System
         // which is what lets the culling pass process [0, opaque) only.
         // Items beyond MAX_OBJECTS are skipped.
         //
-        // _cull_transparents: transparent items whose bounding sphere lies
-        // outside culling_frustum get no entry (CPU culling, milestone 4.3).
+        // _cull_transparents: transparent items whose bounding ellipsoid
+        // (mesh bounding sphere placed by the model matrix) lies outside
+        // culling_frustum get no entry (CPU culling, milestone 4.3). Same
+        // test as cull_objects.comp: CoreTypes::Frustum::Intersects_ellipsoid.
         void Prepare_objects(Frame_Data& _frame, const CoreTypes::RenderPacket& _packet, bool _cull_transparents);
 
         // Opaque path that can actually be used for _packet: the requested
@@ -730,18 +838,26 @@ namespace Renderer_System
         // descriptor sets are already bound. _bound_pipeline_id is the id
         // of the graphics pipeline currently bound (0xFF: none);
         // _bind_count counts pipeline binds for the log.
+        //   Record_opaque_draws      - subpass 0.
+        //   Record_transparent_draws - subpass 1, depth writes already
+        //                              disabled.
+        //   Record_composite_draw    - subpass 2: the full-screen triangle
+        //                              that resolves the OIT targets.
+        //   Record_bounds_draw       - subpass 2, after the composite.
         void Record_opaque_draws(VkCommandBuffer _command_buffer, Frame_Data& _frame, Opaque_Draw_Path _path,
                                  uint8_t& _bound_pipeline_id, uint32_t& _bind_count);
         void Record_transparent_draws(VkCommandBuffer _command_buffer, uint8_t& _bound_pipeline_id, uint32_t& _bind_count);
+        void Record_composite_draw(VkCommandBuffer _command_buffer, uint8_t& _bound_pipeline_id, uint32_t& _bind_count);
         void Record_bounds_draw(VkCommandBuffer _command_buffer, uint8_t& _bound_pipeline_id, uint32_t& _bind_count);
 
         // Binds graphics pipeline _pipeline_id unless it is already bound.
         void Bind_graphics_pipeline(VkCommandBuffer _command_buffer, uint8_t _pipeline_id,
                                     uint8_t& _bound_pipeline_id, uint32_t& _bind_count);
 
-        // Recreates the swapchain, depth resources, framebuffers and
-        // per-image synchronization after a resize or OUT_OF_DATE error.
-        // Pipelines are unaffected (viewport/scissor are dynamic).
+        // Recreates the swapchain, depth resources, OIT targets (and the
+        // descriptors that read them), framebuffers and per-image
+        // synchronization after a resize or OUT_OF_DATE error. Pipelines
+        // are unaffected (viewport/scissor are dynamic).
         void Recreate_swapchain();
 
     public:
@@ -859,8 +975,9 @@ namespace Renderer_System
         // Compute pass outputs
         // =========================================================
 
-        // Bindless index of the texture generated every frame by
-        // procedural.comp. Used like the index returned by Upload_texture:
+        // Bindless index of the texture generated by procedural.comp, which
+        // is regenerated only when its content changes (once, in the first
+        // frame, today). Used like the index returned by Upload_texture:
         // stored as a material's albedo texture index and sampled with any
         // sampler preset. The image is UNORM, so it is read as linear color.
         // Valid for the whole lifetime of the Renderer.

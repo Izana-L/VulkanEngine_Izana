@@ -19,9 +19,16 @@ namespace Renderer_System
 
         try
         {
-            layouts[Descriptor_Set::Per_Frame] = Create_per_frame_layout();
-            layouts[Descriptor_Set::Per_Pass] = Create_per_pass_layout();
-            layouts[Descriptor_Set::Per_Material] = Create_per_material_layout();
+            const VkDescriptorSetLayout per_frame = Create_per_frame_layout();
+            compute_layouts[Descriptor_Set::Per_Frame] = per_frame;
+            graphics_layouts[Descriptor_Set::Per_Frame] = per_frame;
+
+            compute_layouts[Descriptor_Set::Per_Pass] = Create_per_pass_layout();
+            graphics_layouts[Descriptor_Set::Per_Pass] = Create_graphics_pass_layout();
+
+            const VkDescriptorSetLayout per_material = Create_per_material_layout();
+            compute_layouts[Descriptor_Set::Per_Material] = per_material;
+            graphics_layouts[Descriptor_Set::Per_Material] = per_material;
 
             Check_storage_buffer_budget();
         }
@@ -29,34 +36,56 @@ namespace Renderer_System
         {
             // Partially built: release what was created (the destructor
             // does not run for an object whose constructor threw).
-            for (uint32_t set = 0; set < Descriptor_Set::Bindless; ++set)
-                if (layouts[set] != VK_NULL_HANDLE)
-                    vkDestroyDescriptorSetLayout(device_handle, layouts[set], nullptr);
+            Destroy_owned_layouts();
             throw;
         }
 
-        layouts[Descriptor_Set::Bindless] = _bindless_layout;   // borrowed
+        compute_layouts[Descriptor_Set::Bindless] = _bindless_layout;   // borrowed
+        graphics_layouts[Descriptor_Set::Bindless] = _bindless_layout;
     }
 
     Descriptor_Layout_Cache::~Descriptor_Layout_Cache()
     {
-       
-        for (uint32_t set = 0; set < Descriptor_Set::Bindless; ++set)
-        {
-            if (layouts[set] != VK_NULL_HANDLE)
-            {
-                vkDestroyDescriptorSetLayout(device_handle, layouts[set], nullptr);
-                layouts[set] = VK_NULL_HANDLE;
-            }
-        }
-        layouts[Descriptor_Set::Bindless] = VK_NULL_HANDLE;
+        Destroy_owned_layouts();
+
+        compute_layouts[Descriptor_Set::Bindless] = VK_NULL_HANDLE;
+        graphics_layouts[Descriptor_Set::Bindless] = VK_NULL_HANDLE;
     }
 
-    VkDescriptorSetLayout Descriptor_Layout_Cache::Get(uint32_t _set) const
+    void Descriptor_Layout_Cache::Destroy_owned_layouts()
+    {
+        // Sets 0 and 2 are shared by both arrays: destroyed once, through
+        // the compute array. Set 1 is distinct in each. Set 3 is borrowed.
+        const auto destroy = [&](VkDescriptorSetLayout& _layout)
+            {
+                if (_layout != VK_NULL_HANDLE)
+                {
+                    vkDestroyDescriptorSetLayout(device_handle, _layout, nullptr);
+                    _layout = VK_NULL_HANDLE;
+                }
+            };
+
+        destroy(compute_layouts[Descriptor_Set::Per_Frame]);
+        destroy(compute_layouts[Descriptor_Set::Per_Pass]);
+        destroy(compute_layouts[Descriptor_Set::Per_Material]);
+        destroy(graphics_layouts[Descriptor_Set::Per_Pass]);
+
+        graphics_layouts[Descriptor_Set::Per_Frame] = VK_NULL_HANDLE;
+        graphics_layouts[Descriptor_Set::Per_Material] = VK_NULL_HANDLE;
+    }
+
+    VkDescriptorSetLayout Descriptor_Layout_Cache::Get(uint32_t _set, Pipeline_Kind _kind) const
     {
         assert(_set < Descriptor_Set::Count && "indice de conjunto fuera de rango");
-        assert(layouts[_set] != VK_NULL_HANDLE);
-        return layouts[_set];
+
+        const VkDescriptorSetLayout layout = Data(_kind)[_set];
+        assert(layout != VK_NULL_HANDLE);
+        return layout;
+    }
+
+    const VkDescriptorSetLayout* Descriptor_Layout_Cache::Data(Pipeline_Kind _kind) const
+    {
+        return (_kind == Pipeline_Kind::Graphics) ? graphics_layouts.data() : compute_layouts.data();
     }
 
     // ---------- set 0 : por fotograma ----------
@@ -131,7 +160,7 @@ namespace Renderer_System
         return layout;
     }
 
-    // ---------- set 1 : per pass ----------
+    // ---------- set 1 : per pass, compute ----------
     VkDescriptorSetLayout Descriptor_Layout_Cache::Create_per_pass_layout()
     {
         std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
@@ -167,6 +196,38 @@ namespace Renderer_System
         return layout;
     }
 
+    // ---------- set 1 : per pass, graphics ----------
+    VkDescriptorSetLayout Descriptor_Layout_Cache::Create_graphics_pass_layout()
+    {
+        std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
+
+        // bindings 0-1 — accumulation and revealage targets of the weighted
+        // blended OIT, read with subpassLoad by the composite subpass
+        // (oit_composite.frag) in layout SHADER_READ_ONLY_OPTIMAL. An input
+        // attachment is only visible to the fragment stage.
+        bindings[0].binding = Binding_Graphics_Pass::Oit_Accumulation;
+        bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+        bindings[0].descriptorCount = 1;
+        bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+        bindings[1].binding = Binding_Graphics_Pass::Oit_Revealage;
+        bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+        bindings[1].descriptorCount = 1;
+        bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+        // No storage buffers: nothing to add to the budget.
+
+        VkDescriptorSetLayoutCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        info.bindingCount = static_cast<uint32_t>(bindings.size());
+        info.pBindings = bindings.data();
+
+        VkDescriptorSetLayout layout = VK_NULL_HANDLE;
+        VK_CHECK(vkCreateDescriptorSetLayout(device_handle, &info, nullptr, &layout),
+            "Descriptor_Layout_Cache: failed to create the graphics set 1 layout");
+        return layout;
+    }
+
     // ---------- set 2 : per material ----------
     VkDescriptorSetLayout Descriptor_Layout_Cache::Create_per_material_layout()
     {
@@ -184,8 +245,8 @@ namespace Renderer_System
 
         // binding 1 — mesh table: one Mesh_Info_GPU per mesh gpu id,
         // indexed by Object_GPU::mesh_index. Visible to the compute stage
-        // (the culling pass builds draw commands and tests bounding
-        // spheres) and the vertex stage (bounds.vert draws those spheres).
+        // (the culling pass builds draw commands and tests the bounding
+        // volumes) and the vertex stage (bounds.vert draws those volumes).
         bindings[1].binding = Binding_Per_Material::Meshes;
         bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[1].descriptorCount = 1;

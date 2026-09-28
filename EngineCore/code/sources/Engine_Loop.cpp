@@ -36,6 +36,7 @@ namespace EngineCore
             debug_action_ids.freeze_culling = _input.Get_action_id("DebugFreezeCulling");
             debug_action_ids.show_bounds = _input.Get_action_id("DebugShowBounds");
             debug_action_ids.stats = _input.Get_action_id("DebugStats");
+            debug_action_ids.isolate_timings = _input.Get_action_id("DebugIsolateTimings");
             debug_actions_resolved = true;
         }
 
@@ -77,6 +78,12 @@ namespace EngineCore
         if (_input.Was_action_pressed(debug_action_ids.stats))
         {
             settings.print_stats = !settings.print_stats;
+            changed = true;
+        }
+
+        if (_input.Was_action_pressed(debug_action_ids.isolate_timings))
+        {
+            settings.isolate_gpu_timings = !settings.isolate_gpu_timings;
             changed = true;
         }
 

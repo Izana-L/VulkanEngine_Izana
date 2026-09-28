@@ -102,9 +102,15 @@ namespace Renderer_System {
         uint32_t max_draw_indirect_count = 0;
 
         // fillModeNonSolid: OPTIONAL. Enables VK_POLYGON_MODE_LINE, used by
-        // the wireframe of the bounding sphere debug view; without it that
-        // view falls back to blended filled spheres.
+        // the wireframe of the bounding volume debug view; without it that
+        // view falls back to blended filled volumes.
         bool fill_mode_non_solid = false;
+
+        // independentBlend: REQUIRED. The transparent subpass writes two
+        // color attachments with different blending (additive accumulation,
+        // multiplicative revealage), which one pipeline can only do with
+        // this feature (VkPhysicalDeviceFeatures).
+        bool independent_blend = false;
 
         bool sampler_anisotropy = false;
         float max_sampler_anisotropy = 1.0f;
@@ -233,9 +239,9 @@ namespace Renderer_System {
         bool Is_fill_mode_non_solid_enabled() const;
 
         // VkPhysicalDeviceLimits::maxDrawIndirectCount of the selected
-        // device. multiDrawIndirect, drawIndirectFirstInstance and
-        // drawIndirectCount are always enabled: device selection requires
-        // them.
+        // device. multiDrawIndirect, drawIndirectFirstInstance,
+        // drawIndirectCount and independentBlend are always enabled: device
+        // selection requires them.
         uint32_t Get_max_draw_indirect_count() const;
 
         // Timestamp support of the graphics queue family. A valid bit count

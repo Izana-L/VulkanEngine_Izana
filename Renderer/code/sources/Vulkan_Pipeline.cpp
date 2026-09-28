@@ -4,6 +4,7 @@
 #include <Filesystem.hpp>
 
 #include <glm/glm.hpp>
+#include <array>
 #include <cstring>
 #include <iterator>
 #include <stdexcept>
@@ -46,6 +47,15 @@ namespace Renderer_System
         assert(!_config.fragment_shader_path.empty() &&
             "Pipeline_Config: fragment_shader_path must not be empty");
 
+        // Enforced in every build: a count outside the array would read past
+        // color_blend, and a pipeline whose count differs from its
+        // subpass's is invalid usage.
+        if (_config.color_attachment_count == 0 || _config.color_attachment_count > Pipeline_Config::MAX_COLOR_ATTACHMENTS)
+            throw std::invalid_argument("Pipeline_Config: color_attachment_count must be between 1 and MAX_COLOR_ATTACHMENTS");
+
+        if (_config.subpass >= Render_Subpass::Count)
+            throw std::invalid_argument("Pipeline_Config: subpass is not a subpass of Vulkan_Render_Pass");
+
         // ---------- Shader modules ----------
         // Owned by RAII guards: if the second module (or anything after it)
         // throws, the first one is destroyed on unwinding instead of leaking.
@@ -70,15 +80,20 @@ namespace Renderer_System
         };
 
         // ---------- Vertex input ----------
+        // Vertex_Input::None declares no binding and no attribute: the
+        // vertex shader builds its positions from gl_VertexIndex, and the
+        // vertex buffer bound for the meshes is simply not read.
         auto binding_description = Vulkan_Vertex_Layout::Get_binding_description<CoreTypes::Vertex_Static_Mesh>();
         auto attribute_descriptions = Vulkan_Vertex_Layout::Get_attribute_descriptions<CoreTypes::Vertex_Static_Mesh>();
 
+        const bool has_vertex_input = _config.vertex_input == Vertex_Input::Static_Mesh;
+
         VkPipelineVertexInputStateCreateInfo vertex_input_info{};
         vertex_input_info.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-        vertex_input_info.vertexBindingDescriptionCount = 1;
-        vertex_input_info.pVertexBindingDescriptions = &binding_description;
-        vertex_input_info.vertexAttributeDescriptionCount = static_cast<uint32_t>(attribute_descriptions.size());
-        vertex_input_info.pVertexAttributeDescriptions = attribute_descriptions.data();
+        vertex_input_info.vertexBindingDescriptionCount = has_vertex_input ? 1u : 0u;
+        vertex_input_info.pVertexBindingDescriptions = has_vertex_input ? &binding_description : nullptr;
+        vertex_input_info.vertexAttributeDescriptionCount = has_vertex_input ? static_cast<uint32_t>(attribute_descriptions.size()) : 0u;
+        vertex_input_info.pVertexAttributeDescriptions = has_vertex_input ? attribute_descriptions.data() : nullptr;
 
         // ---------- Input assembly ----------
         VkPipelineInputAssemblyStateCreateInfo input_assembly{};
@@ -139,23 +154,32 @@ namespace Renderer_System
         depth_stencil.stencilTestEnable = VK_FALSE;
 
         // ---------- Color blending — driven by Pipeline_Config ----------
-        VkPipelineColorBlendAttachmentState color_blend_attachment{};
-        color_blend_attachment.colorWriteMask =VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                               VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-            
-        color_blend_attachment.blendEnable = _config.blend_enable ? VK_TRUE : VK_FALSE;
-        color_blend_attachment.srcColorBlendFactor = _config.src_color_blend_factor;
-        color_blend_attachment.dstColorBlendFactor = _config.dst_color_blend_factor;
-        color_blend_attachment.colorBlendOp = _config.color_blend_op;
-        color_blend_attachment.srcAlphaBlendFactor = _config.src_alpha_blend_factor;
-        color_blend_attachment.dstAlphaBlendFactor = _config.dst_alpha_blend_factor;
-        color_blend_attachment.alphaBlendOp = _config.alpha_blend_op;
+        // One state per color attachment of the subpass. The write mask
+        // keeps every component; the components a format lacks (GBA of a
+        // one-channel target) are ignored.
+        std::array<VkPipelineColorBlendAttachmentState, Pipeline_Config::MAX_COLOR_ATTACHMENTS> color_blend_attachments{};
+
+        for (uint32_t i = 0; i < _config.color_attachment_count; ++i)
+        {
+            const Color_Blend_State& state = _config.color_blend[i];
+            VkPipelineColorBlendAttachmentState& attachment = color_blend_attachments[i];
+
+            attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            attachment.blendEnable = state.blend_enable ? VK_TRUE : VK_FALSE;
+            attachment.srcColorBlendFactor = state.src_color_blend_factor;
+            attachment.dstColorBlendFactor = state.dst_color_blend_factor;
+            attachment.colorBlendOp = state.color_blend_op;
+            attachment.srcAlphaBlendFactor = state.src_alpha_blend_factor;
+            attachment.dstAlphaBlendFactor = state.dst_alpha_blend_factor;
+            attachment.alphaBlendOp = state.alpha_blend_op;
+        }
 
         VkPipelineColorBlendStateCreateInfo color_blending{};
         color_blending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
         color_blending.logicOpEnable = VK_FALSE;
-        color_blending.attachmentCount = 1;
-        color_blending.pAttachments = &color_blend_attachment;
+        color_blending.attachmentCount = _config.color_attachment_count;
+        color_blending.pAttachments = color_blend_attachments.data();
 
         // ---------- Creation feedback (core in Vulkan 1.3) ----------
         // The only way to know whether the cache is actually being hit
@@ -186,7 +210,7 @@ namespace Renderer_System
         pipeline_info.pDynamicState = &dynamic_state_info;
         pipeline_info.layout = _pipeline_layout;
         pipeline_info.renderPass = _render_pass.Get_handle();
-        pipeline_info.subpass = 0;
+        pipeline_info.subpass = _config.subpass;
 
         // The shader modules are destroyed by their guards when this
         // constructor returns or throws; the pipeline keeps no reference

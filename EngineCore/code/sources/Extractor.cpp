@@ -229,14 +229,17 @@ namespace EngineCore
                 const float depth = glm::dot(transform.World_position() - cam_pos, cam_forward);
 
                 // Alpha below one routes the item to the transparent pass:
-                // blended pipeline, back-to-front order, no depth writes.
+                // accumulated by the weighted blended OIT, depth tested
+                // without writes. The composite does not depend on the
+                // draw order, so the key groups the item like an opaque one
+                // (pipeline, material, mesh, then front-to-back).
                 const bool transparent = base_alpha < 1.0f;
 
                 if (transparent)
                 {
                     item.pass_mask = CoreTypes::Render_Pass_Bit::Transparent;
                     item.sort_key = CoreTypes::Make_sort_key(_params.transparent_pipeline_id, 0,
-                        static_cast<uint16_t>(gpu_id & 0xFFFF), CoreTypes::Depth_to_sortable_bits_back_to_front(depth));
+                        static_cast<uint16_t>(gpu_id & 0xFFFF), CoreTypes::Depth_to_sortable_bits(depth));
 
                     _out_packet.transparent_items.push_back(item);
                 }
@@ -259,9 +262,10 @@ namespace EngineCore
                 return a.sort_key < b.sort_key;
             };
 
-        // Opaque: grouped by pipeline/material/mesh, front-to-back inside
-        // each group. Transparent: same grouping, back-to-front (the key
-        // already carries the inverted depth bits).
+        // Both lists: grouped by pipeline/material/mesh, front-to-back
+        // inside each group. The transparent list needs no back-to-front
+        // order: the Renderer composites it order-independently, and the
+        // depth bits only keep its order deterministic between frames.
         std::sort(_out_packet.opaque_items.begin(), _out_packet.opaque_items.end(), by_key);
         std::sort(_out_packet.transparent_items.begin(), _out_packet.transparent_items.end(), by_key);
 

@@ -82,6 +82,11 @@ namespace Renderer_System {
             if (!_support.draw_indirect_count)
                 missing.push_back("drawIndirectCount");
 
+            // Weighted blended OIT: the transparent pipeline blends its two
+            // color attachments differently.
+            if (!_support.independent_blend)
+                missing.push_back("independentBlend");
+
             if (!_support.vertex_formats)
                 missing.push_back("the vertex buffer formats of Vulkan_Vertex_Layout");
 
@@ -191,9 +196,10 @@ namespace Renderer_System {
         VkPhysicalDeviceFeatures device_features{};
         device_features.samplerAnisotropy = best_support.sampler_anisotropy ? VK_TRUE : VK_FALSE;
 
-        // Required by device selection, so both are supported here.
+        // Required by device selection, so all three are supported here.
         device_features.multiDrawIndirect = VK_TRUE;
         device_features.drawIndirectFirstInstance = VK_TRUE;
+        device_features.independentBlend = VK_TRUE;
 
         device_features.fillModeNonSolid = best_support.fill_mode_non_solid ? VK_TRUE : VK_FALSE;
 
@@ -209,8 +215,8 @@ namespace Renderer_System {
             << ".\n";
 
         std::cout << "[Vulkan_Device] Indirect drawing enabled (multiDrawIndirect, drawIndirectFirstInstance, "
-            "drawIndirectCount; maxDrawIndirectCount " << max_draw_indirect_count << "). fillModeNonSolid "
-            << (fill_mode_non_solid_enabled ? "enabled" : "not available") << ".\n";
+            "drawIndirectCount; maxDrawIndirectCount " << max_draw_indirect_count << "). independentBlend enabled. "
+            "fillModeNonSolid " << (fill_mode_non_solid_enabled ? "enabled" : "not available") << ".\n";
 
         if (timestamp_valid_bits > 0)
             std::cout << "[Vulkan_Device] Timestamps: " << timestamp_valid_bits << " valid bits, "
@@ -624,6 +630,7 @@ namespace Renderer_System {
         support.multi_draw_indirect = features2.features.multiDrawIndirect == VK_TRUE;
         support.draw_indirect_first_instance = features2.features.drawIndirectFirstInstance == VK_TRUE;
         support.fill_mode_non_solid = features2.features.fillModeNonSolid == VK_TRUE;
+        support.independent_blend = features2.features.independentBlend == VK_TRUE;
         support.draw_indirect_count = vulkan12_features.drawIndirectCount == VK_TRUE;
         support.vertex_formats = true;
         for (VkFormat format : Vulkan_Vertex_Layout::OPTIONAL_VERTEX_FORMATS)

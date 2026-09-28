@@ -47,8 +47,10 @@ namespace EngineCore
     //      Engine did it once, when it registered the material.
     //   3. Iterates entities with Transform_Component + Light_Component,
     //      fills the GPU_Light array from WORLD positions and directions.
-    //   4. Sorts opaque items front-to-back and transparent items
-    //      back-to-front by sort_key.
+    //   4. Sorts both item lists by sort_key: grouped by pipeline,
+    //      material and mesh, front-to-back inside each group. Transparent
+    //      items need no back-to-front order: the Renderer composites them
+    //      with weighted blended order-independent transparency.
     //
     // Everything spatial is taken from Transform_Component::world_matrix,
     // never from the local position/rotation: a camera or a light parented

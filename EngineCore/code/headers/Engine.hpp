@@ -114,8 +114,27 @@ namespace EngineCore
         // floor, a grid of thousands of opaque and transparent objects
         // (some non-uniformly scaled) and hundreds of point lights. Every
         // value is deterministic, so the scene is the same on every run and
-        // the old and new render paths can be compared on it.
+        // the old and new render paths can be compared on it. Also adds the
+        // two validation setups below.
         void Setup_test_scene();
+
+        // Validation of the order-independent transparency: transparent
+        // objects of strongly different colors that overlap on screen, and
+        // the cases no per-object sort resolves: an object inside another,
+        // two objects that intersect, and a large object next to a small
+        // one whose center is closer to the camera while part of the large
+        // one is in front of it. Floats above the reference objects, in
+        // front of the grid.
+        void Setup_transparency_test();
+
+        // Validation of the bounding volume culling under shear: a parent
+        // without a mesh scaled (2, 1, 1) and a child cube rotated 45
+        // degrees about Z. Their product has shear: the longest column of
+        // its 3x3 underestimates the extent along X (1.58 instead of 2).
+        // With show_bounds the ellipsoid must enclose the cube; with
+        // freeze_culling, the cube must stay drawn while partly visible at
+        // the edge of the frozen frustum.
+        void Setup_shear_test();
     };
 
 } // namespace EngineCore

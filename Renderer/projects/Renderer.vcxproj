@@ -106,35 +106,45 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\code\sources\Bindless_Registry.cpp" />
+    <ClCompile Include="..\code\sources\Cluster_Grid.cpp" />
     <ClCompile Include="..\code\sources\Descriptor_Layout_Cache.cpp" />
+    <ClCompile Include="..\code\sources\Geometry_Pool.cpp" />
+    <ClCompile Include="..\code\sources\Gpu_Timer.cpp" />
     <ClCompile Include="..\code\sources\Mesh_GPU.cpp" />
     <ClCompile Include="..\code\sources\Pipeline_Cache.cpp" />
     <ClCompile Include="..\code\sources\Pipeline_Layout.cpp" />
     <ClCompile Include="..\code\sources\Pipeline_Registry.cpp" />
     <ClCompile Include="..\code\sources\Renderer.cpp" />
     <ClCompile Include="..\code\sources\Sampler_Cache.cpp" />
+    <ClCompile Include="..\code\sources\Source.cpp" />
     <ClCompile Include="..\code\sources\Storage_Image.cpp" />
     <ClCompile Include="..\code\sources\Texture_GPU.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Allocator.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Buffer_Utils.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Command_Pool.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Compute_Pipeline.cpp" />
+    <ClCompile Include="..\code\sources\Vulkan_Debug_Utils.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Depth_Resources.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Device.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Framebuffer.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Image_Utils.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Instance.cpp" />
+    <ClCompile Include="..\code\sources\Vulkan_OIT_Resources.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Pipeline.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Render_Pass.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Surface.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Swapchain.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Utils.cpp" />
+    <ClCompile Include="..\code\sources\Vulkan_Vertex_Layout.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\code\headers\Bindless_Registry.hpp" />
+    <ClInclude Include="..\code\headers\Cluster_Grid.hpp" />
     <ClInclude Include="..\code\headers\Descriptor_Layout_Cache.hpp" />
     <ClInclude Include="..\code\headers\Descriptor_Sets.hpp" />
     <ClInclude Include="..\code\headers\Frame_Data.hpp" />
+    <ClInclude Include="..\code\headers\Geometry_Pool.hpp" />
+    <ClInclude Include="..\code\headers\Gpu_Timer.hpp" />
     <ClInclude Include="..\code\headers\Mesh_GPU.hpp" />
     <ClInclude Include="..\code\headers\Pipeline_Cache.hpp" />
     <ClInclude Include="..\code\headers\Pipeline_Layout.hpp" />
@@ -148,11 +158,13 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
     <ClInclude Include="..\code\headers\Vulkan_Buffer_Utils.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Command_Pool.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Compute_Pipeline.hpp" />
+    <ClInclude Include="..\code\headers\Vulkan_Debug_Utils.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Depth_Resources.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Device.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Framebuffer.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Image_Utils.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Instance.hpp" />
+    <ClInclude Include="..\code\headers\Vulkan_OIT_Resources.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Pipeline.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Render_Pass.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Surface.hpp" />

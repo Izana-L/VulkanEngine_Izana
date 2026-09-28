@@ -4,11 +4,12 @@
 // Frustum culling and draw generation of the opaque pass.
 //
 // One invocation per object of the frame's object buffer. An object that
-// is active, belongs to the pass and whose bounding sphere is not entirely
-// outside a frustum plane reserves a slot with one atomicAdd and writes a
-// complete indexed draw command there: its mesh range in the geometry pool
-// and firstInstance = its object index, which mesh.vert receives as
-// gl_InstanceIndex. The CPU then records a single
+// is active, belongs to the pass and whose bounding ellipsoid (the mesh
+// bounding sphere placed by its model matrix, mesh_table.glsl) is not
+// entirely outside a frustum plane reserves a slot with one atomicAdd and
+// writes a complete indexed draw command there: its mesh range in the
+// geometry pool and firstInstance = its object index, which mesh.vert
+// receives as gl_InstanceIndex. The CPU then records a single
 // vkCmdDrawIndexedIndirectCount, reading the number of draws from
 // draw_count, without knowing how many objects survived.
 //
@@ -61,16 +62,21 @@ layout(set = 0, binding = 7, std430) buffer Draw_Count
     uint _pad2;
 } draw_count;
 
-// False when the sphere lies entirely on the outer side of one plane.
-// Planes are normalized, so the signed distance compares directly with the
-// radius. A sphere crossing the near plane is kept: it is partly visible.
-bool Sphere_in_frustum(vec4 _sphere)
+// False when the bounding ellipsoid of the mesh, placed by _model, lies
+// entirely on the outer side of one plane: signed distance of its center
+// below minus its half-width along the plane normal (mesh_table.glsl). A
+// volume crossing a plane, the near one included, is kept: it is partly
+// visible. Same test as CoreTypes::Frustum::Intersects_ellipsoid, which
+// culls the transparent items on the CPU.
+bool Ellipsoid_in_frustum(mat4 _model, vec4 _local_sphere)
 {
+    const vec3 center = Bounding_ellipsoid_center(_model, _local_sphere);
+
     for (int p = 0; p < FRUSTUM_PLANE_COUNT; ++p)
     {
         const vec4 plane = frame.frustum_planes[p];
 
-        if (dot(plane.xyz, _sphere.xyz) + plane.w < -_sphere.w)
+        if (dot(plane.xyz, center) + plane.w < -Bounding_ellipsoid_extent(_model, _local_sphere.w, plane.xyz))
             return false;
     }
 
@@ -92,7 +98,7 @@ void main()
 
     const Mesh_Info mesh = mesh_table.meshes[object.mesh_index];
 
-    if (push.frustum_culling != 0u && !Sphere_in_frustum(World_bounding_sphere(object.model, mesh.bounding_sphere)))
+    if (push.frustum_culling != 0u && !Ellipsoid_in_frustum(object.model, mesh.bounding_sphere))
         return;
 
     const uint slot = atomicAdd(draw_count.draw_count, 1u);

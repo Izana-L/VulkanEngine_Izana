@@ -7,6 +7,7 @@
 #include <Vulkan_Render_Pass.hpp>
 #include <Vulkan_Swapchain.hpp>
 #include <Vulkan_Depth_Resources.hpp>
+#include <Vulkan_OIT_Resources.hpp>
 
 #include <vector>
 
@@ -16,8 +17,9 @@ namespace Renderer_System
     // Vulkan_Framebuffer: owns one VkFramebuffer per swapchain image,
     // each one binding together a specific color image view (from the
     // swapchain) with the shared depth image view (from
-    // Vulkan_Depth_Resources), following the attachment structure defined
-    // by Vulkan_Render_Pass.
+    // Vulkan_Depth_Resources) and the two shared OIT targets (from
+    // Vulkan_OIT_Resources), following the attachment structure defined by
+    // Vulkan_Render_Pass (Render_Pass_Attachment order).
     //
     // A framebuffer is what command buffers actually render INTO during
     // a render pass - it's the final piece connecting "the rules of how
@@ -32,12 +34,13 @@ namespace Renderer_System
 
     public:
         // Creates one framebuffer per swapchain image view, all sharing
-        // the same depth image view and following the given render pass's
-        // attachment layout.
+        // the same depth image view and OIT targets and following the given
+        // render pass's attachment layout.
         Vulkan_Framebuffer(const Vulkan_Device& _device,
             const Vulkan_Render_Pass& _render_pass,
             const Vulkan_Swapchain& _swapchain,
-            const Vulkan_Depth_Resources& _depth_resources);
+            const Vulkan_Depth_Resources& _depth_resources,
+            const Vulkan_OIT_Resources& _oit_resources);
         
             
 
@@ -50,12 +53,13 @@ namespace Renderer_System
         Vulkan_Framebuffer& operator=(Vulkan_Framebuffer&& _other) noexcept;
 
         // Recreates all framebuffers - must be called whenever the
-        // swapchain (and depth resources) are recreated, since the
-        // framebuffers reference specific image views that no longer
+        // swapchain (and the depth and OIT targets) are recreated, since
+        // the framebuffers reference specific image views that no longer
         // exist after a resize.
         void Recreate(const Vulkan_Render_Pass& _render_pass,
                       const Vulkan_Swapchain& _swapchain,
-                      const Vulkan_Depth_Resources& _depth_resources);
+                      const Vulkan_Depth_Resources& _depth_resources,
+                      const Vulkan_OIT_Resources& _oit_resources);
         
             
 
@@ -76,7 +80,8 @@ namespace Renderer_System
         // work, shared by the constructor and Recreate().
         void Create(const Vulkan_Render_Pass& _render_pass,
                     const Vulkan_Swapchain& _swapchain,
-                    const Vulkan_Depth_Resources& _depth_resources);
+                    const Vulkan_Depth_Resources& _depth_resources,
+                    const Vulkan_OIT_Resources& _oit_resources);
 
             
       

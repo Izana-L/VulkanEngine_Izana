@@ -15,7 +15,7 @@ namespace Renderer_System
 // mirror so the two cannot drift apart.
     Pipeline_Layout::Pipeline_Layout(const Vulkan_Device& _device,
         const Descriptor_Layout_Cache& _layouts)
-        : Pipeline_Layout(_device, _layouts,
+        : Pipeline_Layout(_device, _layouts, Pipeline_Kind::Graphics,
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             static_cast<uint32_t>(sizeof(Push_Constants)))
     {
@@ -25,6 +25,7 @@ namespace Renderer_System
 
     Pipeline_Layout::Pipeline_Layout(const Vulkan_Device& _device,
         const Descriptor_Layout_Cache& _layouts,
+        Pipeline_Kind _kind,
         VkShaderStageFlags _push_constant_stages,
         uint32_t _push_constant_size)
         : device_handle(_device.Get_logical_device_handle()),
@@ -57,7 +58,7 @@ namespace Renderer_System
         // its empty layout still occupies the slot, so a set's number never
         // depends on whether another set exists.
         layout_info.setLayoutCount = Descriptor_Set::Count;
-        layout_info.pSetLayouts = _layouts.Data();
+        layout_info.pSetLayouts = _layouts.Data(_kind);
         // A zero-sized range is invalid in Vulkan: no push constants means
         // no range at all.
         layout_info.pushConstantRangeCount = (_push_constant_size > 0) ? 1u : 0u;

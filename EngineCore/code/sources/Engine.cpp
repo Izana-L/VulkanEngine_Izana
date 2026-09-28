@@ -46,6 +46,10 @@ namespace EngineCore
         constexpr float    TEST_LIGHT_MIN_RANGE = 3.0f;
         constexpr float    TEST_LIGHT_MAX_RANGE = 6.0f;
 
+        // Alpha of the materials of the transparency test: high enough for
+        // the front layer to dominate, low enough to see every layer.
+        constexpr float    TEST_OIT_ALPHA = 0.5f;
+
         // Deterministic value in [0, 1) for element _index and channel
         // _channel (integer hash). Used instead of <random>, whose
         // distributions differ between standard libraries: the test scene
@@ -299,8 +303,9 @@ namespace EngineCore
         const ECS::Entity cube_entity = Spawn_mesh_entity(cube_handle, { -1.5f, 0.0f, 0.0f });
 
         // Material with the compute-generated texture as albedo. The image
-        // is written every frame by procedural.comp and registered as an
-        // external image: it follows the same path as the UV checker from
+        // is written by procedural.comp whenever its content changes (once,
+        // in the first frame, today) and registered as an external image:
+        // it follows the same path as the UV checker from
         // Material_Component onwards, with no CPU pixels to upload.
         ECS::Material_Component cube_material;
         cube_material.albedo = resources.Register_external_image("procedural", renderer.Get_procedural_texture_index());
@@ -384,8 +389,8 @@ namespace EngineCore
 
         // ── Object grid ────────────────────────────────────────
         // Spheres and cubes alternate. Cubes are stretched vertically by a
-        // different amount each: the culling radius must follow the largest
-        // axis of a non-uniform scale.
+        // different amount each: the culling volume must follow a
+        // non-uniform scale (the bounding sphere becomes an ellipsoid).
         uint32_t transparent_objects = 0;
 
         for (uint32_t row = 0; row < TEST_GRID_SIDE; ++row)
@@ -452,6 +457,120 @@ namespace EngineCore
 
         std::cout << "[Engine] Test scene: " << (TEST_GRID_SIDE * TEST_GRID_SIDE) << " objects (" << transparent_objects
             << " transparent) on a floor, " << TEST_POINT_LIGHTS << " point lights.\n";
+
+        Setup_transparency_test();
+        Setup_shear_test();
+    }
+
+    // =========================================================
+    // Setup_transparency_test: order-independent transparency cases
+    // =========================================================
+
+    void Engine::Setup_transparency_test()
+    {
+        const CoreTypes::Asset_Handle cube_handle = resources.Create_primitive(ResourceManager::Primitive_Desc::Make_cube());
+        const CoreTypes::Asset_Handle sphere_handle = resources.Create_primitive(ResourceManager::Primitive_Desc::Make_sphere(16, 8));
+
+        // Colors far apart: with equal layers the order does not change the
+        // result, and the single glass material of the grid hides any
+        // order error. Alpha below one routes every item to the
+        // transparent pass.
+        const auto make_glass = [&](const MathLib::Vector3& _color)
+            {
+                ECS::Material_Component material;
+                material.base_color_factor = MathLib::Vector4(_color, TEST_OIT_ALPHA);
+                Ensure_material_registered(material);
+                return material;
+            };
+
+        const ECS::Material_Component red = make_glass({ 1.0f, 0.12f, 0.08f });
+        const ECS::Material_Component blue = make_glass({ 0.10f, 0.30f, 1.0f });
+        const ECS::Material_Component green = make_glass({ 0.15f, 1.0f, 0.25f });
+        const ECS::Material_Component yellow = make_glass({ 1.0f, 0.85f, 0.10f });
+
+        // Mesh entity with a scale, a rotation (Euler angles in radians:
+        // pitch X, yaw Y, roll Z) and a material. The cube primitive has
+        // side 1, the sphere primitive radius 1.
+        const auto spawn = [&](CoreTypes::Asset_Handle _mesh, const MathLib::Vector3& _position, const MathLib::Vector3& _scale,
+                               const MathLib::Vector3& _rotation, const ECS::Material_Component& _material)
+            {
+                const ECS::Entity entity = Spawn_mesh_entity(_mesh, _position);
+
+                ECS::Transform_Component& transform = world.Get_component<ECS::Transform_Component>(entity);
+                transform.Set_scale(_scale);
+                transform.Set_rotation_euler(_rotation);
+
+                world.Add_component<ECS::Material_Component>(entity, _material);
+            };
+
+        const MathLib::Vector3 no_rotation(0.0f);
+        const float            yaw_35 = 35.0f * MathLib::Constants::DEG_TO_RAD;
+        const float            yaw_40 = 40.0f * MathLib::Constants::DEG_TO_RAD;
+
+        // ── Two colors overlapping on screen ───────────────────
+        // Blue in front of red: the overlap must look blue over red, and
+        // red over blue from the other side.
+        spawn(cube_handle, { -5.2f, 1.8f, -3.6f }, MathLib::Vector3(1.1f), no_rotation, red);
+        spawn(cube_handle, { -4.5f, 1.6f, -2.8f }, MathLib::Vector3(1.1f), no_rotation, blue);
+
+        // ── One object inside another ──────────────────────────
+        // Same center, so a sort by object distance has no right answer:
+        // the red sphere must always show through the blue one.
+        spawn(sphere_handle, { -2.0f, 1.8f, -3.2f }, MathLib::Vector3(0.9f), no_rotation, blue);
+        spawn(sphere_handle, { -2.0f, 1.8f, -3.2f }, MathLib::Vector3(0.4f), no_rotation, red);
+
+        // ── Two objects that intersect ─────────────────────────
+        // Two bars crossing in an X seen from above: each one is partly
+        // in front of the other, which no order of whole objects draws
+        // correctly.
+        spawn(cube_handle, { 1.0f, 1.8f, -3.2f }, { 2.6f, 0.35f, 0.35f }, { 0.0f,  yaw_35, 0.0f }, green);
+        spawn(cube_handle, { 1.0f, 1.8f, -3.2f }, { 2.6f, 0.35f, 0.35f }, { 0.0f, -yaw_35, 0.0f }, yellow);
+
+        // ── A large object next to a small one ─────────────────
+        // A pane turned 40 degrees about Y: its left end comes closer to
+        // the camera than the red sphere, although its center is farther.
+        // A sort by center draws the sphere last, over the part of the pane
+        // that is in front of it.
+        spawn(cube_handle, { 4.5f, 1.8f, -3.8f }, { 3.0f, 2.0f, 0.05f }, { 0.0f, yaw_40, 0.0f }, blue);
+        spawn(sphere_handle, { 3.7f, 1.5f, -3.6f }, MathLib::Vector3(0.3f), no_rotation, red);
+
+        std::cout << "[Engine] Transparency test: overlapping colors, nested objects, intersecting objects, "
+                     "large next to small.\n";
+    }
+
+    // =========================================================
+    // Setup_shear_test: culling of a sheared object
+    // =========================================================
+
+    void Engine::Setup_shear_test()
+    {
+        const CoreTypes::Asset_Handle cube_handle = resources.Create_primitive(ResourceManager::Primitive_Desc::Make_cube());
+
+        // Parent: a transform only, scaled non-uniformly. Above the
+        // transparency test, in front of the grid.
+        const ECS::Entity parent = world.Create_entity();
+        {
+            ECS::Transform_Component& parent_transform = world.Add_component<ECS::Transform_Component>(parent);
+            parent_transform.Set_position({ 0.0f, 3.6f, -3.0f });
+            parent_transform.Set_scale({ 2.0f, 1.0f, 1.0f });
+        }
+        transform_system.Register(parent, world);
+
+        // Child: the mesh, rotated 45 degrees about Z in the parent's
+        // space. World = parent world * local: scale (2, 1, 1) applied after
+        // the rotation, which shears the cube.
+        const ECS::Entity child = Spawn_mesh_entity(cube_handle, { 0.0f, 0.0f, 0.0f });
+        world.Get_component<ECS::Transform_Component>(child).Set_rotation_euler(0.0f, 0.0f, MathLib::Constants::QUARTER_PI);
+        transform_system.Set_parent(child, parent, world);
+
+        ECS::Material_Component material;
+        material.base_color_factor = { 0.95f, 0.55f, 0.15f, 1.0f };
+        Ensure_material_registered(material);
+
+        world.Add_component<ECS::Material_Component>(child, material);
+
+        std::cout << "[Engine] Shear test: cube rotated 45 degrees about Z under a parent scaled (2, 1, 1) (entity "
+            << child << ").\n";
     }
 
 } // namespace EngineCore

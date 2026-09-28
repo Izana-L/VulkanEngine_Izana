@@ -1,9 +1,9 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 
-// Bounding sphere debug view (see bounds.vert). Green for opaque objects,
+// Bounding volume debug view (see bounds.vert). Green for opaque objects,
 // blue for transparent ones. The alpha is used only by the fallback
-// pipeline that draws filled, blended spheres when the device lacks
+// pipeline that draws filled, blended volumes when the device lacks
 // fillModeNonSolid; the wireframe pipeline does not blend.
 
 #include "common/scene_data.glsl"

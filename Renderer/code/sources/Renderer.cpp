@@ -4,6 +4,7 @@
 #include <Cluster_Grid.hpp>
 #include <Vertex_Packing.hpp>
 #include <MathConstants.hpp>
+#include <Matrix4.hpp>
 #include <Window.hpp>
 
 #include <glm/glm.hpp>
@@ -45,12 +46,26 @@ namespace Renderer_System
         // vkCmdUpdateBuffer accepts at most 65536 bytes per call.
         constexpr VkDeviceSize UPDATE_BUFFER_MAX_BYTES = 65536;
 
-        // Segments and rings of the unit sphere of the bounding sphere view.
+        // Segments and rings of the unit sphere of the bounding volume view.
         constexpr uint32_t BOUNDS_SPHERE_SEGMENTS = 16;
         constexpr uint32_t BOUNDS_SPHERE_RINGS = 8;
 
         // Time between two statistics prints.
         constexpr std::chrono::milliseconds STATISTICS_PRINT_INTERVAL{ 1000 };
+
+        // Scope names are string literals, but the same literal may live at
+        // different addresses: compared by content. nullptr (no parent)
+        // only equals nullptr.
+        bool Same_scope_name(const char* _a, const char* _b)
+        {
+            if (_a == _b)
+                return true;
+
+            if (_a == nullptr || _b == nullptr)
+                return false;
+
+            return std::strcmp(_a, _b) == 0;
+        }
 
         static_assert(FRUSTUM_PLANE_COUNT == CoreTypes::Frustum::PLANE_COUNT,
             "Frame_UBO::frustum_planes and CoreTypes::Frustum must hold the same planes");
@@ -60,20 +75,49 @@ namespace Renderer_System
             return (_value + _alignment - 1) / _alignment * _alignment;
         }
 
-        // Largest scale the upper 3x3 of _model applies along any axis (its
-        // longest column). Same computation as Max_axis_scale in
-        // mesh_table.glsl, so the CPU and the GPU culling agree.
-        float Max_axis_scale(const MathLib::Matrix4& _model)
+#ifndef NDEBUG
+        // Debug self-check of the culling test (CoreTypes::Frustum::
+        // Intersects_ellipsoid), on a case whose result is known: a mesh
+        // bounding sphere of radius 1 at the origin under a parent scaled
+        // (2, 1, 1) and a child rotated 45 degrees about Z. The product has
+        // shear; the longest column of its 3x3 measures sqrt(2.5) = 1.581,
+        // while the ellipsoid reaches exactly 2 along world X. A plane
+        // x >= -1.9 must keep the object centered at x = -3.8 (it reaches
+        // x = -1.8) and cull the one centered at x = -4.0 (it reaches
+        // x = -2.0). The longest column would cull both.
+        //
+        // cull_objects.comp evaluates the same formula
+        // (mesh_table.glsl); a change to one side that breaks this case
+        // makes the two cullings diverge. Throws std::logic_error.
+        void Check_ellipsoid_culling()
         {
-            const float x = glm::dot(MathLib::Vector3(_model[0]), MathLib::Vector3(_model[0]));
-            const float y = glm::dot(MathLib::Vector3(_model[1]), MathLib::Vector3(_model[1]));
-            const float z = glm::dot(MathLib::Vector3(_model[2]), MathLib::Vector3(_model[2]));
-            return std::sqrt(std::max({ x, y, z }));
+            using namespace MathLib;
+
+            const Matrix4 sheared = Mat4::Scale(2.0f, 1.0f, 1.0f) * Mat4::RotationZ(Constants::QUARTER_PI);
+            const Vector4 unit_sphere(0.0f, 0.0f, 0.0f, 1.0f);
+
+            const float extent_x = CoreTypes::Frustum::Ellipsoid_extent(sheared, unit_sphere.w, Vector3(1.0f, 0.0f, 0.0f));
+
+            // Only plane 0 is set: zero planes contain everything.
+            CoreTypes::Frustum frustum;
+            frustum.planes[0] = Vector4(1.0f, 0.0f, 0.0f, 1.9f);
+
+            const bool partly_inside_kept = frustum.Intersects_ellipsoid(Mat4::Translation(-3.8f, 0.0f, 0.0f) * sheared, unit_sphere);
+            const bool outside_culled = !frustum.Intersects_ellipsoid(Mat4::Translation(-4.0f, 0.0f, 0.0f) * sheared, unit_sphere);
+
+            if (std::abs(extent_x - 2.0f) > 1.0e-4f || !partly_inside_kept || !outside_culled)
+            {
+                throw std::logic_error("Renderer: the ellipsoid culling test failed its known case (extent " + std::to_string(extent_x) +
+                                       ", expected 2; partly visible object kept: " + (partly_inside_kept ? "yes" : "no") +
+                                       "; hidden object culled: " + (outside_culled ? "yes" : "no") + ")");
+            }
         }
+#endif
 
         // Unit sphere (radius 1, centered at the origin) as a latitude /
-        // longitude grid. Only positions matter to bounds.vert; the other
-        // attributes get neutral values.
+        // longitude grid. Only positions matter to bounds.vert, which maps
+        // it onto each object's bounding ellipsoid; the other attributes
+        // get neutral values.
         CoreTypes::MeshData Build_unit_sphere(uint32_t _segments, uint32_t _rings)
         {
             CoreTypes::MeshData mesh;
@@ -163,7 +207,9 @@ namespace Renderer_System
         Pipeline_Config config;
         config.vertex_shader_path = "..\\..\\Renderer\\shaders\\compiled\\mesh.vert.spv";
         config.fragment_shader_path = "..\\..\\Renderer\\shaders\\compiled\\mesh.frag.spv";
-        config.blend_enable = false;
+        config.subpass = Render_Subpass::Opaque;
+        config.color_attachment_count = 1;
+        config.color_blend[0] = Color_Blend_State{};   // no blending
         return config;
     }
 
@@ -173,24 +219,23 @@ namespace Renderer_System
         config.vertex_shader_path = "..\\..\\Renderer\\shaders\\compiled\\bounds.vert.spv";
         config.fragment_shader_path = "..\\..\\Renderer\\shaders\\compiled\\bounds.frag.spv";
 
+        // Drawn after the OIT composite, over the final color, and tested
+        // against the opaque depth.
+        config.subpass = Render_Subpass::Composite;
+        config.color_attachment_count = 1;
+
         if (_wireframe)
         {
-            // Edges only: every sphere stays readable where many overlap.
+            // Edges only: every volume stays readable where many overlap.
             config.polygon_mode = VK_POLYGON_MODE_LINE;
-            config.blend_enable = false;
+            config.color_blend[0] = Color_Blend_State{};
         }
         else
         {
-            // Without fillModeNonSolid: faint filled spheres, standard
+            // Without fillModeNonSolid: faint filled volumes, standard
             // "over" blending with the alpha of bounds.frag.
             config.polygon_mode = VK_POLYGON_MODE_FILL;
-            config.blend_enable = true;
-            config.src_color_blend_factor = VK_BLEND_FACTOR_SRC_ALPHA;
-            config.dst_color_blend_factor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-            config.color_blend_op = VK_BLEND_OP_ADD;
-            config.src_alpha_blend_factor = VK_BLEND_FACTOR_ONE;
-            config.dst_alpha_blend_factor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-            config.alpha_blend_op = VK_BLEND_OP_ADD;
+            config.color_blend[0] = Color_Blend_State::Over();
         }
 
         return config;
@@ -198,16 +243,55 @@ namespace Renderer_System
 
     Pipeline_Config Renderer::Make_transparent_config()
     {
-        // Same shaders; standard "over" alpha blending. Depth writes are
+        // Same vertex shader and lighting as the opaque pass
+        // (common/shading.glsl); mesh_oit.frag writes the two OIT targets
+        // of the transparent subpass instead of a color. Depth writes are
         // disabled at draw time through dynamic state, not here.
-        Pipeline_Config config = Make_opaque_config();
-        config.blend_enable = true;
-        config.src_color_blend_factor = VK_BLEND_FACTOR_SRC_ALPHA;
-        config.dst_color_blend_factor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-        config.color_blend_op = VK_BLEND_OP_ADD;
-        config.src_alpha_blend_factor = VK_BLEND_FACTOR_ONE;
-        config.dst_alpha_blend_factor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-        config.alpha_blend_op = VK_BLEND_OP_ADD;
+        Pipeline_Config config;
+        config.vertex_shader_path = "..\\..\\Renderer\\shaders\\compiled\\mesh.vert.spv";
+        config.fragment_shader_path = "..\\..\\Renderer\\shaders\\compiled\\mesh_oit.frag.spv";
+        config.subpass = Render_Subpass::Transparent;
+        config.color_attachment_count = 2;
+
+        // Accumulation: every fragment adds (color * alpha * w, alpha * w).
+        Color_Blend_State& accumulation = config.color_blend[0];
+        accumulation.blend_enable = true;
+        accumulation.src_color_blend_factor = VK_BLEND_FACTOR_ONE;
+        accumulation.dst_color_blend_factor = VK_BLEND_FACTOR_ONE;
+        accumulation.color_blend_op = VK_BLEND_OP_ADD;
+        accumulation.src_alpha_blend_factor = VK_BLEND_FACTOR_ONE;
+        accumulation.dst_alpha_blend_factor = VK_BLEND_FACTOR_ONE;
+        accumulation.alpha_blend_op = VK_BLEND_OP_ADD;
+
+        // Revealage: every fragment outputs its alpha as color and the
+        // target is multiplied by (1 - alpha). One channel: the alpha
+        // factors do not apply to it.
+        Color_Blend_State& revealage = config.color_blend[1];
+        revealage.blend_enable = true;
+        revealage.src_color_blend_factor = VK_BLEND_FACTOR_ZERO;
+        revealage.dst_color_blend_factor = VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
+        revealage.color_blend_op = VK_BLEND_OP_ADD;
+        revealage.src_alpha_blend_factor = VK_BLEND_FACTOR_ZERO;
+        revealage.dst_alpha_blend_factor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        revealage.alpha_blend_op = VK_BLEND_OP_ADD;
+
+        return config;
+    }
+
+    Pipeline_Config Renderer::Make_composite_config()
+    {
+        // One full-screen triangle generated from gl_VertexIndex: no vertex
+        // input. oit_composite.frag outputs the weighted average color of
+        // the transparent layers with alpha = 1 - revealage, blended "over"
+        // the opaque color:
+        //   color = average * (1 - revealage) + opaque * revealage.
+        Pipeline_Config config;
+        config.vertex_shader_path = "..\\..\\Renderer\\shaders\\compiled\\oit_composite.vert.spv";
+        config.fragment_shader_path = "..\\..\\Renderer\\shaders\\compiled\\oit_composite.frag.spv";
+        config.subpass = Render_Subpass::Composite;
+        config.vertex_input = Vertex_Input::None;
+        config.color_attachment_count = 1;
+        config.color_blend[0] = Color_Blend_State::Over();
         return config;
     }
 
@@ -223,30 +307,42 @@ namespace Renderer_System
                         allocator(instance, device),
                         debug_utils(instance, device),
                         geometry_pool(allocator.Get_handle(), GEOMETRY_POOL_VERTICES, GEOMETRY_POOL_INDICES),
-                        gpu_timer(device, FRAMES_IN_FLIGHT, Timestamp_Count),
+                        gpu_timer(device, FRAMES_IN_FLIGHT, GPU_TIMER_MAX_SCOPES),
                         swapchain(device, surface, _window, 3, false),
-                        render_pass(device, swapchain.Get_image_format(), device.Find_supported_depth_format()),
+                        // The OIT formats are constants of Vulkan_OIT_Resources, which
+                        // creates the targets with exactly those.
+                        render_pass(device, swapchain.Get_image_format(), device.Find_supported_depth_format(),
+                                    Vulkan_OIT_Resources::ACCUMULATION_FORMAT, Vulkan_OIT_Resources::REVEALAGE_FORMAT),
                         // The depth format is negotiated once, by the render pass; the
                         // depth image must use exactly that one.
                         depth_resources(device, allocator.Get_handle(), render_pass.Get_depth_format(), swapchain.Get_extent()),
-                        framebuffers(device, render_pass, swapchain, depth_resources),
+                        oit_resources(device, allocator.Get_handle(), swapchain.Get_extent()),
+                        framebuffers(device, render_pass, swapchain, depth_resources, oit_resources),
                         bindless_registry(device, BINDLESS_DESIRED_TEXTURES, BINDLESS_DESIRED_SAMPLERS),
                         pipeline_cache(device),
                         descriptor_layouts(device, bindless_registry.Get_layout()),
                         pipeline_layout(device, descriptor_layouts),
                         pipeline_registry(device, render_pass, pipeline_cache.Get_handle(), pipeline_layout.Get_handle()),
-                        compute_pipeline_layout(device, descriptor_layouts, VK_SHADER_STAGE_COMPUTE_BIT, COMPUTE_PUSH_CONSTANT_SIZE),
+                        compute_pipeline_layout(device, descriptor_layouts, Pipeline_Kind::Compute, VK_SHADER_STAGE_COMPUTE_BIT, COMPUTE_PUSH_CONSTANT_SIZE),
                         procedural_pipeline(device, pipeline_cache.Get_handle(), compute_pipeline_layout.Get_handle(),"..\\..\\Renderer\\shaders\\compiled\\procedural.comp.spv"),
                         cluster_pipeline(device, pipeline_cache.Get_handle(), compute_pipeline_layout.Get_handle(), "..\\..\\Renderer\\shaders\\compiled\\cluster_lights.comp.spv"),
                         cull_pipeline(device, pipeline_cache.Get_handle(), compute_pipeline_layout.Get_handle(), "..\\..\\Renderer\\shaders\\compiled\\cull_objects.comp.spv"),
                         opaque_config(Make_opaque_config()),
                         transparent_config(Make_transparent_config()),
                         bounds_config(Make_bounds_config(device.Is_fill_mode_non_solid_enabled())),
+                        composite_config(Make_composite_config()),
                         sampler_cache(device),
                         transfer_command_pool(device, 0, VK_COMMAND_POOL_CREATE_TRANSIENT_BIT)
     {
         try
         {
+#ifndef NDEBUG
+            // The CPU culling of the transparent items and the GPU culling
+            // of the opaque ones evaluate the same formula; its known case
+            // is checked once per debug run.
+            Check_ellipsoid_culling();
+#endif
+
             // ── Bindless samplers ──────────────────────────────────────
             // Slot i of the sampler array receives the sampler of
             // Sampler_Preset i, so the preset a material stores is already
@@ -265,6 +361,7 @@ namespace Renderer_System
             opaque_pipeline_id = pipeline_registry.Get_id(opaque_config);
             transparent_pipeline_id = pipeline_registry.Get_id(transparent_config);
             bounds_pipeline_id = pipeline_registry.Get_id(bounds_config);
+            composite_pipeline_id = pipeline_registry.Get_id(composite_config);
 
             // ── Frame resources ────────────────────────────────────────
             frames.reserve(FRAMES_IN_FLIGHT);
@@ -276,6 +373,7 @@ namespace Renderer_System
             // ── Descriptor pool + sets ─────────────────────────────────
             Init_descriptor_pool();
             Init_descriptor_sets();
+            Init_composite_input_set();
 
             // ── Transfer fence ─────────────────────────────────────────
             // NOT pre-signaled: Submit_and_wait_transfer resets it before every
@@ -315,7 +413,8 @@ namespace Renderer_System
             // growing during the first frames.
             opaque_draws.reserve(MAX_OBJECTS);
             transparent_draws.reserve(MAX_OBJECTS);
-            timer_intervals.reserve(GPU_TIMER_INTERVALS);
+            timer_frame.scopes.reserve(GPU_TIMER_MAX_SCOPES);
+            statistics.scopes.reserve(GPU_TIMER_MAX_SCOPES);
             statistics.last_print = std::chrono::steady_clock::now();
         }
         catch (...)
@@ -999,7 +1098,8 @@ namespace Renderer_System
         procedural_texture_index = bindless_registry.Register_texture(procedural_image->Get_image_view());
 
         // ── Set 1: storage image descriptor ────────────────────────
-        const VkDescriptorSetLayout per_pass_layout = descriptor_layouts.Get(Descriptor_Set::Per_Pass);
+        // Set 1 of the compute contract (Binding_Per_Pass).
+        const VkDescriptorSetLayout per_pass_layout = descriptor_layouts.Get(Descriptor_Set::Per_Pass, Pipeline_Kind::Compute);
 
         VkDescriptorSetAllocateInfo alloc_info{};
         alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -1030,9 +1130,13 @@ namespace Renderer_System
         // set can be updated without racing a frame in flight.
         vkUpdateDescriptorSets(dev, 1, &write, 0, nullptr);
 
+        // The image holds the zeros of its initial clear: the first frame
+        // generates its content.
+        procedural_dirty = true;
+
         std::cout << "[Renderer] Procedural texture " << PROCEDURAL_TEXTURE_SIZE << "x" << PROCEDURAL_TEXTURE_SIZE
             << " (" << Vulkan_Utils::Vk_format_to_string(PROCEDURAL_TEXTURE_FORMAT)
-            << ") in bindless slot " << procedural_texture_index << ".\n";
+            << ") in bindless slot " << procedural_texture_index << ", generated when its content changes.\n";
     }
 
     // =========================================================
@@ -1060,7 +1164,8 @@ namespace Renderer_System
         registered_materials.reserve(MAX_MATERIALS);
 
         // ── Set 2: material table descriptor ───────────────────────
-        const VkDescriptorSetLayout per_material_layout = descriptor_layouts.Get(Descriptor_Set::Per_Material);
+        // Set 2 is shared by both contracts.
+        const VkDescriptorSetLayout per_material_layout = descriptor_layouts.Get(Descriptor_Set::Per_Material, Pipeline_Kind::Graphics);
 
         VkDescriptorSetAllocateInfo alloc_info{};
         alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -1167,7 +1272,7 @@ namespace Renderer_System
 
         bounds_sphere_mesh_id = Upload_mesh(unit_sphere);
 
-        std::cout << "[Renderer] Bounding sphere view: unit sphere uploaded as mesh " << bounds_sphere_mesh_id
+        std::cout << "[Renderer] Bounding volume view: unit sphere uploaded as mesh " << bounds_sphere_mesh_id
             << (device.Is_fill_mode_non_solid_enabled() ? " (wireframe).\n" : " (filled, blended: fillModeNonSolid unavailable).\n");
     }
 
@@ -1208,6 +1313,7 @@ namespace Renderer_System
         debug_utils.Set_name(cluster_aabb_buffer.buffer, VK_OBJECT_TYPE_BUFFER, "Cluster_AABBs");
 
         debug_utils.Set_name(per_pass_set, VK_OBJECT_TYPE_DESCRIPTOR_SET, "Per_Pass_Set");
+        debug_utils.Set_name(composite_input_set, VK_OBJECT_TYPE_DESCRIPTOR_SET, "Composite_Input_Set");
         debug_utils.Set_name(per_material_set, VK_OBJECT_TYPE_DESCRIPTOR_SET, "Per_Material_Set");
 
         debug_utils.Set_name(procedural_pipeline.Get_handle(), VK_OBJECT_TYPE_PIPELINE, "Procedural_Compute");
@@ -1216,12 +1322,24 @@ namespace Renderer_System
         debug_utils.Set_name(pipeline_registry.Get_by_id(opaque_pipeline_id), VK_OBJECT_TYPE_PIPELINE, "Mesh_Opaque");
         debug_utils.Set_name(pipeline_registry.Get_by_id(transparent_pipeline_id), VK_OBJECT_TYPE_PIPELINE, "Mesh_Transparent");
         debug_utils.Set_name(pipeline_registry.Get_by_id(bounds_pipeline_id), VK_OBJECT_TYPE_PIPELINE, "Bounds_Debug");
+        debug_utils.Set_name(pipeline_registry.Get_by_id(composite_pipeline_id), VK_OBJECT_TYPE_PIPELINE, "Oit_Composite");
 
         if (procedural_image.has_value())
             debug_utils.Set_name(procedural_image->Get_image(), VK_OBJECT_TYPE_IMAGE, "Procedural_Texture");
 
         if (gpu_timer.Is_supported())
             debug_utils.Set_name(gpu_timer.Get_query_pool(), VK_OBJECT_TYPE_QUERY_POOL, "Gpu_Timer_Queries");
+
+        Name_oit_targets();
+    }
+
+    void Renderer::Name_oit_targets()
+    {
+        if (!debug_utils.Is_enabled())
+            return;
+
+        debug_utils.Set_name(oit_resources.Get_accumulation_image(), VK_OBJECT_TYPE_IMAGE, "Oit_Accumulation");
+        debug_utils.Set_name(oit_resources.Get_revealage_image(), VK_OBJECT_TYPE_IMAGE, "Oit_Revealage");
     }
 
     uint32_t Renderer::Register_material(const Material_Desc& _desc)
@@ -1407,6 +1525,14 @@ namespace Renderer_System
         slot_frame_serial[current_frame] = ++submitted_frames;
         frame_records[current_frame].recorded = true;
 
+        // The procedural image this submission writes stays valid for every
+        // later frame (End_write makes it visible to all later work on the
+        // queue). Cleared only here, after a successful submit: a recording
+        // that threw or a failed submit leaves the flag set, and the next
+        // frame records the pass again.
+        if (frame_records[current_frame].procedural_recorded)
+            procedural_dirty = false;
+
         // ── Present ───────────────────────────────────────────────
         VkPresentInfoKHR present_info{};
         present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -1590,8 +1716,8 @@ namespace Renderer_System
         // The path that can draw this frame's opaque objects, then the
         // object buffer and the draw lists everything below consumes. The
         // transparent items are culled on the CPU exactly when the opaque
-        // ones are culled on the GPU, with the same planes, so both
-        // passes discard the same objects.
+        // ones are culled on the GPU, with the same planes and the same
+        // bounding volume test, so both passes discard the same objects.
         const Opaque_Draw_Path opaque_path = Resolve_opaque_path(debug_settings.opaque_path, _packet);
         const bool             gpu_draws = opaque_path == Opaque_Draw_Path::Gpu_Indirect || opaque_path == Opaque_Draw_Path::Gpu_Culled;
         const bool             frustum_culling = opaque_path == Opaque_Draw_Path::Gpu_Culled;
@@ -1608,7 +1734,11 @@ namespace Renderer_System
 
         VK_CHECK(vkBeginCommandBuffer(command_buffer, &begin_info), "Record_command_buffer: begin");
 
-        gpu_timer.Begin_frame(command_buffer, current_frame);
+        // Frame start point. Every block below is a Gpu_Scope: one name for
+        // its debug label and its timed scope. The top-level scopes are all
+        // opened outside the render pass, as the isolated timing mode
+        // requires (it records a barrier before each of them).
+        gpu_timer.Begin_frame(command_buffer, current_frame, debug_settings.isolate_gpu_timings);
 
         // ── Compute work: always before the render pass ───────────
         // Every compute pass that writes an image registered in the
@@ -1617,7 +1747,8 @@ namespace Renderer_System
         // vkCmdBeginRenderPass:
         //   - a pipeline barrier inside the render pass requires a
         //     subpass self-dependency, and the render pass declares none
-        //     (Vulkan_Render_Pass only declares EXTERNAL -> 0);
+        //     (Vulkan_Render_Pass only declares dependencies between
+        //     subpasses and from EXTERNAL);
         //   - End_write must execute before any draw that may read the
         //     bindless set (declared layout rule,
         //     Bindless_Registry::Register_texture).
@@ -1630,9 +1761,9 @@ namespace Renderer_System
         // GRAPHICS are not visible to dispatches, and binding compute sets
         // does not disturb them. Every compute pipeline is built against
         // compute_pipeline_layout, so the four sets bound once here stay
-        // bound across the pipeline changes of the passes below. Set 0 uses
-        // the same handle as the graphics pass (same set layout in both
-        // pipeline layouts).
+        // bound across the pipeline changes of the passes below. Sets 0, 2
+        // and 3 use the same handles as the graphics pass (same set layouts
+        // in both pipeline layouts); set 1 is the compute one.
         const std::array<VkDescriptorSet, Descriptor_Set::Count> compute_sets = {
             descriptor_sets[current_frame], per_pass_set, per_material_set, bindless_registry.Get_set() };
 
@@ -1641,12 +1772,22 @@ namespace Renderer_System
 
         // ── Procedural texture pass ───────────────────────────────
         // Writes every texel of procedural_image; the draws below sample it
-        // through its bindless slot.
+        // through its bindless slot. Recorded only while its content is out
+        // of date (procedural_dirty): once at startup today. Its barriers
+        // serialize frames: Begin_write waits for the fragment and compute
+        // work of everything submitted before, the previous frame included,
+        // and End_write makes the compute passes below wait for the
+        // dispatch. A frame without it lets the compute work of this frame
+        // overlap the fragment work of the previous one.
+        const bool record_procedural = procedural_dirty;
+
         constexpr uint32_t PROCEDURAL_GROUP_SIZE = 8;   // local_size_x / local_size_y of procedural.comp
+
+        if (record_procedural)
         {
             assert(procedural_image.has_value() && "Record_command_buffer: Init_procedural_pass() has not run");
 
-            const Debug_Label_Scope label(debug_utils, command_buffer, "Procedural texture", 0.9f, 0.6f, 0.1f);
+            const Gpu_Scope scope(debug_utils, gpu_timer, command_buffer, "Procedural texture", 0.9f, 0.6f, 0.1f);
 
             const VkExtent2D procedural_extent = procedural_image->Get_extent();
 
@@ -1663,7 +1804,7 @@ namespace Renderer_System
                 0, sizeof(Procedural_Push_Constants), &procedural_push);
 
             // UNDEFINED -> GENERAL (contents discarded), after the reads of
-            // the previous frame that shares this image (write-after-read).
+            // the frames in flight that share this image (write-after-read).
             procedural_image->Begin_write(command_buffer);
 
             // Rounded up: a size that is not a multiple of the group size
@@ -1673,11 +1814,10 @@ namespace Renderer_System
             vkCmdDispatch(command_buffer, group_count_x, group_count_y, 1);
 
             // GENERAL -> SHADER_READ_ONLY_OPTIMAL, compute writes made
-            // visible to the fragment stage before the render pass begins.
+            // visible to the fragment stage before the render pass begins,
+            // in this frame and in every later one.
             procedural_image->End_write(command_buffer);
         }
-
-        gpu_timer.Write(command_buffer, current_frame, Timestamp_After_Procedural);
 
         // ── Transfer: cluster boxes and counter resets ────────────
         // The boxes are rewritten only when the projection changed. The
@@ -1690,7 +1830,7 @@ namespace Renderer_System
         // made into the same readback buffer (write-after-write), with a
         // barrier instead of relying on the fence wait alone.
         {
-            const Debug_Label_Scope label(debug_utils, command_buffer, "Cluster boxes and counter reset", 0.5f, 0.5f, 0.5f);
+            const Gpu_Scope scope(debug_utils, gpu_timer, command_buffer, "Uploads and resets", 0.5f, 0.5f, 0.5f);
 
             Record_cluster_aabb_update(command_buffer, _packet);
 
@@ -1704,7 +1844,7 @@ namespace Renderer_System
 
         // ── Light assignment to clusters ──────────────────────────
         {
-            const Debug_Label_Scope label(debug_utils, command_buffer, "Light clusters", 1.0f, 0.9f, 0.2f);
+            const Gpu_Scope scope(debug_utils, gpu_timer, command_buffer, "Light clusters", 1.0f, 0.9f, 0.2f);
 
             vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, cluster_pipeline.Get_handle());
 
@@ -1721,14 +1861,13 @@ namespace Renderer_System
             vkCmdDispatch(command_buffer, (CLUSTER_COUNT + CLUSTER_GROUP_SIZE - 1) / CLUSTER_GROUP_SIZE, 1, 1);
         }
 
-        gpu_timer.Write(command_buffer, current_frame, Timestamp_After_Light_Clusters);
-
         // ── Frustum culling and draw generation ───────────────────
         // Only for the GPU paths; the opaque objects are entries
-        // [0, opaque_count) of the object buffer.
+        // [0, opaque_count) of the object buffer. A frame that does not
+        // record it simply has no culling scope.
         if (gpu_draws && opaque_count > 0)
         {
-            const Debug_Label_Scope label(debug_utils, command_buffer, "Frustum culling", 0.2f, 0.8f, 1.0f);
+            const Gpu_Scope scope(debug_utils, gpu_timer, command_buffer, "Frustum culling", 0.2f, 0.8f, 1.0f);
 
             vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, cull_pipeline.Get_handle());
 
@@ -1744,23 +1883,167 @@ namespace Renderer_System
             vkCmdDispatch(command_buffer, (opaque_count + CULL_GROUP_SIZE - 1) / CULL_GROUP_SIZE, 1, 1);
         }
 
-        // Written every frame, culling or not: a point that is missing from
-        // one frame makes the timer skip that whole frame.
-        gpu_timer.Write(command_buffer, current_frame, Timestamp_After_Culling);
-
         // ── Compute results -> consumers ──────────────────────────
         // One barrier for both passes: the cluster lists to the fragment
         // shader, the draw commands and their count to the indirect draw,
-        // and the counters to the statistics copy. Forgetting the indirect
-        // part works "almost always", which is why it is spelled out.
+        // and the counters to the statistics copy after the render pass.
+        // Forgetting the indirect part works "almost always", which is why
+        // it is spelled out. Outside every scope: its cost shows as "other"
+        // in the timings.
         Vulkan_Buffer_Utils::Record_compute_to_consumer_barrier(command_buffer,
             { VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
               VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT });
 
+        // ── Render pass ───────────────────────────────────────────
+        // Its scope holds the pass alone: the statistics copies, which only
+        // depend on the barrier above, are recorded after it.
+        uint8_t  bound_pipeline_id = 0xFF;
+        uint32_t bind_count = 0;
+
+        {
+            const Gpu_Scope render_pass_scope(debug_utils, gpu_timer, command_buffer, "Render pass", 0.8f, 0.8f, 0.8f);
+
+            // One clear value per attachment, in Render_Pass_Attachment
+            // order.
+            std::array<VkClearValue, Render_Pass_Attachment::Count> clear_values{};
+            clear_values[Render_Pass_Attachment::Color].color =
+                { { _packet.clear_color.r, _packet.clear_color.g, _packet.clear_color.b, _packet.clear_color.a } };
+
+            // Reverse-Z: 0.0 is the far end, so that is what "nothing drawn yet"
+            // means. Leave this at 1.0 and every fragment fails the GREATER test
+            // - black screen, no validation error, nothing to debug.
+            clear_values[Render_Pass_Attachment::Depth].depthStencil = { 0.0f, 0 };
+
+            // Accumulation starts empty (no weighted color, no weight), and
+            // revealage at 1 (all the background visible). Cleared when the
+            // transparent subpass first uses them.
+            clear_values[Render_Pass_Attachment::Oit_Accumulation].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
+            clear_values[Render_Pass_Attachment::Oit_Revealage].color = { { 1.0f, 0.0f, 0.0f, 0.0f } };
+
+            const VkExtent2D extent = swapchain.Get_extent();
+
+            VkRenderPassBeginInfo render_pass_info{};
+            render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            render_pass_info.renderPass = render_pass.Get_handle();
+            render_pass_info.framebuffer = framebuffers.Get_framebuffer(_image_index);
+            render_pass_info.renderArea.offset = { 0, 0 };
+            render_pass_info.renderArea.extent = extent;
+            render_pass_info.clearValueCount = static_cast<uint32_t>(clear_values.size());
+            render_pass_info.pClearValues = clear_values.data();
+
+            vkCmdBeginRenderPass(command_buffer, &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
+
+            // ── Dynamic viewport + scissor ────────────────────────────
+            // The same extent the packet's aspect ratio was derived from
+            // (Get_render_size), so the projection and the viewport agree.
+            VkViewport viewport{};
+            viewport.x = 0.0f;
+            viewport.y = 0.0f;
+            viewport.width = static_cast<float>(extent.width);
+            viewport.height = static_cast<float>(extent.height);
+            viewport.minDepth = 0.0f;
+            viewport.maxDepth = 1.0f;
+            vkCmdSetViewport(command_buffer, 0, 1, &viewport);
+
+            VkRect2D scissor{};
+            scissor.offset = { 0, 0 };
+            scissor.extent = extent;
+            vkCmdSetScissor(command_buffer, 0, 1, &scissor);
+
+            // ── Dynamic raster + depth state ──────────────────────────
+            // Core in Vulkan 1.3. Every state declared dynamic in the pipeline
+            // MUST be set before any draw in this command buffer. Dynamic
+            // state is command buffer state: it persists across subpasses,
+            // and the subpasses below only change what differs.
+            //
+            // Front face: COUNTER_CLOCKWISE. The projection flips Y for
+            // Vulkan's clip space; the specification defines the framebuffer
+            // area with a leading minus sign, so geometry wound
+            // counter-clockwise when seen from outside (every primitive of
+            // Primitive_Builder, and every glTF mesh) is front-facing here.
+            vkCmdSetCullMode(command_buffer, raster_state.cull_mode);
+            vkCmdSetFrontFace(command_buffer, raster_state.front_face);
+            vkCmdSetDepthTestEnable(command_buffer, raster_state.depth_test_enable ? VK_TRUE : VK_FALSE);
+            vkCmdSetDepthWriteEnable(command_buffer, raster_state.depth_write_enable ? VK_TRUE : VK_FALSE);
+            vkCmdSetDepthCompareOp(command_buffer, raster_state.depth_compare_op);
+
+            // ── Bind descriptor sets ─────────────────────────────────
+            // Set 0: per-frame view/projection UBO, light buffer, object
+            //        buffer and cluster lists of this frame slot.
+            // Set 1: the OIT targets as input attachments, read by the
+            //        composite subpass only (graphics contract).
+            // Set 2: global material table, indexed through each object's
+            //        material_index, and mesh table (bounds view).
+            // Set 3: global bindless texture array, indexed through each
+            //        material's albedo_texture_index.
+            const std::array<VkDescriptorSet, Descriptor_Set::Count> graphics_sets = {
+                descriptor_sets[current_frame], composite_input_set, per_material_set, bindless_registry.Get_set() };
+
+            vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout.Get_handle(),
+                Descriptor_Set::Per_Frame, static_cast<uint32_t>(graphics_sets.size()), graphics_sets.data(), 0, nullptr);
+
+            // ── Geometry: one bind for the whole frame ────────────────
+            // Every mesh lives in the pool; the draws select theirs through
+            // firstIndex / vertexOffset. The composite pipeline declares no
+            // vertex input and ignores it.
+            geometry_pool.Bind(command_buffer);
+
+            // ── Subpass 0: opaque, depth write on ─────────────────────
+            {
+                const Gpu_Scope scope(debug_utils, gpu_timer, command_buffer, "Opaque", 0.3f, 0.9f, 0.3f);
+                Record_opaque_draws(command_buffer, _frame, opaque_path, bound_pipeline_id, bind_count);
+            }
+
+            // ── Subpass 1: transparent accumulation ───────────────────
+            // The depth buffer is read-only from here on (its layout in
+            // subpasses 1 and 2): every draw must have depth writes
+            // disabled. The transparent draws are order-independent: the
+            // list needs no back-to-front order.
+            vkCmdNextSubpass(command_buffer, VK_SUBPASS_CONTENTS_INLINE);
+            vkCmdSetDepthWriteEnable(command_buffer, VK_FALSE);
+
+            {
+                const Gpu_Scope scope(debug_utils, gpu_timer, command_buffer, "Transparent", 0.3f, 0.5f, 1.0f);
+                Record_transparent_draws(command_buffer, bound_pipeline_id, bind_count);
+            }
+
+            // ── Subpass 2: composite, then debug views ────────────────
+            vkCmdNextSubpass(command_buffer, VK_SUBPASS_CONTENTS_INLINE);
+
+            // A frame without transparent draws left the targets at their
+            // clear values, whose composite changes nothing: skipped.
+            if (!transparent_draws.empty())
+            {
+                const Gpu_Scope scope(debug_utils, gpu_timer, command_buffer, "OIT composite", 0.6f, 0.4f, 1.0f);
+                Record_composite_draw(command_buffer, bound_pipeline_id, bind_count);
+            }
+
+            // Behind the composite: the volumes are drawn over the final
+            // color and tested against the opaque depth.
+            if (debug_settings.show_bounds)
+            {
+                const Gpu_Scope scope(debug_utils, gpu_timer, command_buffer, "Bounding volumes", 1.0f, 1.0f, 1.0f);
+                Record_bounds_draw(command_buffer, bound_pipeline_id, bind_count);
+            }
+
+            vkCmdEndRenderPass(command_buffer);
+        }
+
+        if (bind_count != last_reported_binds)
+        {
+            std::cout << "[Renderer] " << bind_count << " pipeline bind(s) for "
+                      << _packet.opaque_items.size() << " opaque + "
+                      << _packet.transparent_items.size() << " transparent item(s).\n";
+            last_reported_binds = bind_count;
+        }
+
         // ── Statistics readback ───────────────────────────────────
         // The counters of this frame are copied into its host-visible
         // readback buffer, read when this frame slot comes around again
-        // (Read_frame_statistics), so the CPU never waits for them.
+        // (Read_frame_statistics), so the CPU never waits for them. They
+        // depend only on the compute -> consumers barrier, so they follow
+        // the render pass instead of sitting inside its scope. A label
+        // only, not a timed scope: its cost shows as "other".
         {
             const Debug_Label_Scope label(debug_utils, command_buffer, "Statistics readback", 0.5f, 0.5f, 0.5f);
 
@@ -1778,117 +2061,8 @@ namespace Renderer_System
                 { VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT });
         }
 
-        // ── Render pass ───────────────────────────────────────────
-        std::array<VkClearValue, 2> clear_values{};
-        clear_values[0].color = { { _packet.clear_color.r, _packet.clear_color.g, _packet.clear_color.b, _packet.clear_color.a } };
-
-        // Reverse-Z: 0.0 is the far end, so that is what "nothing drawn yet"
-        // means. Leave this at 1.0 and every fragment fails the GREATER test
-        // - black screen, no validation error, nothing to debug.
-        clear_values[1].depthStencil = { 0.0f, 0 };
-
-        const VkExtent2D extent = swapchain.Get_extent();
-
-        VkRenderPassBeginInfo render_pass_info{};
-        render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        render_pass_info.renderPass = render_pass.Get_handle();
-        render_pass_info.framebuffer = framebuffers.Get_framebuffer(_image_index);
-        render_pass_info.renderArea.offset = { 0, 0 };
-        render_pass_info.renderArea.extent = extent;
-        render_pass_info.clearValueCount = static_cast<uint32_t>(clear_values.size());
-        render_pass_info.pClearValues = clear_values.data();
-
-        vkCmdBeginRenderPass(command_buffer, &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
-
-        // ── Dynamic viewport + scissor ────────────────────────────
-        // The same extent the packet's aspect ratio was derived from
-        // (Get_render_size), so the projection and the viewport agree.
-        VkViewport viewport{};
-        viewport.x = 0.0f;
-        viewport.y = 0.0f;
-        viewport.width = static_cast<float>(extent.width);
-        viewport.height = static_cast<float>(extent.height);
-        viewport.minDepth = 0.0f;
-        viewport.maxDepth = 1.0f;
-        vkCmdSetViewport(command_buffer, 0, 1, &viewport);
-
-        VkRect2D scissor{};
-        scissor.offset = { 0, 0 };
-        scissor.extent = extent;
-        vkCmdSetScissor(command_buffer, 0, 1, &scissor);
-
-        // ── Dynamic raster + depth state ──────────────────────────
-        // Core in Vulkan 1.3. Every state declared dynamic in the pipeline
-        // MUST be set before any draw in this command buffer.
-        //
-        // Front face: COUNTER_CLOCKWISE. The projection flips Y for
-        // Vulkan's clip space; the specification defines the framebuffer
-        // area with a leading minus sign, so geometry wound
-        // counter-clockwise when seen from outside (every primitive of
-        // Primitive_Builder, and every glTF mesh) is front-facing here.
-        vkCmdSetCullMode(command_buffer, raster_state.cull_mode);
-        vkCmdSetFrontFace(command_buffer, raster_state.front_face);
-        vkCmdSetDepthTestEnable(command_buffer, raster_state.depth_test_enable ? VK_TRUE : VK_FALSE);
-        vkCmdSetDepthWriteEnable(command_buffer, raster_state.depth_write_enable ? VK_TRUE : VK_FALSE);
-        vkCmdSetDepthCompareOp(command_buffer, raster_state.depth_compare_op);
-
-        // ── Bind descriptor sets ─────────────────────────────────
-// Set 0: per-frame view/projection UBO, light buffer, object
-//        buffer and cluster lists of this frame slot.
-// Set 2: global material table, indexed through each object's
-//        material_index, and mesh table (bounds view).
-// Set 3: global bindless texture array, indexed through each
-//        material's albedo_texture_index.
-// Set 1 is not bound: it only holds compute pass resources.
-        VkDescriptorSet per_frame_set = descriptor_sets[current_frame];
-        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout.Get_handle(),
-            Descriptor_Set::Per_Frame, 1, &per_frame_set, 0, nullptr);
-
-        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout.Get_handle(),
-            Descriptor_Set::Per_Material, 1, &per_material_set, 0, nullptr);
-
-        VkDescriptorSet bindless_set = bindless_registry.Get_set();
-        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout.Get_handle(),
-            Descriptor_Set::Bindless, 1, &bindless_set, 0, nullptr);
-
-        // ── Geometry: one bind for the whole frame ────────────────
-        // Every mesh lives in the pool; the draws select theirs through
-        // firstIndex / vertexOffset.
-        geometry_pool.Bind(command_buffer);
-
-        uint8_t  bound_pipeline_id = 0xFF;
-        uint32_t bind_count = 0;
-
-        // ── Opaque pass: depth write on ───────────────────────────
-        {
-            const Debug_Label_Scope label(debug_utils, command_buffer, "Opaque", 0.3f, 0.9f, 0.3f);
-            Record_opaque_draws(command_buffer, _frame, opaque_path, bound_pipeline_id, bind_count);
-        }
-
-        // ── Transparent pass: depth test only, back-to-front ──────
-        {
-            const Debug_Label_Scope label(debug_utils, command_buffer, "Transparent", 0.3f, 0.5f, 1.0f);
-            Record_transparent_draws(command_buffer, bound_pipeline_id, bind_count);
-        }
-
-        // ── Bounding spheres (debug) ──────────────────────────────
-        if (debug_settings.show_bounds)
-        {
-            const Debug_Label_Scope label(debug_utils, command_buffer, "Bounding spheres", 1.0f, 1.0f, 1.0f);
-            Record_bounds_draw(command_buffer, bound_pipeline_id, bind_count);
-        }
-
-        if (bind_count != last_reported_binds)
-        {
-            std::cout << "[Renderer] " << bind_count << " pipeline bind(s) for "
-                      << _packet.opaque_items.size() << " opaque + "
-                      << _packet.transparent_items.size() << " transparent item(s).\n";
-            last_reported_binds = bind_count;
-        }
-
-        vkCmdEndRenderPass(command_buffer);
-
-        gpu_timer.Write(command_buffer, current_frame, Timestamp_After_Render_Pass);
+        // Frame end point, after every command of the frame.
+        gpu_timer.End_frame(command_buffer);
 
         // The driver reports recording errors here, not at the individual
         // vkCmd* calls.
@@ -1902,6 +2076,7 @@ namespace Renderer_System
         record.opaque_objects = opaque_count;
         record.transparent_candidates = transparent_candidates;
         record.transparent_drawn = static_cast<uint32_t>(transparent_draws.size());
+        record.procedural_recorded = record_procedural;
     }
 
     // =========================================================
@@ -1967,9 +2142,11 @@ namespace Renderer_System
 
         uint32_t object_count = 0;
 
+        // _subpass: the subpass the list is drawn in; an item whose pipeline
+        // was built for another one cannot draw there.
         // _candidates, when not null, counts the valid items of the list
         // before the frustum test.
-        const auto add_items = [&](const std::vector<CoreTypes::Draw_Item>& _items, uint8_t _pass_bit,
+        const auto add_items = [&](const std::vector<CoreTypes::Draw_Item>& _items, uint8_t _pass_bit, uint32_t _subpass,
                                    std::vector<Draw_Record>& _out, bool _frustum_test, uint32_t* _candidates)
             {
                 for (const CoreTypes::Draw_Item& item : _items)
@@ -1985,10 +2162,12 @@ namespace Renderer_System
                     // Every reference is validated in every build, before its
                     // entry is written: an out-of-range transform index would
                     // read past the packet's array, an out-of-range material
-                    // index past the written slots of the material table, and
-                    // a released mesh may already have lost its geometry.
+                    // index past the written slots of the material table, a
+                    // released mesh may already have lost its geometry, and a
+                    // pipeline of another subpass is invalid in this one.
                     const bool valid =
                         pipeline != VK_NULL_HANDLE &&
+                        pipeline_registry.Get_subpass(item_pipeline_id) == _subpass &&
                         item.mesh_gpu_id < meshes.size() &&
                         !meshes[item.mesh_gpu_id].released &&
                         item.transform_idx < _packet.transform_count &&
@@ -1999,7 +2178,8 @@ namespace Renderer_System
                         if (!warned_invalid_item)
                         {
                             std::cerr << "[Renderer] Draw item skipped: pipeline " << int(item_pipeline_id)
-                                << ", mesh " << item.mesh_gpu_id << ", transform " << item.transform_idx
+                                << " (built for subpass " << pipeline_registry.Get_subpass(item_pipeline_id) << ", drawn in subpass "
+                                << _subpass << "), mesh " << item.mesh_gpu_id << ", transform " << item.transform_idx
                                 << ", material " << item.material_index
                                 << " (registered meshes: " << meshes.size() << ", transforms in packet: "
                                 << _packet.transform_count << ", registered materials: " << registered_materials.size()
@@ -2015,14 +2195,14 @@ namespace Renderer_System
                     if (_candidates != nullptr)
                         ++(*_candidates);
 
-                    // CPU culling: the sphere test of cull_objects.comp, on the
-                    // same planes (culling_frustum is what the UBO carries).
+                    // CPU culling: the test of cull_objects.comp, the same
+                    // formula on the same planes (culling_frustum is what the
+                    // UBO carries): the mesh bounding sphere placed by the
+                    // model matrix, an ellipsoid, tested exactly against
+                    // every plane, shear included.
                     if (_frustum_test)
                     {
-                        const MathLib::Vector3 center = MathLib::Vector3(model * MathLib::Vector4(mesh.bounds_center, 1.0f));
-                        const float            radius = mesh.bounds_radius * Max_axis_scale(model);
-
-                        if (!culling_frustum.Intersects_sphere(center, radius))
+                        if (!culling_frustum.Intersects_ellipsoid(model, MathLib::Vector4(mesh.bounds_center, mesh.bounds_radius)))
                             continue;
                     }
 
@@ -2064,8 +2244,10 @@ namespace Renderer_System
         // Opaque items take entries [0, opaque) and transparent items
         // continue from there. The culling pass relies on it: it processes
         // [0, opaque) only.
-        add_items(_packet.opaque_items, CoreTypes::Render_Pass_Bit::Opaque, opaque_draws, false, nullptr);
-        add_items(_packet.transparent_items, CoreTypes::Render_Pass_Bit::Transparent, transparent_draws, _cull_transparents, &transparent_candidates);
+        add_items(_packet.opaque_items, CoreTypes::Render_Pass_Bit::Opaque, Render_Subpass::Opaque,
+                  opaque_draws, false, nullptr);
+        add_items(_packet.transparent_items, CoreTypes::Render_Pass_Bit::Transparent, Render_Subpass::Transparent,
+                  transparent_draws, _cull_transparents, &transparent_candidates);
     }
 
     void Renderer::Write_cpu_draw_commands(Frame_Data& _frame) const
@@ -2208,11 +2390,12 @@ namespace Renderer_System
         if (transparent_draws.empty())
             return;
 
-        // The list arrives sorted back-to-front by the extract, and direct
-        // draws keep that order; blending needs the opaque depth to occlude
-        // but must not write its own.
-        vkCmdSetDepthWriteEnable(_command_buffer, VK_FALSE);
-
+        // Weighted blended OIT: every fragment is accumulated into the two
+        // targets, so the result does not depend on the draw order and the
+        // list needs no back-to-front sort. It arrives grouped by pipeline,
+        // material and mesh, like the opaque one, which keeps the binds to
+        // a minimum. The opaque depth occludes the fragments; depth writes
+        // were disabled when the subpass began.
         for (const Draw_Record& draw : transparent_draws)
         {
             Bind_graphics_pipeline(_command_buffer, draw.pipeline_id, _bound_pipeline_id, _bind_count);
@@ -2220,11 +2403,25 @@ namespace Renderer_System
         }
     }
 
+    void Renderer::Record_composite_draw(VkCommandBuffer _command_buffer, uint8_t& _bound_pipeline_id, uint32_t& _bind_count)
+    {
+        Bind_graphics_pipeline(_command_buffer, composite_pipeline_id, _bound_pipeline_id, _bind_count);
+
+        // Every pixel is resolved, whatever the opaque depth holds, and the
+        // full-screen triangle is not culled by its winding.
+        vkCmdSetDepthTestEnable(_command_buffer, VK_FALSE);
+        vkCmdSetCullMode(_command_buffer, VK_CULL_MODE_NONE);
+
+        // Three vertices generated from gl_VertexIndex (oit_composite.vert);
+        // the targets are read through set 1 as input attachments.
+        vkCmdDraw(_command_buffer, 3, 1, 0, 0);
+    }
+
     void Renderer::Record_bounds_draw(VkCommandBuffer _command_buffer, uint8_t& _bound_pipeline_id, uint32_t& _bind_count)
     {
         // Entries [0, object_count) of the object buffer: the opaque objects
         // and the transparent ones that survived the CPU culling. Opaque
-        // objects culled on the GPU keep their sphere, which is what shows
+        // objects culled on the GPU keep their volume, which is what shows
         // the culling at work.
         const uint32_t object_count = static_cast<uint32_t>(opaque_draws.size() + transparent_draws.size());
 
@@ -2238,8 +2435,12 @@ namespace Renderer_System
 
         Bind_graphics_pipeline(_command_buffer, bounds_pipeline_id, _bound_pipeline_id, _bind_count);
 
-        // Seen from inside as well, and never occluding what follows.
+        // Seen from inside as well, never occluding what follows, and
+        // hidden behind the opaque geometry: the composite may have turned
+        // the depth test off. Depth writes stay off, as the read-only depth
+        // layout of the subpass requires.
         vkCmdSetCullMode(_command_buffer, VK_CULL_MODE_NONE);
+        vkCmdSetDepthTestEnable(_command_buffer, VK_TRUE);
         vkCmdSetDepthWriteEnable(_command_buffer, VK_FALSE);
 
         // One instanced draw: firstInstance 0 and one instance per object
@@ -2268,7 +2469,13 @@ namespace Renderer_System
 
         swapchain.Recreate();
         depth_resources.Recreate(swapchain.Get_extent());
-        framebuffers.Recreate(render_pass, swapchain, depth_resources);
+        oit_resources.Recreate(swapchain.Get_extent());
+        framebuffers.Recreate(render_pass, swapchain, depth_resources, oit_resources);
+
+        // The OIT views changed: the composite reads the new ones. Legal
+        // here, after the idle wait: no pending command buffer uses the set.
+        Write_composite_input_set();
+        Name_oit_targets();
 
         // The cluster boxes need nothing here: they depend on the
         // projection, and the next frame rebuilds them when the new aspect
@@ -2281,7 +2488,9 @@ namespace Renderer_System
         // clear submitted before the next frame reads the slot, then
         // Bindless_Registry::Update_texture on the slot the image already
         // holds. Every draw keeps its index and reads a live view, and no
-        // slot is consumed per resize.
+        // slot is consumed per resize. A recreated image holds zeros: the
+        // pass that writes it must be marked out of date, as
+        // procedural_dirty does for the procedural texture.
 
         // The image count may have changed: one Image_Sync per new image.
         Create_image_sync();
@@ -2331,16 +2540,19 @@ namespace Renderer_System
     {
         // Set 0: one uniform buffer and seven storage buffers (lights,
         // objects, cluster grid, cluster light indices, cluster counters,
-        // draw commands, draw count) per frame-in-flight. Set 1: one
-        // storage image for the procedural pass and one storage buffer for
-        // the cluster boxes (per_pass_set). Set 2: two storage buffers,
-        // the material and mesh tables (per_material_set). Sets 1 and 2
-        // are shared by every frame slot.
+        // draw commands, draw count) per frame-in-flight. Set 1 of the
+        // compute contract: one storage image for the procedural pass and
+        // one storage buffer for the cluster boxes (per_pass_set). Set 1 of
+        // the graphics contract: two input attachments, the OIT targets
+        // (composite_input_set). Set 2: two storage buffers, the material
+        // and mesh tables (per_material_set). Sets 1 and 2 are shared by
+        // every frame slot.
         constexpr uint32_t PER_FRAME_STORAGE_BUFFERS = 7;
         constexpr uint32_t PER_PASS_STORAGE_BUFFERS = 1;
         constexpr uint32_t PER_MATERIAL_STORAGE_BUFFERS = 2;
+        constexpr uint32_t COMPOSITE_INPUT_ATTACHMENTS = 2;
 
-        std::array<VkDescriptorPoolSize, 3> pool_sizes{};
+        std::array<VkDescriptorPoolSize, 4> pool_sizes{};
 
         pool_sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         pool_sizes[0].descriptorCount = FRAMES_IN_FLIGHT;
@@ -2351,14 +2563,74 @@ namespace Renderer_System
         pool_sizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         pool_sizes[2].descriptorCount = 1;
 
+        pool_sizes[3].type = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+        pool_sizes[3].descriptorCount = COMPOSITE_INPUT_ATTACHMENTS;
+
         VkDescriptorPoolCreateInfo pool_info{};
         pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pool_info.poolSizeCount = static_cast<uint32_t>(pool_sizes.size());
         pool_info.pPoolSizes = pool_sizes.data();
-        pool_info.maxSets = FRAMES_IN_FLIGHT + 2;   // one set 0 per frame slot + one set 1 + one set 2
+        // One set 0 per frame slot + the compute set 1 + the graphics set 1
+        // + set 2.
+        pool_info.maxSets = FRAMES_IN_FLIGHT + 3;
 
         VK_CHECK(vkCreateDescriptorPool(device.Get_logical_device_handle(), &pool_info, nullptr, &descriptor_pool),
             "Renderer: failed to create descriptor pool");
+    }
+
+    // =========================================================
+    // Composite input set (graphics set 1)
+    // =========================================================
+
+    void Renderer::Init_composite_input_set()
+    {
+        const VkDescriptorSetLayout composite_layout = descriptor_layouts.Get(Descriptor_Set::Per_Pass, Pipeline_Kind::Graphics);
+
+        VkDescriptorSetAllocateInfo alloc_info{};
+        alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        alloc_info.descriptorPool = descriptor_pool;
+        alloc_info.descriptorSetCount = 1;
+        alloc_info.pSetLayouts = &composite_layout;
+
+        VK_CHECK(vkAllocateDescriptorSets(device.Get_logical_device_handle(), &alloc_info, &composite_input_set),
+            "Init_composite_input_set: failed to allocate the graphics set 1");
+
+        Write_composite_input_set();
+    }
+
+    void Renderer::Write_composite_input_set()
+    {
+        assert(composite_input_set != VK_NULL_HANDLE && "Write_composite_input_set: the set is not allocated");
+
+        // SHADER_READ_ONLY_OPTIMAL: the layout the composite subpass reads
+        // them in (the input attachment references of Vulkan_Render_Pass).
+        // No sampler: subpassLoad reads the texel of the current pixel.
+        std::array<VkDescriptorImageInfo, 2> image_infos{};
+
+        image_infos[0].sampler = VK_NULL_HANDLE;
+        image_infos[0].imageView = oit_resources.Get_accumulation_view();
+        image_infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        image_infos[1].sampler = VK_NULL_HANDLE;
+        image_infos[1].imageView = oit_resources.Get_revealage_view();
+        image_infos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        const std::array<uint32_t, 2> bindings = { Binding_Graphics_Pass::Oit_Accumulation, Binding_Graphics_Pass::Oit_Revealage };
+
+        std::array<VkWriteDescriptorSet, 2> writes{};
+
+        for (size_t i = 0; i < writes.size(); ++i)
+        {
+            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet = composite_input_set;
+            writes[i].dstBinding = bindings[i];
+            writes[i].dstArrayElement = 0;
+            writes[i].descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+            writes[i].descriptorCount = 1;
+            writes[i].pImageInfo = &image_infos[i];
+        }
+
+        vkUpdateDescriptorSets(device.Get_logical_device_handle(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
 
     // =========================================================
@@ -2367,8 +2639,9 @@ namespace Renderer_System
 
     void Renderer::Init_descriptor_sets()
     {
+        // Set 0 is shared by both contracts.
         std::array<VkDescriptorSetLayout, FRAMES_IN_FLIGHT> layouts;
-        layouts.fill(descriptor_layouts.Get(Descriptor_Set::Per_Frame));
+        layouts.fill(descriptor_layouts.Get(Descriptor_Set::Per_Frame, Pipeline_Kind::Graphics));
 
         VkDescriptorSetAllocateInfo alloc_info{};
         alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -2496,12 +2769,15 @@ namespace Renderer_System
 
         ++stats.frames;
 
-        if (gpu_timer.Read_intervals(_frame_slot, timer_intervals))
+        // A frame measured in the other timing mode (the switch changed
+        // while it was in flight) is not mixed into the averages.
+        if (gpu_timer.Read_frame(_frame_slot, timer_frame) && timer_frame.isolated == debug_settings.isolate_gpu_timings)
         {
             ++stats.timed_frames;
+            stats.total_ms_sum += timer_frame.total_ms;
+            stats.other_ms_sum += timer_frame.total_ms - timer_frame.top_level_ms;
 
-            for (uint32_t i = 0; i < GPU_TIMER_INTERVALS; ++i)
-                stats.gpu_ms_sum[i] += timer_intervals[i];
+            Accumulate_scope_timings();
         }
 
         stats.last_counters = counters;
@@ -2519,22 +2795,7 @@ namespace Renderer_System
 
             std::cout << std::fixed << std::setprecision(3);
 
-            if (stats.timed_frames > 0)
-            {
-                const double frames = static_cast<double>(stats.timed_frames);
-                const double procedural = stats.gpu_ms_sum[Timestamp_Frame_Start] / frames;
-                const double clusters = stats.gpu_ms_sum[Timestamp_After_Procedural] / frames;
-                const double culling = stats.gpu_ms_sum[Timestamp_After_Light_Clusters] / frames;
-                const double render_pass = stats.gpu_ms_sum[Timestamp_After_Culling] / frames;
-
-                std::cout << "[Renderer] GPU ms (average of " << stats.timed_frames << " frames): procedural " << procedural
-                    << " | light clusters " << clusters << " | culling " << culling << " | render pass " << render_pass
-                    << " | total " << (procedural + clusters + culling + render_pass) << "\n";
-            }
-            else
-            {
-                std::cout << "[Renderer] GPU timings unavailable (no timestamp support, or no frame measured yet).\n";
-            }
+            Print_gpu_timings();
 
             const Frame_Record& last = stats.last_record;
             const bool gpu_path = last.opaque_path == Opaque_Draw_Path::Gpu_Indirect || last.opaque_path == Opaque_Draw_Path::Gpu_Culled;
@@ -2554,10 +2815,119 @@ namespace Renderer_System
             std::cout.precision(previous_precision);
         }
 
-        stats.frames = 0;
-        stats.timed_frames = 0;
-        stats.gpu_ms_sum.fill(0.0);
+        Reset_statistics();
         stats.last_print = now;
+    }
+
+    void Renderer::Accumulate_scope_timings()
+    {
+        std::vector<Scope_Statistics>& accumulated = statistics.scopes;
+
+        // Merged in recording order: a scope already known keeps its place,
+        // a new one goes right after the scope that preceded it in this
+        // frame, so the print follows the order of the frame even when a
+        // scope (procedural, culling) is missing from the first frames.
+        size_t insert_at = 0;
+
+        for (const Gpu_Scope_Timing& timing : timer_frame.scopes)
+        {
+            auto it = std::find_if(accumulated.begin(), accumulated.end(), [&](const Scope_Statistics& _scope)
+                {
+                    return Same_scope_name(_scope.name, timing.name) && Same_scope_name(_scope.parent, timing.parent);
+                });
+
+            if (it == accumulated.end())
+            {
+                Scope_Statistics scope;
+                scope.name = timing.name;
+                scope.parent = timing.parent;
+                scope.depth = timing.depth;
+
+                it = accumulated.insert(accumulated.begin() + static_cast<std::ptrdiff_t>(std::min(insert_at, accumulated.size())), scope);
+            }
+
+            ++it->frames;
+            it->ms_sum += timing.ms;
+
+            insert_at = static_cast<size_t>(it - accumulated.begin()) + 1;
+        }
+    }
+
+    void Renderer::Print_gpu_timings() const
+    {
+        const Frame_Statistics& stats = statistics;
+
+        if (stats.timed_frames == 0)
+        {
+            std::cout << "[Renderer] GPU timings unavailable (no timestamp support, or no frame measured yet).\n";
+            return;
+        }
+
+        const double frames = static_cast<double>(stats.timed_frames);
+
+        // Every average is taken over all the measured frames, a scope
+        // missing from a frame counting 0 there, so the top-level scopes
+        // plus "other" add up to the total. A scope recorded in only some
+        // of the frames also shows its cost in those frames.
+        const auto print_scope = [&](const Scope_Statistics& _scope)
+            {
+                std::cout << (_scope.name ? _scope.name : "?") << " " << (_scope.ms_sum / frames);
+
+                if (_scope.frames < stats.timed_frames && _scope.frames > 0)
+                {
+                    std::cout << " (in " << _scope.frames << " of " << stats.timed_frames << " frames, "
+                        << (_scope.ms_sum / static_cast<double>(_scope.frames)) << " each)";
+                }
+            };
+
+        // Nested scopes follow their parent in brackets, at any depth.
+        const auto print_children = [&](const auto& _self, const Scope_Statistics& _parent) -> void
+            {
+                bool first = true;
+
+                for (const Scope_Statistics& child : stats.scopes)
+                {
+                    if (child.depth != _parent.depth + 1 || !Same_scope_name(child.parent, _parent.name))
+                        continue;
+
+                    std::cout << (first ? " [" : ", ");
+                    print_scope(child);
+                    _self(_self, child);
+                    first = false;
+                }
+
+                if (!first)
+                    std::cout << "]";
+            };
+
+        std::cout << "[Renderer] GPU ms";
+
+        if (debug_settings.isolate_gpu_timings)
+            std::cout << ", ISOLATED scopes (a full barrier before each: every scope measures its pass alone, the total is not a frame time)";
+
+        std::cout << ", average of " << stats.timed_frames << " frames: ";
+
+        for (const Scope_Statistics& scope : stats.scopes)
+        {
+            if (scope.depth != 0)
+                continue;
+
+            print_scope(scope);
+            print_children(print_children, scope);
+            std::cout << " | ";
+        }
+
+        // Barriers between scopes, the statistics copies and gaps.
+        std::cout << "other " << (stats.other_ms_sum / frames) << " | total " << (stats.total_ms_sum / frames) << "\n";
+    }
+
+    void Renderer::Reset_statistics()
+    {
+        statistics.frames = 0;
+        statistics.timed_frames = 0;
+        statistics.total_ms_sum = 0.0;
+        statistics.other_ms_sum = 0.0;
+        statistics.scopes.clear();
     }
 
     // =========================================================
@@ -2604,17 +2974,28 @@ namespace Renderer_System
         }
 
         if (settings.show_bounds != debug_settings.show_bounds)
-            std::cout << "[Renderer] Bounding spheres " << (settings.show_bounds ? "shown" : "hidden") << ".\n";
+            std::cout << "[Renderer] Bounding volumes " << (settings.show_bounds ? "shown" : "hidden") << ".\n";
 
         if (settings.print_stats != debug_settings.print_stats)
         {
             // The first print covers only frames measured from now on.
-            statistics.frames = 0;
-            statistics.timed_frames = 0;
-            statistics.gpu_ms_sum.fill(0.0);
+            Reset_statistics();
             statistics.last_print = std::chrono::steady_clock::now();
 
             std::cout << "[Renderer] Statistics " << (settings.print_stats ? "printed every second" : "off") << ".\n";
+        }
+
+        if (settings.isolate_gpu_timings != debug_settings.isolate_gpu_timings)
+        {
+            // Frames of the two modes are never averaged together.
+            Reset_statistics();
+            statistics.last_print = std::chrono::steady_clock::now();
+
+            std::cout << "[Renderer] GPU timing scopes "
+                << (settings.isolate_gpu_timings
+                    ? "isolated: a full barrier before each top-level scope, which measures its pass alone; frame times are not representative"
+                    : "not isolated: overlapping work is charged to the scope that finishes later")
+                << ".\n";
         }
 
         debug_settings = settings;
@@ -2626,7 +3007,7 @@ namespace Renderer_System
 
     std::vector<Pipeline_Config> Renderer::Build_pipeline_manifest() const
     {
-        return { opaque_config, transparent_config, bounds_config };
+        return { opaque_config, transparent_config, bounds_config, composite_config };
     }
 
 } // namespace Renderer_System

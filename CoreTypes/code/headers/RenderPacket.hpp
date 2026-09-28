@@ -15,12 +15,13 @@ namespace CoreTypes
     // Frustum
     // =========================================================
 
-    // The planes a bounding sphere is culled against, in WORLD space.
+    // The planes an object is culled against, in WORLD space.
     //
-    // Each plane stores its unit normal pointing INSIDE the frustum in
-    // xyz and its offset in w: a point p is on the inner side when
-    // dot(xyz, p) + w >= 0. The unit normal makes that value the signed
-    // distance to the plane, so it compares directly with a radius.
+    // Each plane stores its normal pointing INSIDE the frustum in xyz and
+    // its offset in w: a point p is on the inner side when
+    // dot(xyz, p) + w >= 0. The Extractor stores unit normals, which makes
+    // that value the signed distance to the plane; the culling test below
+    // does not depend on it.
     //
     // Five planes: left, right, bottom, top and near. There is no far
     // plane: the perspective projection is infinite. An orthographic
@@ -31,21 +32,58 @@ namespace CoreTypes
     // so a view that never filled it culls nothing.
     //
     // Built by the Extractor from the camera parameters; the Renderer
-    // uploads the same values for the GPU culling and tests the
-    // transparent items against them on the CPU.
+    // uploads the same values for the GPU culling (cull_objects.comp) and
+    // tests the transparent items against them on the CPU, both with the
+    // bounding ellipsoid test below.
     struct Frustum
     {
         static constexpr uint32_t PLANE_COUNT = 5;
 
         std::array<MathLib::Vector4, PLANE_COUNT> planes{};
 
-        // False when the sphere lies entirely on the outer side of one
-        // plane. A sphere crossing a plane (partly visible) is kept.
-        bool Intersects_sphere(const MathLib::Vector3& _center, float _radius) const
+        // Half-width, measured along _normal, of the ellipsoid that a local
+        // sphere of radius _local_radius becomes under _model: with M the
+        // upper 3x3 of _model (columns M0, M1, M2),
+        //   extent = _local_radius * |M^T n|,  M^T n = (M0.n, M1.n, M2.n).
+        // Exact for any affine matrix (non-uniform scale, shear from a
+        // rotated child under a non-uniformly scaled parent, reflections).
+        // Scales with |_normal| like the signed distance does.
+        //
+        // Mirrored by Bounding_ellipsoid_extent in mesh_table.glsl: the CPU
+        // and the GPU culling evaluate the same formula.
+        static float Ellipsoid_extent(const MathLib::Matrix4& _model, float _local_radius, const MathLib::Vector3& _normal)
         {
+            const MathLib::Vector3 transposed_normal(glm::dot(MathLib::Vector3(_model[0]), _normal),
+                                                     glm::dot(MathLib::Vector3(_model[1]), _normal),
+                                                     glm::dot(MathLib::Vector3(_model[2]), _normal));
+
+            return _local_radius * glm::length(transposed_normal);
+        }
+
+        // False when the bounding volume of a mesh lies entirely on the
+        // outer side of one plane. The volume is the mesh's local bounding
+        // sphere (_local_sphere: xyz = center, w = radius, mesh space)
+        // placed by _model, which is an ellipsoid; it is tested directly,
+        // never replaced by an enclosing world sphere: for every plane,
+        //   d = dot(n, M * c + t) + w       signed distance of the center,
+        //   r = Ellipsoid_extent(n)          half-width along n,
+        // and the object is outside when d < -r. A volume crossing a plane
+        // (partly visible) is kept. The test does not require unit
+        // normals: d and r scale alike.
+        //
+        // No world space sphere comes out of it. A consumer that needs one
+        // (occlusion against a depth pyramid, level of detail from the
+        // projected size) needs a conservative bound of the scale of the
+        // 3x3, e.g. Gershgorin on M^T M.
+        bool Intersects_ellipsoid(const MathLib::Matrix4& _model, const MathLib::Vector4& _local_sphere) const
+        {
+            const MathLib::Vector3 center = MathLib::Vector3(_model * MathLib::Vector4(MathLib::Vector3(_local_sphere), 1.0f));
+
             for (const MathLib::Vector4& plane : planes)
             {
-                if (glm::dot(MathLib::Vector3(plane), _center) + plane.w < -_radius)
+                const MathLib::Vector3 normal(plane);
+
+                if (glm::dot(normal, center) + plane.w < -Ellipsoid_extent(_model, _local_sphere.w, normal))
                     return false;
             }
 
@@ -142,9 +180,8 @@ namespace CoreTypes
     //   [56 - 63] pipeline_id  (8  bits, 256  pipelines max)  <- primary
     //   [48 - 55] material_id  (8  bits, 256  materials max)
     //   [32 - 47] mesh_gpu_id  (16 bits, 65 k meshes max)
-    //   [0  - 31] depth_bits   (32 bits, float made sortable as uint)
-    //             For opaques:      Depth_to_sortable_bits (near -> far)
-    //             For transparents: Depth_to_sortable_bits_back_to_front
+    //   [0  - 31] depth_bits   (32 bits, float made sortable as uint):
+    //             Depth_to_sortable_bits (near -> far), for both lists
     //
     // Sorting ascending therefore groups by pipeline -> material -> mesh, and
     // sorts by depth WITHIN each group.
@@ -153,6 +190,14 @@ namespace CoreTypes
     // front-to-back ordering is per-batch instead of global and some overdraw
     // comes back. That is the standard choice: a pipeline bind costs far
     // more than the overdraw it saves.
+    //
+    // Transparent items need no back-to-front order either: the Renderer
+    // composites them with weighted blended order-independent transparency,
+    // whose result does not depend on the draw order. A global back-to-front
+    // order would not be enough anyway: it cannot resolve objects that
+    // intersect, contain one another or overlap cyclically. Their depth
+    // bits only keep the order deterministic from frame to frame (the
+    // half-precision accumulation rounds differently in another order).
     //
     // The material_id field of the key is still 0: grouping draws by
     // material only pays off once materials bind per-draw state, and every
@@ -214,7 +259,8 @@ namespace CoreTypes
     // (lockstep now; double-buffered when pipelining is introduced).
     //
     // opaque_items / transparent_items: sorted by sort_key ascending
-    // before being handed to the Renderer (done in the extract).
+    // before being handed to the Renderer (done in the extract): grouped by
+    // pipeline, material and mesh, front-to-back inside each group.
     struct RenderPacket
     {
         RenderView                  view;
@@ -223,8 +269,8 @@ namespace CoreTypes
         // Comes from the active Camera_Component.
         MathLib::Vector4            clear_color = { 0.01f, 0.01f, 0.01f, 1.0f };
 
-        std::vector< Draw_Item >    opaque_items;       // sorted front-to-back
-        std::vector< Draw_Item >    transparent_items;  // sorted back-to-front
+        std::vector< Draw_Item >    opaque_items;       // grouped, front-to-back inside each group
+        std::vector< Draw_Item >    transparent_items;  // grouped like the opaque ones; composited order-independently
 
         std::vector< GPU_Light >    lights;
 
@@ -277,16 +323,9 @@ namespace CoreTypes
         return (bits & 0x80000000u) ? ~bits : (bits | 0x80000000u);
     }
 
-    // Same mapping with the order reversed, for lists drawn back-to-front.
-    inline constexpr uint32_t Depth_to_sortable_bits_back_to_front(float _depth)
-    {
-        return ~Depth_to_sortable_bits(_depth);
-    }
-
     static_assert(Depth_to_sortable_bits(-100.0f) < Depth_to_sortable_bits(-2.0f));
     static_assert(Depth_to_sortable_bits(-2.0f) < Depth_to_sortable_bits(0.0f));
     static_assert(Depth_to_sortable_bits(0.0f) < Depth_to_sortable_bits(2.0f));
     static_assert(Depth_to_sortable_bits(2.0f) < Depth_to_sortable_bits(100.0f));
-    static_assert(Depth_to_sortable_bits_back_to_front(100.0f) < Depth_to_sortable_bits_back_to_front(2.0f));
 
 } // namespace CoreTypes

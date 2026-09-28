@@ -59,9 +59,10 @@ namespace Renderer_System
             throw std::logic_error("Pipeline_Registry: emplace failed on a key that was not found");
 
         by_id.push_back(inserted->second.pipeline.Get_handle());
+        subpass_by_id.push_back(_config.subpass);
 
         std::cout << "[Pipeline_Registry] Built pipeline id=" << int(new_id)
-            << " (" << registry.size() << " total): "
+            << " (" << registry.size() << " total), subpass " << _config.subpass << ": "
             << _config.vertex_shader_path << " + "
             << _config.fragment_shader_path << "\n";
 
@@ -75,6 +76,13 @@ namespace Renderer_System
         if (_id >= by_id.size()) return VK_NULL_HANDLE;
 
         return by_id[_id];
+    }
+
+    uint32_t Pipeline_Registry::Get_subpass(uint8_t _id) const
+    {
+        if (_id >= subpass_by_id.size()) return INVALID_SUBPASS;
+
+        return subpass_by_id[_id];
     }
     // ---------- Warm_up ----------
     void Pipeline_Registry::Warm_up(const std::vector<Pipeline_Config>& _manifest)

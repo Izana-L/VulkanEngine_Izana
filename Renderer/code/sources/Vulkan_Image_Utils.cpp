@@ -130,6 +130,8 @@ namespace Renderer_System
                 { VK_FORMAT_FEATURE_BLIT_DST_BIT,                    "BLIT_DST" },
                 { VK_FORMAT_FEATURE_TRANSFER_SRC_BIT,                "TRANSFER_SRC" },
                 { VK_FORMAT_FEATURE_TRANSFER_DST_BIT,                "TRANSFER_DST" },
+                { VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT,            "COLOR_ATTACHMENT" },
+                { VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT,      "COLOR_ATTACHMENT_BLEND" },
             };
 
             std::string missing_names;

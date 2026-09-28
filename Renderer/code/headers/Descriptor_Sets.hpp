@@ -27,11 +27,27 @@ namespace Renderer_System
     namespace Descriptor_Set
     {
         inline constexpr uint32_t Per_Frame = 0;
-        inline constexpr uint32_t Per_Pass = 1;   // resources written by a compute pass
+        inline constexpr uint32_t Per_Pass = 1;   // resources of the passes; one layout per Pipeline_Kind (see below)
         inline constexpr uint32_t Per_Material = 2;   // global material table, written on registration
         inline constexpr uint32_t Bindless = 3;
         inline constexpr uint32_t Count = 4;
     }
+
+    // The two pipeline layout contracts of the engine. Sets 0, 2 and 3 use
+    // the same set layouts in both; set 1 does not:
+    //   Compute  - set 1 = Binding_Per_Pass: what the compute passes read
+    //              and write (procedural output, cluster boxes).
+    //   Graphics - set 1 = Binding_Graphics_Pass: the attachments the
+    //              composite subpass reads.
+    // Descriptor sets bound at VK_PIPELINE_BIND_POINT_GRAPHICS and at
+    // VK_PIPELINE_BIND_POINT_COMPUTE are independent, so the two set 1
+    // never disturb each other, and every graphics pipeline shares one
+    // layout, so binding sets for one never disturbs another.
+    enum class Pipeline_Kind : uint32_t
+    {
+        Graphics = 0,
+        Compute = 1
+    };
 
     // Bindings dentro del set 0.
     //
@@ -50,13 +66,24 @@ namespace Renderer_System
         inline constexpr uint32_t Draw_Count = 7;              // SSBO of Draw_Count_GPU, atomic draw counter of the culling pass
     }
 
-    // Bindings inside set 1. Visible to the compute stage only: graphics
-    // pipelines read the outputs of a pass through the bindless set, never
-    // through this one.
+    // Bindings inside set 1 of the compute pipeline layout. Visible to the
+    // compute stage only: graphics pipelines read the outputs of a compute
+    // pass through the bindless set, never through this one.
     namespace Binding_Per_Pass
     {
         inline constexpr uint32_t Procedural_Output = 0;   // STORAGE_IMAGE written by procedural.comp (layout GENERAL)
         inline constexpr uint32_t Cluster_AABBs = 1;       // SSBO of Cluster_AABB_GPU, view space, rebuilt when the projection changes
+    }
+
+    // Bindings inside set 1 of the graphics pipeline layout: the OIT
+    // targets (Vulkan_OIT_Resources) as input attachments of the composite
+    // subpass, fragment stage only. One set for every frame in flight,
+    // rewritten whenever the targets are recreated with the swapchain.
+    // Mirrored by oit_composite.frag.
+    namespace Binding_Graphics_Pass
+    {
+        inline constexpr uint32_t Oit_Accumulation = 0;   // INPUT_ATTACHMENT, input_attachment_index 0 (layout SHADER_READ_ONLY_OPTIMAL)
+        inline constexpr uint32_t Oit_Revealage = 1;      // INPUT_ATTACHMENT, input_attachment_index 1 (layout SHADER_READ_ONLY_OPTIMAL)
     }
 
     // Bindings inside set 2. One set for every frame: both tables are

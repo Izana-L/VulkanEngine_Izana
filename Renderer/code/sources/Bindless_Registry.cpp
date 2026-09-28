@@ -24,8 +24,10 @@ namespace Renderer_System
         // fragment stage; SAMPLER descriptors do not count against it. It
         // applies to each stage of Bindless_Reader_Stages separately, so
         // the margin covers the most loaded one:
-        //   fragment - set 0 (frame UBO, light SSBO) and the color
-        //              attachments;
+        //   fragment - set 0 (frame UBO and storage buffers), set 1 of the
+        //              graphics layout (the two OIT input attachments), set 2
+        //              (material table) and the color attachments (two in
+        //              the transparent subpass);
         //   compute  - set 0 and the descriptors of the pass's own set 1
         //              (e.g. the storage image it writes and the textures
         //              it reads).
