@@ -1,9 +1,9 @@
 #pragma once
 
-#define GLFW_INCLUDE_VULKAN
-#include <GLFW/glfw3.h>
+#include <vulkan/vulkan.h>
 
 #include <Geometry_Pool.hpp>
+#include <Gpu_Layouts.hpp>
 #include <MeshData.hpp>
 #include <Vector.hpp>
 
@@ -39,7 +39,7 @@ namespace Renderer_System
         MathLib::Vector3 bounds_center = { 0.0f, 0.0f, 0.0f };
         float            bounds_radius = 0.0f;
 
-        // Set by Renderer::Release_mesh. A released mesh is never drawn
+        // Set by Mesh_Registry::Release. A released mesh is never drawn
         // again; its range is returned to the pool when the frames in
         // flight that may still read it have completed.
         bool             released = false;
@@ -60,6 +60,10 @@ namespace Renderer_System
         // draw's entry in the object buffer. A non-zero value needs no
         // device feature on a direct draw.
         void Draw(VkCommandBuffer _command_buffer, uint32_t _first_instance) const;
+
+        // The record as the mesh table stores it (set 2): the geometry range
+        // in draw units and the bounding sphere.
+        Mesh_Info_GPU Make_table_entry() const;
 
         // The same draw as an indirect command, for a buffer consumed by
         // vkCmdDrawIndexedIndirect. A non-zero firstInstance in an

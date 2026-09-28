@@ -50,6 +50,18 @@ namespace Renderer_System
             static_cast<int32_t>(geometry.first_vertex), _first_instance);
     }
 
+    // ---------- Make_table_entry ----------
+    Mesh_Info_GPU Mesh_GPU::Make_table_entry() const
+    {
+        Mesh_Info_GPU entry{};
+        entry.bounding_sphere = MathLib::Vector4(bounds_center, bounds_radius);
+        entry.first_index = geometry.first_index;
+        entry.index_count = geometry.index_count;
+        entry.vertex_offset = static_cast<int32_t>(geometry.first_vertex);
+        entry.vertex_count = geometry.vertex_count;
+        return entry;
+    }
+
     // ---------- Make_indirect_command ----------
     VkDrawIndexedIndirectCommand Mesh_GPU::Make_indirect_command(uint32_t _first_instance) const
     {

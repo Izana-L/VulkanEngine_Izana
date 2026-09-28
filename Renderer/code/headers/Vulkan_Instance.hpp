@@ -1,8 +1,8 @@
 #pragma once
 
-#define GLFW_INCLUDE_VULKAN
-#include <GLFW/glfw3.h>
+#include <vulkan/vulkan.h>
 #include <Vulkan_Utils.hpp>
+#include <Validation_Mode.hpp>
 #include <atomic>
 #include <memory>
 #include <vector>
@@ -10,24 +10,6 @@
 
 namespace Renderer_System 
 {
-    // Validation level requested at instance creation.
-    //   Off          - no layers. The only option on machines without the
-    //                  Vulkan SDK.
-    //   Standard     - VK_LAYER_KHRONOS_validation: every API call is
-    //                  checked on the CPU.
-    //   Gpu_Assisted - Standard plus GPU-assisted validation (GPU-AV): the
-    //                  layer instruments the shaders and checks on the GPU
-    //                  what the CPU cannot see, such as out-of-range indices
-    //                  into descriptor arrays or reads of descriptors that
-    //                  were never written. Much slower; opt-in only.
-    // A level the system cannot provide degrades to the previous one with
-    // a warning; it never makes construction fail.
-    enum class Validation_Mode : uint8_t
-    {
-        Off,
-        Standard,
-        Gpu_Assisted
-    };
     // Vulkan_instance: owns the VkInstance, the root object of Vulkan.
     // Also manages validation layers and the debug messenger, which report
     // Vulkan API misuse (invalid parameters, resource leaks, etc.) directly

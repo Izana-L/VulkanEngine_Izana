@@ -1,7 +1,6 @@
 #pragma once
 
-#define GLFW_INCLUDE_VULKAN
-#include <GLFW/glfw3.h>
+#include <vulkan/vulkan.h>
 
 #include <Vulkan_Buffer_Utils.hpp>
 #include <Vertex.hpp>
@@ -40,6 +39,26 @@ namespace Renderer_System
         }
     };
 
+    // Geometry_Allocator: where geometry ranges come from and go back to.
+    // Geometry_Pool is the implementation that owns real buffers; consumers
+    // that only do accounting (Mesh_Registry) depend on this interface, so
+    // they can run against a stand-in without a device.
+    class Geometry_Allocator
+    {
+    public:
+
+        virtual ~Geometry_Allocator() = default;
+
+        // Reserves _vertex_count vertices and _index_count indices, both
+        // non-zero. Strong guarantee: throws std::runtime_error, with the
+        // allocator unchanged, when the request does not fit.
+        virtual Geometry_Range Allocate(uint32_t _vertex_count, uint32_t _index_count) = 0;
+
+        // Returns _range and resets it. Safe on an invalid (default or
+        // already freed) range.
+        virtual void Free(Geometry_Range& _range) = 0;
+    };
+
     // Geometry_Pool: the vertex and index buffers every static mesh shares,
     // so a frame binds geometry once and any number of draws, direct or
     // indirect, address their mesh through firstIndex / vertexOffset.
@@ -70,11 +89,12 @@ namespace Renderer_System
     // copy visible to the vertex input stage with a barrier.
     //
     // Freeing is also the caller's responsibility to schedule: a range may
-    // only be freed once no pending command buffer draws from it (the
-    // Renderer defers it by FRAMES_IN_FLIGHT frames).
+    // only be freed once no pending command buffer draws from it
+    // (Mesh_Registry defers it until the frames that may read it have
+    // completed).
     //
     // Not copyable or movable: owns the two buffers and the two blocks.
-    class Geometry_Pool
+    class Geometry_Pool final : public Geometry_Allocator
     {
     public:
 
@@ -87,7 +107,7 @@ namespace Renderer_System
         // Capacities are in elements. Throws std::invalid_argument if a
         // capacity is zero.
         Geometry_Pool(VmaAllocator _allocator, uint32_t _vertex_capacity, uint32_t _index_capacity);
-        ~Geometry_Pool();
+        ~Geometry_Pool() override;
 
         Geometry_Pool(const Geometry_Pool&) = delete;
         Geometry_Pool& operator=(const Geometry_Pool&) = delete;
@@ -98,11 +118,11 @@ namespace Renderer_System
         // non-zero. Strong guarantee: throws std::runtime_error, with the
         // pool unchanged, when either block has no contiguous free range
         // large enough.
-        Geometry_Range Allocate(uint32_t _vertex_count, uint32_t _index_count);
+        Geometry_Range Allocate(uint32_t _vertex_count, uint32_t _index_count) override;
 
         // Returns _range to the pool and resets it. Safe on an invalid
         // (default or already freed) range.
-        void Free(Geometry_Range& _range);
+        void Free(Geometry_Range& _range) override;
 
         // Binds the vertex buffer (binding 0) and the index buffer
         // (VK_INDEX_TYPE_UINT32). Once per command buffer: every draw from

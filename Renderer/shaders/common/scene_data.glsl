@@ -14,7 +14,7 @@
 // the vertex shader forwards to the fragment shader as a flat varying.
 //
 // Both structs are EXACT mirrors of their C++ counterparts in
-// Frame_Data.hpp (Object_GPU, Material_GPU), std430. A field added on one
+// Gpu_Layouts.hpp (Object_GPU, Material_GPU), std430. A field added on one
 // side and not the other shifts every following entry of the array; the
 // C++ side pins sizes and offsets with static_asserts.
 
@@ -47,7 +47,7 @@ struct Material
     uint _pad1;                 // offset 28
 };
 
-// Unsized arrays: raising MAX_OBJECTS or MAX_MATERIALS (Frame_Data.hpp)
+// Unsized arrays: raising MAX_OBJECTS or MAX_MATERIALS (Renderer_Limits.hpp)
 // does not touch this file. readonly: no graphics shader writes them.
 layout(set = 0, binding = 2, std430) readonly buffer Object_Buffer
 {

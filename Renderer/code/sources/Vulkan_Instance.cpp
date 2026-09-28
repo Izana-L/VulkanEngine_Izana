@@ -1,5 +1,12 @@
 #include <Vulkan_Instance.hpp>
 #include <Descriptor_Sets.hpp>
+
+// GLFW reports the instance extensions the platform needs for a surface.
+// Together with Vulkan_Surface.cpp this is the only place of the Renderer
+// that includes it.
+#define GLFW_INCLUDE_VULKAN
+#include <GLFW/glfw3.h>
+
 #include <array>
 #include <stdexcept>
 #include <iostream>

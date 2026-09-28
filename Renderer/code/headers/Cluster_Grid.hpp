@@ -1,6 +1,7 @@
 #pragma once
 
-#include <Frame_Data.hpp>
+#include <Renderer_Limits.hpp>
+#include <Gpu_Layouts.hpp>
 
 #include <Matrix.hpp>
 
@@ -12,7 +13,8 @@ namespace Renderer_System::Cluster_Grid
     // CPU half of the clustered lighting: the depth slice mapping shared
     // with mesh.frag, and the view space boxes of the clusters that
     // cluster_lights.comp tests lights against. Grid dimensions and
-    // distances are the CLUSTER_* constants of Frame_Data.hpp.
+    // distances are the CLUSTER_* constants of Renderer_Limits.hpp. Pure CPU
+    // math: the header depends on no Vulkan type.
     //
     // The boxes depend only on the projection and on the near plane: they
     // are rebuilt when either changes (resize, field of view, aspect

@@ -1,7 +1,7 @@
 #pragma once
 
-#define GLFW_INCLUDE_VULKAN
-#include <GLFW/glfw3.h>
+#include <vulkan/vulkan.h>
+
 #include <Descriptor_Layout_Cache.hpp>
 #include <Vulkan_Device.hpp>
 
@@ -21,8 +21,8 @@ namespace Renderer_System
     //   set 1 : input attachments of the composite subpass (Binding_Graphics_Pass)
     //   set 2 : material and mesh tables
     //   set 3 : global bindless texture array (Bindless_Registry)
-    //   push constant : Push_Constants (Frame_Data.hpp), 96 bytes,
-    //                   vertex + fragment stages
+    //   no push constant range: graphics shaders read everything per draw
+    //   from the object, material and mesh tables (sets 0 and 2)
     //
     // Compute pipelines use a second instance: the same set layouts
     // except set 1, the compute pass resources (Binding_Per_Pass), and
@@ -42,8 +42,8 @@ namespace Renderer_System
     public:
         // The graphics contract. The set layouts belong to
         // Descriptor_Layout_Cache. This class only composes the
-        // VkPipelineLayout from the four of them and adds the push constant
-        // range (Push_Constants in Frame_Data.hpp, both stages).
+        // VkPipelineLayout from the four of them, without a push constant
+        // range.
         Pipeline_Layout(const Vulkan_Device& _device, const Descriptor_Layout_Cache& _layouts);
 
         // The four set layouts of the _kind contract, with a single push

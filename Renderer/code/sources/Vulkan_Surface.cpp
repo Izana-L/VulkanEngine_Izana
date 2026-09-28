@@ -1,5 +1,11 @@
 #include <Vulkan_Surface.hpp>
 #include <Vulkan_Utils.hpp>
+
+// glfwCreateWindowSurface is the only GLFW call of the Renderer besides
+// the instance extension query in Vulkan_Instance.cpp.
+#define GLFW_INCLUDE_VULKAN
+#include <GLFW/glfw3.h>
+
 #include <stdexcept>
 #include <iostream>
 #include <cassert>

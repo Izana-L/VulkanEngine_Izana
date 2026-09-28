@@ -1,6 +1,5 @@
 #include <Pipeline_Layout.hpp>
 #include <Vulkan_Utils.hpp>
-#include <Frame_Data.hpp>
 
 #include <cassert>
 #include <stdexcept>
@@ -9,18 +8,12 @@
 namespace Renderer_System
 {
 
-    // One range covering the whole Push_Constants block for both stages:
-// the vertex shader reads the model matrix, the fragment shader reads
-// the base color and the texture index. The size is taken from the C++
-// mirror so the two cannot drift apart.
+    // The graphics contract declares no push constant range: draws are
+    // parameterized by their entry in the object buffer (firstInstance).
     Pipeline_Layout::Pipeline_Layout(const Vulkan_Device& _device,
         const Descriptor_Layout_Cache& _layouts)
-        : Pipeline_Layout(_device, _layouts, Pipeline_Kind::Graphics,
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            static_cast<uint32_t>(sizeof(Push_Constants)))
+        : Pipeline_Layout(_device, _layouts, Pipeline_Kind::Graphics, 0, 0)
     {
-        static_assert(sizeof(Push_Constants) <= 128,
-            "Push_Constants exceeds the 128-byte minimum maxPushConstantsSize");
     }
 
     Pipeline_Layout::Pipeline_Layout(const Vulkan_Device& _device,

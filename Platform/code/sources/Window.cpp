@@ -1,4 +1,10 @@
 #include "Window.hpp"
+
+// No graphics API header is needed here: the window is created without a
+// client API and Vulkan surfaces are created by the Renderer.
+#define GLFW_INCLUDE_NONE
+#include <GLFW/glfw3.h>
+
 #include <stdexcept>
 #include <iostream>
 #include <cassert>

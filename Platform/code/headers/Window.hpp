@@ -1,11 +1,12 @@
 #pragma once
 
-#define GLFW_INCLUDE_VULKAN
-#include <GLFW/glfw3.h>
-
 #include <string>
 #include <cstdint>
 #include <functional>
+
+// Opaque GLFW window type: only pointers to it appear in this header, so
+// including Window.hpp does not pull in GLFW (or Vulkan).
+struct GLFWwindow;
 
 namespace Platform {
 

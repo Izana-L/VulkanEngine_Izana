@@ -1,7 +1,7 @@
 #ifndef FRAME_SET_GLSL
 #define FRAME_SET_GLSL
 
-// EXACT mirror of Renderer_System::Frame_UBO (Frame_Data.hpp), std140.
+// EXACT mirror of Renderer_System::Frame_UBO (Gpu_Layouts.hpp), std140.
 // A field added here and not there (or the other way round) shifts every
 // following offset without any warning. Both are edited in the same
 // commit, always, and the C++ side pins the offsets with static_asserts.
@@ -73,7 +73,7 @@ const int LIGHT_TYPE_POINT       = 1;
 const int LIGHT_TYPE_SPOT        = 2;
 
 // Unsized array: what an SSBO allows and a UBO does not. Raising the
-// buffer capacity (MAX_LIGHTS in Frame_Data.hpp) does not touch this file.
+// buffer capacity (MAX_LIGHTS in Renderer_Limits.hpp) does not touch this file.
 // readonly: the shader never writes, and saying so lets the driver optimize.
 //
 // Order: the frame.cluster_grid.w directional lights first, then the

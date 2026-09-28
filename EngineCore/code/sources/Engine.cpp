@@ -271,7 +271,7 @@ namespace EngineCore
 
         // Material with the UV checker as albedo. The texture travels the
         // whole bindless path: Image_Loader -> Upload_texture -> bindless
-        // index -> Material_Component -> push constant -> mesh.frag.
+        // index -> Material_Component -> material table -> mesh.frag.
         // A missing file is reported and the sphere stays untextured.
         ECS::Material_Component sphere_material;
 
