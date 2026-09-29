@@ -2,6 +2,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include <stdexcept>
 #include <string>
 #include <cstdint>
 
@@ -20,17 +21,40 @@ namespace Renderer_System::Vulkan_Utils
     std::string Vk_result_to_string(int32_t _result);
 
     // Converts a VkFormat into a readable string. Only covers the formats
-    // this engine can realistically negotiate for the swapchain; anything
-    // else falls through to the raw numeric code.
+    // this engine can realistically negotiate (swapchain and depth buffer);
+    // anything else falls through to the raw numeric code.
     std::string Vk_format_to_string(int32_t _format);
 
     // True if the format applies the automatic linear -> sRGB encode on
     // write. If it does, the fragment shader must NOT apply gamma by hand.
     bool Is_srgb_format(int32_t _format);
 
+    // The exception Check and Check_success throw: a std::runtime_error
+    // that also carries the VkResult that caused it, so a handler can tell
+    // a lost device (VK_ERROR_DEVICE_LOST, after which no Vulkan call can be
+    // relied on) from an error the program can recover from, without
+    // parsing the message.
+    class Vulkan_Error : public std::runtime_error
+    {
+    public:
+
+        Vulkan_Error(VkResult _result, const std::string& _message)
+            : std::runtime_error(_message), result(_result)
+        {
+        }
+
+        VkResult Get_result() const noexcept { return result; }
+
+        bool Is_device_lost() const noexcept { return result == VK_ERROR_DEVICE_LOST; }
+
+    private:
+
+        VkResult result;
+    };
+
     // Result checking, in one place instead of one copy per call site.
     //
-    // Check(): throws std::runtime_error("<what>: <readable result>") when
+    // Check(): throws Vulkan_Error("<what>: <readable result>") when
     // _result is an ERROR code (negative). Success codes that carry
     // information (VK_SUBOPTIMAL_KHR, VK_INCOMPLETE, VK_TIMEOUT,
     // VK_NOT_READY) pass through and are returned, so callers that need
@@ -39,7 +63,7 @@ namespace Renderer_System::Vulkan_Utils
     // GPU reset into a visible failure.
     VkResult Check(VkResult _result, const char* _what);
 
-    // Strict variant: anything other than VK_SUCCESS throws.
+    // Strict variant: anything other than VK_SUCCESS throws Vulkan_Error.
     void Check_success(VkResult _result, const char* _what);
 
 }

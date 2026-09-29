@@ -21,6 +21,10 @@ namespace Renderer_System
 
     Upload_Batch_Result Renderer::Impl::Upload_batch(const Upload_Batch& _batch)
     {
+        // An upload waits for the frames in flight and for its own transfer:
+        // on a lost device it fails at once instead.
+        Require_not_lost("Upload_batch");
+
         Upload_Batch_Result result;
 
         const size_t mesh_count = _batch.meshes.size();
@@ -139,6 +143,9 @@ namespace Renderer_System
         }
         catch (...)
         {
+            // A lost device is final for the whole Renderer.
+            Note_current_failure();
+
             // Nothing of this batch reached the GPU in a usable state: wait
             // for the device (the transfer either never ran or was waited
             // for), release the staging and command buffers, give back the
@@ -155,8 +162,9 @@ namespace Renderer_System
         }
 
         // -- Post-upload --
-        // The fence is signaled, so the GPU has consumed every staging
-        // buffer in the batch and they can all be freed now.
+        // The transfer has completed (Submit_and_wait returned), so the GPU
+        // has consumed every staging buffer in the batch and they can all be
+        // freed now.
         upload_context.End(transfer_cmd);
 
         for (size_t i = 0; i < mesh_count; ++i)
@@ -241,13 +249,9 @@ namespace Renderer_System
         if (frames.empty())
             return;
 
-        std::array<VkFence, FRAMES_IN_FLIGHT> fences{};
-
-        for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; ++i)
-            fences[i] = frames[i].in_flight_fence;
-
-        VK_CHECK(vkWaitForFences(device.Get_logical_device_handle(), FRAMES_IN_FLIGHT, fences.data(), VK_TRUE, UINT64_MAX),
-            "Wait_for_frames_in_flight: wait for the frame fences");
+        // The last submission completing means all of them did: the serials
+        // of the timeline semaphore are monotonic.
+        Wait_for_serial(timeline.Get_submitted_serial(), "Wait_for_frames_in_flight: wait for the last frame submission");
 
         // Every submitted frame has completed: released geometry can go.
         timeline.Mark_all_complete();

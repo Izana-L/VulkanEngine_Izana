@@ -57,9 +57,14 @@ namespace Renderer_System
     //                  culling frustum get no command (milestone 4.2), and
     //                  the transparent items are culled on the CPU against
     //                  the same planes (milestone 4.3).
-    // The GPU paths need every opaque item on one pipeline (one command
-    // bucket); a frame that mixes opaque pipelines, or has more opaque
-    // objects than maxDrawIndirectCount, uses Cpu_Indirect instead.
+    // The GPU paths split the opaque objects into buckets, one per pipeline
+    // and per triangle winding (objects with a negative determinant are
+    // drawn with the opposite front face), and issue one indirect draw per
+    // bucket. A frame that needs more than MAX_DRAW_BUCKETS buckets, or a
+    // bucket with more objects than maxDrawIndirectCount, uses Cpu_Indirect
+    // instead. Only Gpu_Culled asks for culling, wherever it is done: if
+    // that frame falls back to Cpu_Indirect, the opaque and the transparent
+    // items are both culled on the CPU.
     enum class Opaque_Draw_Path : uint32_t
     {
         Direct = 0,

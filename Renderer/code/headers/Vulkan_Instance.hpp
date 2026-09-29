@@ -18,6 +18,11 @@ namespace Renderer_System
     // This is the first Vulkan object created and the last one destroyed -
     // everything else in the Renderer depends on it, directly or indirectly.
     //
+    // The instance is created with API version 1.3 or not at all. The
+    // version that gates the device functionality is the minimum of the
+    // instance version and the device version, so an instance below 1.3
+    // would make 1.3 core functions invalid on a 1.3 device.
+    //
     // Instance extensions are negotiated against what the loader reports,
     // never assumed:
     //   - the surface extensions GLFW needs are mandatory;
@@ -143,9 +148,9 @@ namespace Renderer_System
         // True if the named extension was enabled on this instance.
         bool Is_extension_enabled(const char* _name) const;
 
-        // The actual Vulkan API version this instance was created with.
-        // May be lower than the version requested in the constructor if
-        // the system's driver doesn't support it.
+        // The Vulkan API version this instance was created with: always
+        // Vulkan 1.3. The constructor throws when the loader offers less,
+        // so the instance is never created with a lower version.
         uint32_t Get_api_version() const;
 
     private:
@@ -155,11 +160,12 @@ namespace Renderer_System
         // to avoid duplicating this cleanup logic in two places.
         void Destroy();
 
-        // Queries the highest Vulkan API version supported by the system's
-        // loader/driver, and returns the version we should actually request:
-        // either what we asked for, or a lower version if that's all the
-        // system supports.
-        uint32_t Determine_api_version(uint32_t _requested_version) const;
+        // Checks that the system's loader supports at least
+        // _required_version and logs the highest version it reports.
+        // Throws std::runtime_error, naming the detected and the required
+        // version, when it does not: the instance is never degraded to a
+        // lower version.
+        void Require_api_version(uint32_t _required_version) const;
 
         // Returns the list of validation layers to request (just the
         // standard Khronos validation layer for now - see the .cpp for

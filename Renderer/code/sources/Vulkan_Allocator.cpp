@@ -19,12 +19,12 @@ namespace Renderer_System
         allocator_info.device = _device.Get_logical_device_handle();
         allocator_info.instance = _instance.Get_handle();
 
-        // CRITICAL: must match what the instance was ACTUALLY created with,
-        // not what we requested. Vulkan_Instance::Determine_api_version()
-        // silently falls back on older drivers, and telling VMA 1.3 on a
-        // 1.1 instance makes it call functions that don't exist.
-        // Leaving this at 0 would make VMA assume 1.0 and lose the
-        // dedicated-allocation / memory-budget extensions.
+        // Must match the version the instance was created with. The
+        // instance is always created with Vulkan 1.3 (it throws when the
+        // loader offers less), so VMA is told 1.3 and may call the core
+        // functions that replaced the dedicated-allocation and
+        // memory-budget extensions. Leaving this at 0 would make VMA assume
+        // 1.0 and lose them.
         allocator_info.vulkanApiVersion = _instance.Get_api_version();
 
         // pVulkanFunctions is left null on purpose: the Game project links

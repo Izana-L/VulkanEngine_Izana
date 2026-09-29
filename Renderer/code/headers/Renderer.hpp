@@ -64,10 +64,21 @@ namespace Renderer_System
     //
     // Swapchain recreation happens for two reasons, both handled inside:
     //   - the window reported a resize (Notify_framebuffer_resized, called
-    //     by the engine loop from Window::Consume_resized_flag); the
-    //     swapchain is rebuilt on the next Recreate_swapchain_if_needed()
-    //     or Render() call, before the frame's aspect ratio is computed;
-    //   - the driver reported OUT_OF_DATE / SUBOPTIMAL.
+    //     by the engine loop from Window::Consume_resized_flag);
+    //   - the driver reported OUT_OF_DATE / SUBOPTIMAL from an acquire or a
+    //     present.
+    // In both cases Render only records that a recreation is pending and
+    // skips or finishes its frame; the swapchain is rebuilt by
+    // Recreate_swapchain_if_needed(), which the engine loop calls before it
+    // extracts the frame, so the aspect ratio of the projection and the
+    // viewport of the frame come from the same extent. Rebuilding never
+    // waits for window events: a minimized window is reported by
+    // Recreate_swapchain_if_needed() returning false.
+    //
+    // A frame is a transaction. If Render throws, the acquired image and
+    // the semaphore signal of the failed frame have been given back, and
+    // the next Render call works. The exception is for the caller to log;
+    // it is only final when Is_lost() is true.
     //
     // Frame structure, everything GPU-driven recorded before the render
     // pass:
@@ -259,11 +270,17 @@ namespace Renderer_System
         // loop when Window::Consume_resized_flag() reports a resize.
         void Notify_framebuffer_resized();
 
-        // Rebuilds the swapchain if a resize was notified and the window
-        // currently has a non-zero framebuffer. Returns true if the
-        // swapchain is usable afterwards (false while minimized).
+        // Rebuilds the swapchain if a recreation is pending (a resize was
+        // notified, or the driver reported the swapchain out of date) and
+        // the window currently has a non-zero framebuffer. Returns true if
+        // the swapchain is usable afterwards (false while minimized).
         // The engine loop calls it before extracting the frame, so the
         // aspect ratio and the viewport come from the same extent.
+        //
+        // The rebuild is all or nothing. If it throws (for example, out of
+        // memory), the recreation stays pending, Render acquires nothing,
+        // and the next call tries again. Throws at once when the Renderer
+        // is lost and a recreation is pending.
         bool Recreate_swapchain_if_needed();
 
         // Size of the images being rendered into: the swapchain extent.
@@ -278,8 +295,26 @@ namespace Renderer_System
         // Draws one frame from the given RenderPacket.
         // Handles frame-in-flight synchronization, command recording,
         // submission, and presentation internally.
-        // On swapchain out-of-date (resize), recreates it and skips the frame.
+        // On swapchain out-of-date (resize), marks the swapchain for
+        // recreation and skips the frame. While a recreation is pending
+        // (or the window is minimized) it draws nothing.
+        //
+        // Throws when the frame fails. Everything the failed frame did to
+        // the GPU and to the presentation is undone before the exception
+        // leaves, so the next call can succeed, unless Is_lost() is true:
+        // then it throws at once, every time.
         void Render(const CoreTypes::RenderPacket& _packet);
+
+        // =========================================================
+        // Device loss
+        // =========================================================
+
+        // True when the device was lost (VK_ERROR_DEVICE_LOST) or a failed
+        // frame could not be undone. Final: Render, the uploads and the
+        // swapchain recreation throw at once, without waiting for the GPU,
+        // and the Renderer can only be destroyed. Checked by the engine
+        // loop after a failure to decide whether to go on.
+        bool Is_lost() const;
 
     private:
 

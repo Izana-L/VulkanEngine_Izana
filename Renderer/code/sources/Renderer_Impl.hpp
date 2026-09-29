@@ -16,6 +16,7 @@
 #include <Vulkan_Depth_Resources.hpp>
 #include <Vulkan_OIT_Resources.hpp>
 #include <Vulkan_Framebuffer.hpp>
+#include <Vulkan_Handles.hpp>
 #include <Vulkan_Pipeline.hpp>
 #include <Vulkan_Compute_Pipeline.hpp>
 #include <Vulkan_Debug_Utils.hpp>
@@ -43,6 +44,8 @@
 #include <Draw_List_Builder.hpp>
 #include <Frame_Statistics.hpp>
 
+#include <Matrix.hpp>
+
 #include <array>
 #include <cstdint>
 #include <optional>
@@ -50,6 +53,39 @@
 
 namespace Renderer_System
 {
+
+    // =========================================================
+    // Frame_Effects
+    // =========================================================
+
+    // Frame_Effects: what the recording of a frame leaves pending until the
+    // frame is submitted.
+    //
+    // A state that means "this is already on the GPU" cannot change when a
+    // command is recorded: the frame can still fail before its
+    // vkQueueSubmit (an exception while recording, a failed submit), and
+    // nothing recorded in it will ever run. Record_command_buffer describes
+    // such effects here, Render applies them after a successful submit
+    // (Apply_effects), and the recovery of a failed frame discards them. A
+    // state marked done while recording claims work the GPU never received,
+    // and the following frames would skip it.
+    //
+    // Any new state of that kind, for example a Storage_Image recreated
+    // after a resize, is confirmed through this structure and never at
+    // recording time.
+    struct Frame_Effects
+    {
+        // The frame recorded the procedural pass: once its submit
+        // succeeds, the procedural image is up to date.
+        bool             procedural_recorded = false;
+
+        // The frame recorded the update of the cluster boxes for
+        // cluster_projection and cluster_near_plane
+        // (Light_Clusters::Commit confirms them).
+        bool             cluster_boxes_recorded = false;
+        MathLib::Matrix4 cluster_projection{ 0.0f };
+        float            cluster_near_plane = 0.0f;
+    };
 
     // =========================================================
     // Renderer::Impl
@@ -63,6 +99,13 @@ namespace Renderer_System
     // textures) is gone before it, and the allocator is gone before the
     // device. The synchronization of presentation is declared after the
     // swapchain, so its objects are destroyed before it.
+    //
+    // A frame is a transaction (see Render): it is either submitted whole,
+    // or what it already did to the GPU and to the presentation (the
+    // acquired image and the semaphore of its acquire) is undone and the
+    // next Render works. When even the undoing fails, or the device is
+    // lost, the Renderer is "lost": every operation that would touch the
+    // GPU throws at once instead of waiting for work that will never end.
     struct Renderer::Impl
     {
         // =====================================================
@@ -102,8 +145,9 @@ namespace Renderer_System
         // Vulkan core
         // =====================================================
 
-        // The window is needed after construction to know whether the
-        // framebuffer has a size at all (a minimized window cannot have a
+        // The window is needed after construction to read the size of the
+        // framebuffer (the swapchain does not know the window) and to know
+        // whether it has one at all (a minimized window cannot have a
         // swapchain).
         const Platform::Window& window;
 
@@ -203,7 +247,9 @@ namespace Renderer_System
         uint8_t                 composite_pipeline_id = 0;
 
         // Rasterization state shared by every batch; the transparent pass
-        // only overrides depth writes.
+        // only overrides depth writes. front_face is the winding of the
+        // objects whose transform keeps it; the mirrored ones use the
+        // opposite (Draw_List_Builder).
         Raster_State            raster_state;
 
         // Shared sampler configurations, deduplicated.
@@ -214,6 +260,16 @@ namespace Renderer_System
         // =====================================================
 
         Frame_Timeline          timeline;
+
+        // Timeline semaphore that tracks the progress of the frames: every
+        // submission of a frame signals the next serial of `timeline`, so a
+        // serial N has completed when the semaphore reached N. Waiting for
+        // a frame slot is a wait for the serial of its last submission,
+        // which returns at once for a slot that never submitted. Nothing
+        // has to be reset before a submit, so a failed submit can never
+        // leave a wait that no submission will satisfy.
+        Unique_Semaphore        frame_semaphore;
+
         Upload_Context          upload_context;
         Material_Table          material_table;
         Draw_List_Builder       draw_list;
@@ -288,8 +344,9 @@ namespace Renderer_System
         // records the procedural pass. Set by Init_procedural_pass; to be
         // set again whenever the content changes (new parameters of the
         // pass, or the image recreated). Cleared only after the submit of a
-        // frame that recorded the pass succeeded, so a recording that
-        // throws or a failed submit leaves the pass for the next frame.
+        // frame that recorded the pass succeeded (Frame_Effects, applied by
+        // Apply_effects), so a recording that throws or a failed submit
+        // leaves the pass for the next frame.
         //
         // An animated texture (milestone 1.3) changes every frame and would
         // keep the flag set, bringing the serialization back; it then needs
@@ -340,9 +397,23 @@ namespace Renderer_System
         // and whenever the count changes, not on every frame.
         uint32_t                reported_light_overflow = 0;
 
-        // Set by Notify_framebuffer_resized, consumed by
-        // Recreate_swapchain_if_needed.
-        bool                    framebuffer_resized = false;
+        // The swapchain has to be rebuilt: set by Notify_framebuffer_resized
+        // and whenever the driver reports it out of date or suboptimal,
+        // cleared only when a recreation completed. While it is set, Render
+        // acquires nothing, like a minimized window: a recreation that
+        // failed leaves the objects that depend on the swapchain unusable
+        // and this flag set, and the next iteration of the loop retries.
+        // Only Recreate_swapchain_if_needed acts on it.
+        bool                    swapchain_recreation_pending = false;
+
+        // The device is lost, or the recovery of a failed frame failed (see
+        // Is_lost in Renderer.hpp). Never cleared.
+        bool                    device_lost = false;
+
+        // vkReleaseSwapchainImagesKHR (or its EXT predecessor), loaded when
+        // swapchain_maintenance1 is enabled; null otherwise. Gives back an
+        // image that was acquired and never presented.
+        PFN_vkReleaseSwapchainImagesKHR release_swapchain_images = nullptr;
 
         // =====================================================
         // Construction
@@ -422,60 +493,172 @@ namespace Renderer_System
         void Release_mesh(uint32_t _gpu_id);
         uint32_t Register_material(const Material_Desc& _desc);
 
-        // Blocks until every submitted frame has completed (the fences of
-        // all frame slots), then frees the retired geometry. Used before
-        // an upload writes buffers that frames in flight read.
+        // Blocks until every submitted frame has completed (the serial of
+        // the last submission is reached), then frees the retired geometry.
+        // Used before an upload writes buffers that frames in flight read.
         void Wait_for_frames_in_flight();
 
         // =====================================================
         // Frame
         // =====================================================
 
+        // Draws one frame as a transaction:
+        //   1. wait for the slot: the serial of its last submission;
+        //   2. the CPU work that does not depend on the swapchain image
+        //      (Prepare_frame): draw lists, object buffer, uniforms. It
+        //      comes before the acquire so that a failure there holds no
+        //      image, and an acquired image is held for as little time as
+        //      possible;
+        //   3. acquire the image;
+        //   4. the protected region, up to and including vkQueueSubmit. If
+        //      anything in it throws, Recover_acquired_image undoes the
+        //      acquire (the semaphore signal pending on the slot, and the
+        //      image), the effects of the frame are discarded, and the
+        //      exception propagates;
+        //   5. after the submit the frame is committed: its effects are
+        //      applied (Apply_effects), then the present.
+        // The slot advances in every case once the acquire succeeded.
+        // Render does not recreate the swapchain in reaction to what the
+        // acquire or the present report: an out-of-date or suboptimal
+        // result sets swapchain_recreation_pending and the loop recreates
+        // it before the next frame (Recreate_swapchain_if_needed). The only
+        // recreation inside Render is the one at its start, for a pending
+        // request the loop did not apply (a safety net for callers that
+        // bypass the loop); it never blocks.
         void Render(const CoreTypes::RenderPacket& _packet);
 
-        // Copies the packet's view and lights into the frame's mapped buffers.
+        // The body of Render; Render adds the marking of a lost device.
+        void Render_frame(const CoreTypes::RenderPacket& _packet);
+
+        // The CPU work of the frame that does not depend on the swapchain
+        // image: the culling frustum, the draw lists and the object buffer,
+        // the CPU-written indirect commands when the path needs them, and
+        // the uniforms. Runs after the wait for the slot.
+        void Prepare_frame(Frame_Data& _frame, const CoreTypes::RenderPacket& _packet);
+
+        // Copies the packet's view and lights into the frame's mapped
+        // buffers, together with the draw buckets of the frame.
         void Write_frame_uniforms(Frame_Data& _frame, const CoreTypes::RenderPacket& _packet);
 
         // Records all render commands for one frame into the command
-        // buffer of the given frame slot.
-        void Record_command_buffer(Frame_Data& _frame, const CoreTypes::RenderPacket& _packet, uint32_t _image_index);
+        // buffer of the given frame slot. Prepare_frame has run. What the
+        // recording leaves pending until the submit is described in
+        // _out_effects; nothing that means "already on the GPU" changes
+        // here.
+        void Record_command_buffer(Frame_Data& _frame, const CoreTypes::RenderPacket& _packet,
+                                   uint32_t _image_index, Frame_Effects& _out_effects);
+
+        // Submits the recorded command buffer of _frame: waits for the
+        // acquire semaphore, signals _render_finished for the present and
+        // the next serial of frame_semaphore. The serial is consumed
+        // (Frame_Timeline::Record_submission) only when the submission
+        // succeeded; a failed one leaves the timeline as it was.
+        void Submit_frame(Frame_Data& _frame, VkSemaphore _render_finished);
+
+        // Applies the effects of a frame that was submitted.
+        void Apply_effects(const Frame_Effects& _effects);
+
+        // Undoes the acquire of a frame that will not be presented, after
+        // an exception in the protected region of Render:
+        //   - a submission without commands consumes the signal of the
+        //     acquire semaphore (which cannot be waited on again until
+        //     then) and signals the next serial, registered as the
+        //     slot's submission, so the wait for the slot also waits for
+        //     that semaphore to become reusable;
+        //   - the image goes back to the swapchain
+        //     (vkReleaseSwapchainImages), or, without swapchain
+        //     maintenance1, the swapchain is marked for recreation:
+        //     destroying it frees the images that were acquired and never
+        //     presented.
+        // If the submission cannot be made the Renderer becomes lost. Does
+        // not throw.
+        void Recover_acquired_image(Frame_Data& _frame, uint32_t _image_index) noexcept;
 
         // Draw recording inside the render pass. The geometry pool and the
-        // descriptor sets are already bound. _bound_pipeline_id is the id
-        // of the graphics pipeline currently bound (0xFF: none);
-        // _bind_count counts pipeline binds for the log.
-        //   Record_opaque_draws      - subpass 0.
+        // descriptor sets are already bound. Draw_State tracks the state the
+        // command buffer holds between the draws, so it is only set when it
+        // changes.
+        //   Record_opaque_draws      - subpass 0, with the path the draw
+        //                              list resolved.
         //   Record_transparent_draws - subpass 1, depth writes already
         //                              disabled.
         //   Record_composite_draw    - subpass 2: the full-screen triangle
         //                              that resolves the OIT targets.
         //   Record_bounds_draw       - subpass 2, after the composite.
-        void Record_opaque_draws(VkCommandBuffer _command_buffer, Frame_Data& _frame, Opaque_Draw_Path _path,
-                                 uint8_t& _bound_pipeline_id, uint32_t& _bind_count);
-        void Record_transparent_draws(VkCommandBuffer _command_buffer, uint8_t& _bound_pipeline_id, uint32_t& _bind_count);
-        void Record_composite_draw(VkCommandBuffer _command_buffer, uint8_t& _bound_pipeline_id, uint32_t& _bind_count);
-        void Record_bounds_draw(VkCommandBuffer _command_buffer, uint8_t& _bound_pipeline_id, uint32_t& _bind_count);
+        struct Draw_State
+        {
+            // Id of the graphics pipeline currently bound (0xFF: none).
+            uint8_t     bound_pipeline_id = 0xFF;
+
+            // Front face currently set.
+            VkFrontFace front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+
+            // Pipeline binds, counted for the log.
+            uint32_t    bind_count = 0;
+        };
+
+        void Record_opaque_draws(VkCommandBuffer _command_buffer, Frame_Data& _frame, Draw_State& _state);
+        void Record_transparent_draws(VkCommandBuffer _command_buffer, Draw_State& _state);
+        void Record_composite_draw(VkCommandBuffer _command_buffer, Draw_State& _state);
+        void Record_bounds_draw(VkCommandBuffer _command_buffer, Draw_State& _state);
 
         // Binds graphics pipeline _pipeline_id unless it is already bound.
-        void Bind_graphics_pipeline(VkCommandBuffer _command_buffer, uint8_t _pipeline_id,
-                                    uint8_t& _bound_pipeline_id, uint32_t& _bind_count);
+        void Bind_graphics_pipeline(VkCommandBuffer _command_buffer, uint8_t _pipeline_id, Draw_State& _state);
+
+        // Sets the front face for objects that keep the winding of their
+        // mesh (_mirrored false) or invert it, unless it is already set.
+        void Set_front_face(VkCommandBuffer _command_buffer, bool _mirrored, Draw_State& _state);
 
         // Reads what the GPU measured for the last frame recorded in
         // _frame_slot (timestamps and counters) and hands it to the
-        // statistics. Called right after the fence of the slot was waited on.
+        // statistics. Called right after the slot was waited on.
         void Read_frame_statistics(uint32_t _frame_slot);
+
+        // =====================================================
+        // Progress of the GPU
+        // =====================================================
+
+        // Blocks until frame_semaphore reaches _serial, then tells the
+        // timeline how far the GPU got. Returns at once for serial 0 and
+        // for serials already known to be complete. Throws on a wait error.
+        void Wait_for_serial(uint64_t _serial, const char* _what);
+
+        // Throws std::runtime_error at once, without touching the GPU, when
+        // the Renderer is lost. _operation names the caller in the message.
+        void Require_not_lost(const char* _operation) const;
+
+        // Marks the Renderer as lost when the exception being handled is a
+        // Vulkan_Error with VK_ERROR_DEVICE_LOST. Called from the catch
+        // block of an operation that touches the GPU, before it rethrows.
+        // Does not throw.
+        void Note_current_failure() noexcept;
 
         // =====================================================
         // Surface size
         // =====================================================
 
+        // The only place that recreates the swapchain, called by the engine
+        // loop before it builds the frame. Returns true when the swapchain
+        // is usable afterwards; false while the window is minimized or the
+        // surface has no area (nothing is torn down then). Throws if the
+        // recreation fails; the flag stays set and the next call retries.
         bool Recreate_swapchain_if_needed();
 
         // Recreates the swapchain, depth resources, OIT targets (and the
         // descriptors that read them), framebuffers and per-image
         // synchronization after a resize or OUT_OF_DATE error. Pipelines
         // are unaffected (viewport/scissor are dynamic).
-        void Recreate_swapchain();
+        //
+        // Transactional: everything that can fail is created first, in
+        // temporaries, and only then are the members replaced by moving. If
+        // a creation throws, the temporaries release themselves,
+        // swapchain_recreation_pending stays set, and the objects that
+        // depend on the old swapchain are not used (Render acquires
+        // nothing while the flag is set: it retries the recreation first
+        // and returns if it cannot). Returns false, touching nothing, when
+        // the surface has no area. Waits for the device to go idle, so it
+        // must not run while a frame is being recorded.
+        bool Recreate_swapchain();
 
         void Set_debug_settings(const Render_Debug_Settings& _settings);
 

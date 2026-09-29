@@ -10,8 +10,9 @@
 #include <iostream>
 
 // The sequence of passes of a frame: command buffer recording and draw
-// recording. The frame's CPU-side draw lists come from Draw_List_Builder,
-// the compute passes of the clustered lighting from Light_Clusters.
+// recording. The frame's CPU-side draw lists come from Draw_List_Builder
+// (Renderer::Impl::Prepare_frame runs it before the recording), the compute
+// passes of the clustered lighting from Light_Clusters.
 
 namespace Renderer_System
 {
@@ -33,32 +34,20 @@ namespace Renderer_System
     // Record_command_buffer
     // =========================================================
 
-    void Renderer::Impl::Record_command_buffer(Frame_Data& _frame, const CoreTypes::RenderPacket& _packet, uint32_t _image_index)
+    void Renderer::Impl::Record_command_buffer(Frame_Data& _frame, const CoreTypes::RenderPacket& _packet,
+                                               uint32_t _image_index, Frame_Effects& _out_effects)
     {
         const VkCommandBuffer command_buffer = _frame.Get_command_buffer();
 
         // -- CPU side of the frame --
-        // The path that can draw this frame's opaque objects, then the
-        // object buffer and the draw lists everything below consumes. The
-        // transparent items are culled on the CPU exactly when the opaque
-        // ones are culled on the GPU, with the same planes and the same
-        // bounding volume test, so both passes discard the same objects.
-        const Opaque_Draw_Path opaque_path = draw_list.Resolve_opaque_path(debug_settings.opaque_path, _packet,
-                                                                            device.Get_max_draw_indirect_count());
+        // Already done by Prepare_frame: the path that draws this frame's
+        // opaque objects, the object buffer and the draw lists everything
+        // below consumes. The transparent items are culled on the CPU when
+        // culling is requested, with the same planes and the same bounding
+        // volume test as the culling pass, so both discard the same objects.
+        const Opaque_Draw_Path opaque_path = draw_list.Get_opaque_path();
         const bool             gpu_draws = Is_gpu_draw_path(opaque_path);
-        const bool             frustum_culling = opaque_path == Opaque_Draw_Path::Gpu_Culled;
-
-        draw_list.Build(_packet, static_cast<Object_GPU*>(_frame.object_buffer.mapped_ptr),
-                        mesh_registry, pipeline_registry, material_table.Get_count(), frustum_culling);
-
-        const uint32_t opaque_count = static_cast<uint32_t>(draw_list.Get_opaque_draws().size());
-
-        if (opaque_path == Opaque_Draw_Path::Cpu_Indirect)
-        {
-            draw_list.Write_cpu_draw_commands(static_cast<VkDrawIndexedIndirectCommand*>(_frame.cpu_draw_command_buffer.mapped_ptr),
-                                              mesh_registry);
-            draw_list.Group_opaque_by_pipeline();
-        }
+        const uint32_t         opaque_count = static_cast<uint32_t>(draw_list.Get_opaque_draws().size());
 
         VkCommandBufferBeginInfo begin_info{};
         begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -116,6 +105,9 @@ namespace Renderer_System
         {
             assert(procedural_image.has_value() && "Record_command_buffer: Init_procedural_pass() has not run");
 
+            // Not up to date until the frame is submitted (Apply_effects).
+            _out_effects.procedural_recorded = true;
+
             const Gpu_Scope scope(debug_utils, gpu_timer, command_buffer, "Procedural texture", 0.9f, 0.6f, 0.1f);
 
             const VkExtent2D procedural_extent = procedural_image->Get_extent();
@@ -157,11 +149,19 @@ namespace Renderer_System
         // statistics copy. Its transfer write access also orders the
         // statistics copy of this frame after the copies earlier frames
         // made into the same readback buffer (write-after-write), with a
-        // barrier instead of relying on the fence wait alone.
+        // barrier instead of relying on the wait for the slot alone.
         {
             const Gpu_Scope scope(debug_utils, gpu_timer, command_buffer, "Uploads and resets", 0.5f, 0.5f, 0.5f);
 
-            light_clusters.Record_aabb_update(command_buffer, _packet.view.projection, _packet.view.near_plane);
+            // The boxes count as rebuilt only after the submit
+            // (Apply_effects): this frame may still fail, and then the
+            // next one has to record the update again.
+            if (light_clusters.Record_aabb_update(command_buffer, _packet.view.projection, _packet.view.near_plane))
+            {
+                _out_effects.cluster_boxes_recorded = true;
+                _out_effects.cluster_projection = _packet.view.projection;
+                _out_effects.cluster_near_plane = _packet.view.near_plane;
+            }
 
             Vulkan_Buffer_Utils::Record_zero_fill_and_barrier(command_buffer,
                 { { _frame.cluster_counter_buffer.buffer, 0, sizeof(Cluster_Counters_GPU) },
@@ -181,8 +181,9 @@ namespace Renderer_System
 
         // -- Frustum culling and draw generation --
         // Only for the GPU paths; the opaque objects are entries
-        // [0, opaque_count) of the object buffer. A frame that does not
-        // record it simply has no culling scope.
+        // [0, opaque_count) of the object buffer, and each one carries the
+        // bucket it is drawn in. A frame that does not record it simply has
+        // no culling scope.
         if (gpu_draws && opaque_count > 0)
         {
             const Gpu_Scope scope(debug_utils, gpu_timer, command_buffer, "Frustum culling", 0.2f, 0.8f, 1.0f);
@@ -193,7 +194,7 @@ namespace Renderer_System
             cull_push.object_count = opaque_count;
             cull_push.command_capacity = MAX_OBJECTS;
             cull_push.pass_bit = CoreTypes::Render_Pass_Bit::Opaque;
-            cull_push.frustum_culling = frustum_culling ? 1u : 0u;
+            cull_push.frustum_culling = draw_list.Is_opaque_culled_on_gpu() ? 1u : 0u;
 
             vkCmdPushConstants(command_buffer, compute_pipeline_layout.Get_handle(), VK_SHADER_STAGE_COMPUTE_BIT,
                 0, sizeof(Cull_Push_Constants), &cull_push);
@@ -215,8 +216,8 @@ namespace Renderer_System
         // -- Render pass --
         // Its scope holds the pass alone: the statistics copies, which only
         // depend on the barrier above, are recorded after it.
-        uint8_t  bound_pipeline_id = 0xFF;
-        uint32_t bind_count = 0;
+        Draw_State draw_state;
+        draw_state.front_face = raster_state.front_face;
 
         {
             const Gpu_Scope render_pass_scope(debug_utils, gpu_timer, command_buffer, "Render pass", 0.8f, 0.8f, 0.8f);
@@ -279,6 +280,10 @@ namespace Renderer_System
             // area with a leading minus sign, so geometry wound
             // counter-clockwise when seen from outside (every primitive of
             // Primitive_Builder, and every glTF mesh) is front-facing here.
+            // It is the state for objects whose transform keeps the winding;
+            // the mirrored ones (negative determinant) invert it, and the
+            // draws set the opposite front face for them
+            // (Set_front_face).
             vkCmdSetCullMode(command_buffer, raster_state.cull_mode);
             vkCmdSetFrontFace(command_buffer, raster_state.front_face);
             vkCmdSetDepthTestEnable(command_buffer, raster_state.depth_test_enable ? VK_TRUE : VK_FALSE);
@@ -309,7 +314,7 @@ namespace Renderer_System
             // -- Subpass 0: opaque, depth write on --
             {
                 const Gpu_Scope scope(debug_utils, gpu_timer, command_buffer, "Opaque", 0.3f, 0.9f, 0.3f);
-                Record_opaque_draws(command_buffer, _frame, opaque_path, bound_pipeline_id, bind_count);
+                Record_opaque_draws(command_buffer, _frame, draw_state);
             }
 
             // -- Subpass 1: transparent accumulation --
@@ -322,7 +327,7 @@ namespace Renderer_System
 
             {
                 const Gpu_Scope scope(debug_utils, gpu_timer, command_buffer, "Transparent", 0.3f, 0.5f, 1.0f);
-                Record_transparent_draws(command_buffer, bound_pipeline_id, bind_count);
+                Record_transparent_draws(command_buffer, draw_state);
             }
 
             // -- Subpass 2: composite, then debug views --
@@ -333,7 +338,7 @@ namespace Renderer_System
             if (!draw_list.Get_transparent_draws().empty())
             {
                 const Gpu_Scope scope(debug_utils, gpu_timer, command_buffer, "OIT composite", 0.6f, 0.4f, 1.0f);
-                Record_composite_draw(command_buffer, bound_pipeline_id, bind_count);
+                Record_composite_draw(command_buffer, draw_state);
             }
 
             // Behind the composite: the volumes are drawn over the final
@@ -341,18 +346,18 @@ namespace Renderer_System
             if (debug_settings.show_bounds)
             {
                 const Gpu_Scope scope(debug_utils, gpu_timer, command_buffer, "Bounding volumes", 1.0f, 1.0f, 1.0f);
-                Record_bounds_draw(command_buffer, bound_pipeline_id, bind_count);
+                Record_bounds_draw(command_buffer, draw_state);
             }
 
             vkCmdEndRenderPass(command_buffer);
         }
 
-        if (bind_count != last_reported_binds)
+        if (draw_state.bind_count != last_reported_binds)
         {
-            std::cout << "[Renderer] " << bind_count << " pipeline bind(s) for "
+            std::cout << "[Renderer] " << draw_state.bind_count << " pipeline bind(s) for "
                       << _packet.opaque_items.size() << " opaque + "
                       << _packet.transparent_items.size() << " transparent item(s).\n";
-            last_reported_binds = bind_count;
+            last_reported_binds = draw_state.bind_count;
         }
 
         // -- Statistics readback --
@@ -380,10 +385,10 @@ namespace Renderer_System
         // submitted by Render once the submit succeeded.
         Frame_Statistics::Frame_Record record;
         record.opaque_path = opaque_path;
+        record.opaque_candidates = draw_list.Get_opaque_candidates();
         record.opaque_objects = opaque_count;
         record.transparent_candidates = draw_list.Get_transparent_candidates();
         record.transparent_drawn = static_cast<uint32_t>(draw_list.Get_transparent_draws().size());
-        record.procedural_recorded = record_procedural;
 
         statistics.Stage_record(current_frame, record);
     }
@@ -392,35 +397,51 @@ namespace Renderer_System
     // Draw recording
     // =========================================================
 
-    void Renderer::Impl::Bind_graphics_pipeline(VkCommandBuffer _command_buffer, uint8_t _pipeline_id,
-                                                uint8_t& _bound_pipeline_id, uint32_t& _bind_count)
+    void Renderer::Impl::Bind_graphics_pipeline(VkCommandBuffer _command_buffer, uint8_t _pipeline_id, Draw_State& _state)
     {
-        if (_pipeline_id == _bound_pipeline_id)
+        if (_pipeline_id == _state.bound_pipeline_id)
             return;
 
         // Every id reaching here was validated by Draw_List_Builder, or is
         // one of the Renderer's own pipelines.
         vkCmdBindPipeline(_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_registry.Get_by_id(_pipeline_id));
-        _bound_pipeline_id = _pipeline_id;
-        ++_bind_count;
+        _state.bound_pipeline_id = _pipeline_id;
+        ++_state.bind_count;
     }
 
-    void Renderer::Impl::Record_opaque_draws(VkCommandBuffer _command_buffer, Frame_Data& _frame, Opaque_Draw_Path _path,
-                                             uint8_t& _bound_pipeline_id, uint32_t& _bind_count)
+    void Renderer::Impl::Set_front_face(VkCommandBuffer _command_buffer, bool _mirrored, Draw_State& _state)
+    {
+        // An object whose transform has a negative determinant inverts the
+        // winding of its triangles, so its front faces are the ones wound
+        // the other way.
+        const VkFrontFace wanted = _mirrored
+            ? (raster_state.front_face == VK_FRONT_FACE_COUNTER_CLOCKWISE ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE)
+            : raster_state.front_face;
+
+        if (wanted == _state.front_face)
+            return;
+
+        vkCmdSetFrontFace(_command_buffer, wanted);
+        _state.front_face = wanted;
+    }
+
+    void Renderer::Impl::Record_opaque_draws(VkCommandBuffer _command_buffer, Frame_Data& _frame, Draw_State& _state)
     {
         const std::vector<Draw_List_Builder::Draw_Record>& opaque_draws = draw_list.Get_opaque_draws();
 
         if (opaque_draws.empty())
             return;
 
-        switch (_path)
+        switch (draw_list.Get_opaque_path())
         {
         case Opaque_Draw_Path::Direct:
         {
-            // One draw per object, straight from the pool.
+            // One draw per object, straight from the pool. The winding is
+            // set only when it changes from one object to the next.
             for (const Draw_List_Builder::Draw_Record& draw : opaque_draws)
             {
-                Bind_graphics_pipeline(_command_buffer, draw.pipeline_id, _bound_pipeline_id, _bind_count);
+                Bind_graphics_pipeline(_command_buffer, draw.pipeline_id, _state);
+                Set_front_face(_command_buffer, draw.mirrored, _state);
                 mesh_registry.Get(draw.mesh_id).Draw(_command_buffer, draw.object_index);
             }
             break;
@@ -429,12 +450,13 @@ namespace Renderer_System
         case Opaque_Draw_Path::Cpu_Indirect:
         {
             // One vkCmdDrawIndexedIndirect per run of commands sharing a
-            // pipeline, split at maxDrawIndirectCount.
+            // pipeline and a winding, split at maxDrawIndirectCount.
             const size_t max_per_call = std::max<uint32_t>(1u, device.Get_max_draw_indirect_count());
 
             for (const Draw_List_Builder::Pipeline_Run& run : draw_list.Get_opaque_runs())
             {
-                Bind_graphics_pipeline(_command_buffer, run.pipeline_id, _bound_pipeline_id, _bind_count);
+                Bind_graphics_pipeline(_command_buffer, run.pipeline_id, _state);
+                Set_front_face(_command_buffer, run.mirrored, _state);
 
                 const size_t run_end = static_cast<size_t>(run.first) + run.count;
 
@@ -452,15 +474,26 @@ namespace Renderer_System
         case Opaque_Draw_Path::Gpu_Indirect:
         case Opaque_Draw_Path::Gpu_Culled:
         {
-            // One bucket (Resolve_opaque_path guarantees a single pipeline).
-            // The culling pass wrote draw_count commands; maxDrawCount is an
-            // upper bound, not the number drawn.
-            Bind_graphics_pipeline(_command_buffer, opaque_draws.front().pipeline_id, _bound_pipeline_id, _bind_count);
+            // One indirect draw per bucket: the objects of one pipeline and
+            // one winding. The culling pass wrote as many commands into the
+            // region of the bucket as it kept, and counted them in the
+            // counter of the bucket; the capacity of the region is an upper
+            // bound, not the number drawn.
+            const std::vector<Draw_List_Builder::Draw_Bucket>& buckets = draw_list.Get_opaque_buckets();
 
-            vkCmdDrawIndexedIndirectCount(_command_buffer,
-                _frame.gpu_draw_command_buffer.buffer, 0,
-                _frame.gpu_draw_count_buffer.buffer, offsetof(Draw_Count_GPU, draw_count),
-                static_cast<uint32_t>(opaque_draws.size()), DRAW_COMMAND_STRIDE);
+            for (size_t bucket_index = 0; bucket_index < buckets.size(); ++bucket_index)
+            {
+                const Draw_List_Builder::Draw_Bucket& bucket = buckets[bucket_index];
+
+                Bind_graphics_pipeline(_command_buffer, bucket.pipeline_id, _state);
+                Set_front_face(_command_buffer, bucket.mirrored, _state);
+
+                vkCmdDrawIndexedIndirectCount(_command_buffer,
+                    _frame.gpu_draw_command_buffer.buffer, static_cast<VkDeviceSize>(bucket.first_command) * DRAW_COMMAND_STRIDE,
+                    _frame.gpu_draw_count_buffer.buffer,
+                    offsetof(Draw_Count_GPU, bucket_draw_count) + bucket_index * sizeof(uint32_t),
+                    bucket.capacity, DRAW_COMMAND_STRIDE);
+            }
             break;
         }
 
@@ -469,7 +502,7 @@ namespace Renderer_System
         }
     }
 
-    void Renderer::Impl::Record_transparent_draws(VkCommandBuffer _command_buffer, uint8_t& _bound_pipeline_id, uint32_t& _bind_count)
+    void Renderer::Impl::Record_transparent_draws(VkCommandBuffer _command_buffer, Draw_State& _state)
     {
         const std::vector<Draw_List_Builder::Draw_Record>& transparent_draws = draw_list.Get_transparent_draws();
 
@@ -481,17 +514,19 @@ namespace Renderer_System
         // list needs no back-to-front sort. It arrives grouped by pipeline,
         // material and mesh, like the opaque one, which keeps the binds to
         // a minimum. The opaque depth occludes the fragments; depth writes
-        // were disabled when the subpass began.
+        // were disabled when the subpass began. The winding is set only
+        // when it changes, like the pipeline.
         for (const Draw_List_Builder::Draw_Record& draw : transparent_draws)
         {
-            Bind_graphics_pipeline(_command_buffer, draw.pipeline_id, _bound_pipeline_id, _bind_count);
+            Bind_graphics_pipeline(_command_buffer, draw.pipeline_id, _state);
+            Set_front_face(_command_buffer, draw.mirrored, _state);
             mesh_registry.Get(draw.mesh_id).Draw(_command_buffer, draw.object_index);
         }
     }
 
-    void Renderer::Impl::Record_composite_draw(VkCommandBuffer _command_buffer, uint8_t& _bound_pipeline_id, uint32_t& _bind_count)
+    void Renderer::Impl::Record_composite_draw(VkCommandBuffer _command_buffer, Draw_State& _state)
     {
-        Bind_graphics_pipeline(_command_buffer, composite_pipeline_id, _bound_pipeline_id, _bind_count);
+        Bind_graphics_pipeline(_command_buffer, composite_pipeline_id, _state);
 
         // Every pixel is resolved, whatever the opaque depth holds, and the
         // full-screen triangle is not culled by its winding.
@@ -503,7 +538,7 @@ namespace Renderer_System
         vkCmdDraw(_command_buffer, 3, 1, 0, 0);
     }
 
-    void Renderer::Impl::Record_bounds_draw(VkCommandBuffer _command_buffer, uint8_t& _bound_pipeline_id, uint32_t& _bind_count)
+    void Renderer::Impl::Record_bounds_draw(VkCommandBuffer _command_buffer, Draw_State& _state)
     {
         // Entries [0, object_count) of the object buffer: the opaque objects
         // and the transparent ones that survived the CPU culling. Opaque
@@ -519,7 +554,7 @@ namespace Renderer_System
         if (sphere.released || !sphere.geometry.Is_valid())
             return;
 
-        Bind_graphics_pipeline(_command_buffer, bounds_pipeline_id, _bound_pipeline_id, _bind_count);
+        Bind_graphics_pipeline(_command_buffer, bounds_pipeline_id, _state);
 
         // Seen from inside as well, never occluding what follows, and
         // hidden behind the opaque geometry: the composite may have turned

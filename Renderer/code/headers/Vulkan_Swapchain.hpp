@@ -3,19 +3,19 @@
 #include <vulkan/vulkan.h>
 
 #include <Vulkan_Device.hpp>
+#include <Vulkan_Handles.hpp>
 #include <Vulkan_Surface.hpp>
-#include "Window.hpp"
 
 #include <vector>
 #include <cstdint>
 
-namespace Renderer_System 
+namespace Renderer_System
 {
 
     // Swap_chain_support_details: groups together everything we need to
     // know about what a given GPU + surface combination supports, so we
     // can pick the best available format/present mode/extent from it.
-    struct Swap_chain_support_details 
+    struct Swap_chain_support_details
     {
         VkSurfaceCapabilitiesKHR capabilities{};
         std::vector<VkSurfaceFormatKHR> formats;
@@ -28,34 +28,49 @@ namespace Renderer_System
     //
     // Must be recreated whenever the window is resized, since the
     // swapchain images are tied to a specific surface size.
-    class Vulkan_Swapchain 
+    //
+    // The swapchain does not know the window: the size it is built for is
+    // passed in (the framebuffer size in pixels, read from the window by the
+    // Renderer). It therefore has no way to wait for window events, and
+    // never blocks: a surface without area (a minimized window) is reported
+    // to the caller instead of waited for.
+    //
+    // The swapchain and the image views are owned by RAII members: a
+    // constructor that fails halfway releases what it created.
+    class Vulkan_Swapchain
     {
         VkDevice device_handle;
         VkPhysicalDevice physical_device_handle;
         VkSurfaceKHR surface_handle;
 
-        // Queue the swapchain images are presented on. Declared before the
-        // window pointer so the declaration order matches the constructor
-        // initializer lists (members are always initialized in declaration order).
-        VkQueue present_queue_handle;
-
         // Stored so Recreate() can rebuild the swapchain without needing
         // these passed in again from outside.
-        const Platform::Window* window;
         uint32_t preferred_image_count;
         bool prefer_mailbox;
         Queue_Family_Indices queue_family_indices;
-
-        VkSwapchainKHR swapchain;
-        std::vector<VkImage> images;          // owned by the swapchain itself, not destroyed manually
-        std::vector<VkImageView> image_views;  // these we DO create and must destroy ourselves
 
         VkFormat image_format;
         VkExtent2D extent;
         VkPresentModeKHR selected_present_mode;
 
+        // True when the swapchain held in `swapchain` was passed as the
+        // oldSwapchain of a creation that failed. Vulkan retires the old
+        // swapchain whether the creation succeeds or not, and a retired
+        // swapchain cannot be the oldSwapchain of another creation: the
+        // next Recreate destroys it first.
+        bool retired;
+
+        // Declared in creation order: the views are destroyed first, then
+        // the swapchain that owns the images they look at.
+        Unique_Swapchain swapchain;
+        std::vector<VkImage> images;                 // owned by the swapchain itself, not destroyed manually
+        std::vector<Unique_Image_View> image_views;  // created by this class, destroyed by it (before the swapchain)
+
     public:
-        // Creates the swapchain for the given device/surface/window.
+        // Creates the swapchain for the given device/surface.
+        // _desired_extent: the size to build it for, in framebuffer pixels;
+        // used only when the surface does not dictate its own size. Throws
+        // if the surface currently has no area.
         // _preferred_image_count: how many images to request (default 3,
         // triple buffering). The driver may clamp this to what the surface
         // actually supports.
@@ -65,24 +80,44 @@ namespace Renderer_System
         Vulkan_Swapchain(
             const Vulkan_Device& _device,
             const Vulkan_Surface& _surface,
-            const Platform::Window& _window,
+            VkExtent2D _desired_extent,
             uint32_t _preferred_image_count = 3,
             bool _prefer_mailbox = true
         );
 
-        ~Vulkan_Swapchain();
+        ~Vulkan_Swapchain() = default;
 
         Vulkan_Swapchain(const Vulkan_Swapchain&) = delete;
         Vulkan_Swapchain& operator=(const Vulkan_Swapchain&) = delete;
 
-        Vulkan_Swapchain(Vulkan_Swapchain&& _other) noexcept;
+        Vulkan_Swapchain(Vulkan_Swapchain&& _other) noexcept = default;
+
+        // Written by hand for the release order only: the image views of
+        // the current swapchain go before the swapchain does.
         Vulkan_Swapchain& operator=(Vulkan_Swapchain&& _other) noexcept;
 
-        // Destroys the current swapchain and creates a new one with the
-        // window's current size. Must be called when the window is resized,
-        // or when vkAcquireNextImageKHR / vkQueuePresentKHR report that the
-        // swapchain is out of date.
-        void Recreate();
+        // True when a swapchain can be built now for _desired_extent: the
+        // surface has area. On some platforms (Windows) the surface reports
+        // a 0x0 current extent while the window is minimized. Reads the
+        // surface capabilities and changes nothing.
+        bool Can_recreate(VkExtent2D _desired_extent) const;
+
+        // Replaces the swapchain with a new one for _desired_extent (the
+        // framebuffer size in pixels), passing the current one as
+        // oldSwapchain, and destroys the old swapchain and its image views.
+        // Returns false, leaving the current swapchain untouched, when the
+        // surface has no area (Can_recreate).
+        //
+        // Never waits: not for the device, not for window events. The
+        // caller guarantees that no pending work uses the current images
+        // (Renderer::Recreate_swapchain waits for the device to go idle and
+        // retires the presentation objects first).
+        //
+        // Not a strong guarantee: passing oldSwapchain retires it even if
+        // the creation fails. In that case an exception is thrown, the
+        // object keeps the retired swapchain, and the next Recreate call
+        // destroys it and creates the new one from scratch.
+        bool Recreate(VkExtent2D _desired_extent);
 
         VkSwapchainKHR Get_handle() const;
 
@@ -92,12 +127,14 @@ namespace Renderer_System
 
         // The actual resolution of the swapchain images - needed by
         // Vulkan_Render_Pass / Vulkan_Pipeline / Vulkan_Framebuffer for
-        // viewport, scissor, and framebuffer dimensions.
+        // viewport, scissor, and framebuffer dimensions. After a failed
+        // Recreate it stays the extent of the last swapchain that was
+        // successfully created.
         VkExtent2D Get_extent() const;
 
-        // The image views, one per swapchain image - needed by
+        // The image view of swapchain image _index - needed by
         // Vulkan_Framebuffer to create one framebuffer per image.
-        const std::vector<VkImageView>& Get_image_views() const;
+        VkImageView Get_image_view(uint32_t _index) const;
 
         // How many images this swapchain actually ended up with (may
         // differ from the requested _preferred_image_count if the surface
@@ -109,21 +146,25 @@ namespace Renderer_System
         // in a settings menu based on this).
         VkPresentModeKHR Get_present_mode() const;
 
-        
-
     private:
-        // Destroys the swapchain and its image views, but NOT the device/
-        // surface (those are owned elsewhere). Shared by the destructor,
-        // move assignment, and Recreate() (which destroys the old swapchain
-        // before building the new one).
-        void Destroy();
-        void Create_swapchain_internal();
-        // Builds the swapchain itself - shared by the constructor and
-        // Recreate(), since both need to do the same work, just at
-        // different points in the object's lifetime.
-        void Create_swapchain(const Vulkan_Device& _device,const Vulkan_Surface& _surface,const Platform::Window& _window,
-                              uint32_t _preferred_image_count, bool _prefer_mailbox);
-            
+        // The constructor that does the work. _old_swapchain is passed to
+        // the creation as oldSwapchain (VK_NULL_HANDLE for the first
+        // swapchain). The public constructor and Recreate() both use it.
+        Vulkan_Swapchain(
+            VkDevice _device,
+            VkPhysicalDevice _physical_device,
+            VkSurfaceKHR _surface,
+            const Queue_Family_Indices& _queue_family_indices,
+            uint32_t _preferred_image_count,
+            bool _prefer_mailbox,
+            VkExtent2D _desired_extent,
+            VkSwapchainKHR _old_swapchain
+        );
+
+        // Builds the swapchain itself, with _old_swapchain as its
+        // oldSwapchain, and fills the images and the format, extent and
+        // present mode members.
+        void Create_swapchain(VkExtent2D _desired_extent, VkSwapchainKHR _old_swapchain);
 
         // Creates one VkImageView per swapchain image - image views are
         // required to actually use the raw VkImage as a render target.
@@ -146,12 +187,11 @@ namespace Renderer_System
         // otherwise FIFO (guaranteed to always be supported by the spec).
         VkPresentModeKHR Choose_present_mode(const std::vector<VkPresentModeKHR>& _available_modes, bool _prefer_mailbox) const;
 
-        // Determines the actual pixel resolution of the swapchain images,
-        // based on the window's current framebuffer size, clamped to what
-        // the surface capabilities allow (min/max extent).
-        VkExtent2D Choose_extent(const VkSurfaceCapabilitiesKHR& _capabilities, const Platform::Window& _window) const;
-
-       
+        // Determines the actual pixel resolution of the swapchain images:
+        // the current extent of the surface when it defines one, otherwise
+        // _desired_extent clamped to what the surface capabilities allow
+        // (min/max extent). A zero extent means the surface has no area.
+        VkExtent2D Choose_extent(const VkSurfaceCapabilitiesKHR& _capabilities, VkExtent2D _desired_extent) const;
     };
 
 }

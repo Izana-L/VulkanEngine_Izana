@@ -12,8 +12,10 @@ namespace Renderer_System
 
     Draw_List_Builder::Draw_List_Builder()
     {
+        valid_opaque.reserve(MAX_OBJECTS);
         opaque_draws.reserve(MAX_OBJECTS);
         transparent_draws.reserve(MAX_OBJECTS);
+        opaque_buckets.reserve(MAX_DRAW_BUCKETS);
     }
 
     void Draw_List_Builder::Request_frustum_capture()
@@ -32,171 +34,282 @@ namespace Renderer_System
         culling_frustum = _freeze ? frozen_frustum : _view_frustum;
     }
 
-    Opaque_Draw_Path Draw_List_Builder::Resolve_opaque_path(Opaque_Draw_Path _requested, const CoreTypes::RenderPacket& _packet,
-                                                            uint32_t _max_draw_indirect_count)
+    bool Draw_List_Builder::Build_buckets(size_t _count, uint32_t _max_draw_indirect_count)
     {
-        if (!Is_gpu_draw_path(_requested))
-            return _requested;
+        opaque_buckets.clear();
 
-        bool     single_pipeline = true;
-        bool     first_found = false;
-        uint8_t  first_pipeline_id = 0;
-        uint32_t opaque_items = 0;
+        // The items arrive grouped by pipeline (sort key), so the bucket of
+        // an item is almost always the last one used: it is tried first.
+        size_t last_bucket = 0;
 
+        for (size_t i = 0; i < _count; ++i)
+        {
+            Valid_Opaque_Item& valid = valid_opaque[i];
+
+            const auto matches = [&](const Draw_Bucket& _bucket)
+                {
+                    return _bucket.pipeline_id == valid.pipeline_id && _bucket.mirrored == valid.mirrored;
+                };
+
+            size_t found = opaque_buckets.size();
+
+            if (last_bucket < opaque_buckets.size() && matches(opaque_buckets[last_bucket]))
+            {
+                found = last_bucket;
+            }
+            else
+            {
+                const auto it = std::find_if(opaque_buckets.begin(), opaque_buckets.end(), matches);
+
+                if (it != opaque_buckets.end())
+                    found = static_cast<size_t>(it - opaque_buckets.begin());
+            }
+
+            if (found == opaque_buckets.size())
+            {
+                if (opaque_buckets.size() >= MAX_DRAW_BUCKETS)
+                {
+                    opaque_buckets.clear();
+                    return false;
+                }
+
+                Draw_Bucket bucket;
+                bucket.pipeline_id = valid.pipeline_id;
+                bucket.mirrored = valid.mirrored;
+                opaque_buckets.push_back(bucket);
+            }
+
+            valid.bucket = static_cast<uint32_t>(found);
+            ++opaque_buckets[found].capacity;
+            last_bucket = found;
+        }
+
+        // One indirect draw takes at most maxDrawIndirectCount commands, and
+        // a bucket is one draw.
+        uint32_t next_command = 0;
+
+        for (Draw_Bucket& bucket : opaque_buckets)
+        {
+            if (bucket.capacity > _max_draw_indirect_count)
+            {
+                opaque_buckets.clear();
+                return false;
+            }
+
+            bucket.first_command = next_command;
+            next_command += bucket.capacity;
+        }
+
+        return true;
+    }
+
+    void Draw_List_Builder::Build(const CoreTypes::RenderPacket& _packet, Object_GPU* _objects,
+                                  const Mesh_Registry& _meshes, const Pipeline_Registry& _pipelines,
+                                  uint32_t _material_count, const Build_Settings& _settings)
+    {
+        assert(_objects != nullptr && "Draw_List_Builder::Build: the object buffer of the frame is not mapped");
+
+        // Rewritten from entry 0 every frame: the GPU finished reading this
+        // slot's copy before its slot was waited on.
+        valid_opaque.clear();
+        opaque_draws.clear();
+        transparent_draws.clear();
+        opaque_runs.clear();
+        opaque_buckets.clear();
+        opaque_candidates = 0;
+        transparent_candidates = 0;
+        opaque_path = _settings.requested_path;
+        opaque_culled_on_gpu = false;
+
+        uint32_t object_count = 0;
+
+        const auto warn_object_overflow = [&]()
+            {
+                if (!warned_object_overflow)
+                {
+                    std::cerr << "[Renderer] More than " << MAX_OBJECTS << " draws in one frame: the rest are skipped. "
+                        "Raise MAX_OBJECTS in Renderer_Limits.hpp. Further occurrences are not reported.\n";
+                    warned_object_overflow = true;
+                }
+            };
+
+        // Whether _item can be drawn in _subpass; its pipeline id comes
+        // back in _out_pipeline_id. Every reference is validated in every
+        // build, before its entry is written: an out-of-range transform
+        // index would read past the packet's array, an out-of-range
+        // material index past the written slots of the material table, a
+        // released mesh may already have lost its geometry, and a pipeline
+        // of another subpass is invalid in this one. The first invalid item
+        // of the session is reported.
+        const auto validate = [&](const CoreTypes::Draw_Item& _item, uint32_t _subpass, uint8_t& _out_pipeline_id) -> bool
+            {
+                _out_pipeline_id = CoreTypes::Get_pipeline_id(_item.sort_key);
+                const VkPipeline pipeline = _pipelines.Get_by_id(_out_pipeline_id);
+
+                const bool valid =
+                    pipeline != VK_NULL_HANDLE &&
+                    _pipelines.Get_subpass(_out_pipeline_id) == _subpass &&
+                    _meshes.Is_drawable(_item.mesh_gpu_id) &&
+                    _item.transform_idx < _packet.transform_count &&
+                    _item.material_index < _material_count;
+
+                if (!valid && !warned_invalid_item)
+                {
+                    std::cerr << "[Renderer] Draw item skipped: pipeline " << int(_out_pipeline_id)
+                        << " (built for subpass " << _pipelines.Get_subpass(_out_pipeline_id) << ", drawn in subpass "
+                        << _subpass << "), mesh " << _item.mesh_gpu_id << ", transform " << _item.transform_idx
+                        << ", material " << _item.material_index
+                        << " (registered meshes: " << _meshes.Get_count() << ", transforms in packet: "
+                        << _packet.transform_count << ", registered materials: " << _material_count
+                        << "; a released mesh is also skipped). Further occurrences are not reported.\n";
+                    warned_invalid_item = true;
+                }
+
+                return valid;
+            };
+
+        // -- Object entry --
+        // Its index is the draw's firstInstance, which the vertex shader
+        // receives as gl_InstanceIndex. No push constants: the shaders read
+        // everything per draw from this entry, the material table and the
+        // mesh table. Returns the index of the entry.
+        const auto write_object = [&](const CoreTypes::Draw_Item& _item, const MathLib::Matrix4& _model,
+                                      bool _mirrored, uint32_t _bucket_bits) -> uint32_t
+            {
+                const uint32_t object_index = object_count++;
+
+                Object_GPU& object = _objects[object_index];
+                object.model = _model;
+                // Inverse-transpose computed once per draw here instead of
+                // once per vertex in mesh.vert; correct under non-uniform
+                // scale.
+                object.normal_matrix = glm::transpose(glm::inverse(_model));
+                object.material_index = _item.material_index;
+                object.mesh_index = _item.mesh_gpu_id;
+                object.flags = (static_cast<uint32_t>(_item.pass_mask) & Object_Flag::Pass_Mask) | Object_Flag::Active |
+                               (_mirrored ? Object_Flag::Mirrored : 0u) | _bucket_bits;
+                object._padding0 = 0;
+
+                return object_index;
+            };
+
+        // CPU culling: the test of cull_objects.comp, the same formula on
+        // the same planes (culling_frustum is what the UBO carries): the
+        // mesh bounding sphere placed by the model matrix, an ellipsoid,
+        // tested exactly against every plane, shear included.
+        const auto outside_frustum = [&](const CoreTypes::Draw_Item& _item, const MathLib::Matrix4& _model) -> bool
+            {
+                const Mesh_GPU& mesh = _meshes.Get(_item.mesh_gpu_id);
+
+                return !culling_frustum.Intersects_ellipsoid(_model, MathLib::Vector4(mesh.bounds_center, mesh.bounds_radius));
+            };
+
+        // -- Opaque items: validation --
+        // First the validated items alone: the path and the buckets are
+        // decided from this list, so an invalid item cannot influence them.
+        // An item that does not take part in the pass is skipped, so a
+        // pass_mask actually selects passes instead of being decoration.
         for (const CoreTypes::Draw_Item& item : _packet.opaque_items)
         {
             if ((item.pass_mask & CoreTypes::Render_Pass_Bit::Opaque) == 0)
                 continue;
 
-            ++opaque_items;
+            uint8_t pipeline_id = 0;
 
-            const uint8_t pipeline_id = CoreTypes::Get_pipeline_id(item.sort_key);
+            if (!validate(item, Render_Subpass::Opaque, pipeline_id))
+                continue;
 
-            if (!first_found)
-            {
-                first_pipeline_id = pipeline_id;
-                first_found = true;
-            }
-            else if (pipeline_id != first_pipeline_id)
-            {
-                single_pipeline = false;
-            }
+            Valid_Opaque_Item valid;
+            valid.item = &item;
+            valid.pipeline_id = pipeline_id;
+            valid.mirrored = CoreTypes::Inverts_winding(_packet.transforms[item.transform_idx]);
+            valid_opaque.push_back(valid);
         }
 
-        if (single_pipeline && opaque_items <= _max_draw_indirect_count)
-            return _requested;
+        opaque_candidates = static_cast<uint32_t>(valid_opaque.size());
 
-        if (!warned_gpu_path_fallback)
+        // -- Opaque items: path --
+        // A GPU path draws the objects that fit the object buffer, all of
+        // them (the culling pass decides on the GPU which survive), grouped
+        // in buckets.
+        if (Is_gpu_draw_path(_settings.requested_path))
         {
-            std::cerr << "[Renderer] The GPU draw path needs every opaque item on one pipeline and at most maxDrawIndirectCount ("
-                << _max_draw_indirect_count << ") of them; frames that break it use CPU-written indirect "
-                "commands instead. Further occurrences are not reported.\n";
-            warned_gpu_path_fallback = true;
+            const size_t drawable = std::min<size_t>(valid_opaque.size(), MAX_OBJECTS);
+
+            if (!Build_buckets(drawable, _settings.max_draw_indirect_count))
+            {
+                if (!warned_gpu_path_fallback)
+                {
+                    std::cerr << "[Renderer] The GPU draw path needs the opaque items in at most " << MAX_DRAW_BUCKETS
+                        << " groups (one per pipeline and triangle winding), none with more than maxDrawIndirectCount ("
+                        << _settings.max_draw_indirect_count << ") objects; frames that break it use CPU-written indirect "
+                        "commands instead. Further occurrences are not reported.\n";
+                    warned_gpu_path_fallback = true;
+                }
+
+                opaque_path = Opaque_Draw_Path::Cpu_Indirect;
+            }
         }
 
-        return Opaque_Draw_Path::Cpu_Indirect;
-    }
+        opaque_culled_on_gpu = Is_gpu_draw_path(opaque_path) && _settings.frustum_culling;
 
-    void Draw_List_Builder::Build(const CoreTypes::RenderPacket& _packet, Object_GPU* _objects,
-                                  const Mesh_Registry& _meshes, const Pipeline_Registry& _pipelines,
-                                  uint32_t _material_count, bool _cull_transparents)
-    {
-        assert(_objects != nullptr && "Draw_List_Builder::Build: the object buffer of the frame is not mapped");
+        // The opaque objects are culled on the CPU only when no GPU path
+        // draws them.
+        const bool cull_opaque_on_cpu = _settings.frustum_culling && !Is_gpu_draw_path(opaque_path);
 
-        // Rewritten from entry 0 every frame: the GPU finished reading this
-        // slot's copy before its fence was waited on.
-        opaque_draws.clear();
-        transparent_draws.clear();
-        opaque_runs.clear();
-        transparent_candidates = 0;
+        // -- Opaque items: entries [0, opaque) --
+        for (const Valid_Opaque_Item& valid : valid_opaque)
+        {
+            const CoreTypes::Draw_Item& item = *valid.item;
+            const MathLib::Matrix4&     model = _packet.transforms[item.transform_idx];
 
-        uint32_t object_count = 0;
+            if (cull_opaque_on_cpu && outside_frustum(item, model))
+                continue;
 
-        // _subpass: the subpass the list is drawn in; an item whose pipeline
-        // was built for another one cannot draw there.
-        // _candidates, when not null, counts the valid items of the list
-        // before the frustum test.
-        const auto add_items = [&](const std::vector<CoreTypes::Draw_Item>& _items, uint8_t _pass_bit, uint32_t _subpass,
-                                   std::vector<Draw_Record>& _out, bool _frustum_test, uint32_t* _candidates)
+            // The object buffer is full: this and every later item of the
+            // frame are skipped.
+            if (object_count >= MAX_OBJECTS)
             {
-                for (const CoreTypes::Draw_Item& item : _items)
-                {
-                    // An item that does not take part in this pass is skipped,
-                    // so a pass_mask actually selects passes instead of being
-                    // decoration.
-                    if ((item.pass_mask & _pass_bit) == 0) continue;
+                warn_object_overflow();
+                break;
+            }
 
-                    const uint8_t    item_pipeline_id = CoreTypes::Get_pipeline_id(item.sort_key);
-                    const VkPipeline pipeline = _pipelines.Get_by_id(item_pipeline_id);
+            const uint32_t bucket_bits = Is_gpu_draw_path(opaque_path) ? Object_Flag::Make_bucket_bits(valid.bucket) : 0u;
+            const uint32_t object_index = write_object(item, model, valid.mirrored, bucket_bits);
 
-                    // Every reference is validated in every build, before its
-                    // entry is written: an out-of-range transform index would
-                    // read past the packet's array, an out-of-range material
-                    // index past the written slots of the material table, a
-                    // released mesh may already have lost its geometry, and a
-                    // pipeline of another subpass is invalid in this one.
-                    const bool valid =
-                        pipeline != VK_NULL_HANDLE &&
-                        _pipelines.Get_subpass(item_pipeline_id) == _subpass &&
-                        _meshes.Is_drawable(item.mesh_gpu_id) &&
-                        item.transform_idx < _packet.transform_count &&
-                        item.material_index < _material_count;
+            opaque_draws.push_back({ object_index, item.mesh_gpu_id, valid.pipeline_id, valid.mirrored });
+        }
 
-                    if (!valid)
-                    {
-                        if (!warned_invalid_item)
-                        {
-                            std::cerr << "[Renderer] Draw item skipped: pipeline " << int(item_pipeline_id)
-                                << " (built for subpass " << _pipelines.Get_subpass(item_pipeline_id) << ", drawn in subpass "
-                                << _subpass << "), mesh " << item.mesh_gpu_id << ", transform " << item.transform_idx
-                                << ", material " << item.material_index
-                                << " (registered meshes: " << _meshes.Get_count() << ", transforms in packet: "
-                                << _packet.transform_count << ", registered materials: " << _material_count
-                                << "; a released mesh is also skipped). Further occurrences are not reported.\n";
-                            warned_invalid_item = true;
-                        }
-                        continue;
-                    }
+        // -- Transparent items: entries continue from the opaque ones --
+        // The culling pass relies on it: it processes [0, opaque) only.
+        for (const CoreTypes::Draw_Item& item : _packet.transparent_items)
+        {
+            if ((item.pass_mask & CoreTypes::Render_Pass_Bit::Transparent) == 0)
+                continue;
 
-                    const MathLib::Matrix4& model = _packet.transforms[item.transform_idx];
-                    const Mesh_GPU&         mesh = _meshes.Get(item.mesh_gpu_id);
+            uint8_t pipeline_id = 0;
 
-                    if (_candidates != nullptr)
-                        ++(*_candidates);
+            if (!validate(item, Render_Subpass::Transparent, pipeline_id))
+                continue;
 
-                    // CPU culling: the test of cull_objects.comp, the same
-                    // formula on the same planes (culling_frustum is what the
-                    // UBO carries): the mesh bounding sphere placed by the
-                    // model matrix, an ellipsoid, tested exactly against
-                    // every plane, shear included.
-                    if (_frustum_test)
-                    {
-                        if (!culling_frustum.Intersects_ellipsoid(model, MathLib::Vector4(mesh.bounds_center, mesh.bounds_radius)))
-                            continue;
-                    }
+            ++transparent_candidates;
 
-                    // The object buffer is full: this and every later item of
-                    // the frame are skipped.
-                    if (object_count >= MAX_OBJECTS)
-                    {
-                        if (!warned_object_overflow)
-                        {
-                            std::cerr << "[Renderer] More than " << MAX_OBJECTS << " draws in one frame: the rest are skipped. "
-                                "Raise MAX_OBJECTS in Renderer_Limits.hpp. Further occurrences are not reported.\n";
-                            warned_object_overflow = true;
-                        }
-                        return;
-                    }
+            const MathLib::Matrix4& model = _packet.transforms[item.transform_idx];
 
-                    // -- Object entry --
-                    // Its index is the draw's firstInstance, which the vertex
-                    // shader receives as gl_InstanceIndex. No push constants:
-                    // the shaders read everything per draw from this entry,
-                    // the material table and the mesh table.
-                    const uint32_t object_index = object_count++;
+            if (_settings.frustum_culling && outside_frustum(item, model))
+                continue;
 
-                    Object_GPU& object = _objects[object_index];
-                    object.model = model;
-                    // Inverse-transpose computed once per draw here instead of
-                    // once per vertex in mesh.vert; correct under non-uniform
-                    // scale.
-                    object.normal_matrix = glm::transpose(glm::inverse(model));
-                    object.material_index = item.material_index;
-                    object.mesh_index = item.mesh_gpu_id;
-                    object.flags = (static_cast<uint32_t>(item.pass_mask) & Object_Flag::Pass_Mask) | Object_Flag::Active;
-                    object._padding0 = 0;
+            if (object_count >= MAX_OBJECTS)
+            {
+                warn_object_overflow();
+                break;
+            }
 
-                    _out.push_back({ object_index, item.mesh_gpu_id, item_pipeline_id });
-                }
-            };
+            const bool     mirrored = CoreTypes::Inverts_winding(model);
+            const uint32_t object_index = write_object(item, model, mirrored, 0u);
 
-        // Opaque items take entries [0, opaque) and transparent items
-        // continue from there. The culling pass relies on it: it processes
-        // [0, opaque) only.
-        add_items(_packet.opaque_items, CoreTypes::Render_Pass_Bit::Opaque, Render_Subpass::Opaque,
-                  opaque_draws, false, nullptr);
-        add_items(_packet.transparent_items, CoreTypes::Render_Pass_Bit::Transparent, Render_Subpass::Transparent,
-                  transparent_draws, _cull_transparents, &transparent_candidates);
+            transparent_draws.push_back({ object_index, item.mesh_gpu_id, pipeline_id, mirrored });
+        }
     }
 
     void Draw_List_Builder::Write_cpu_draw_commands(VkDrawIndexedIndirectCommand* _commands, const Mesh_Registry& _meshes) const
@@ -219,12 +332,17 @@ namespace Renderer_System
         while (run_begin < opaque_draws.size())
         {
             const uint8_t pipeline_id = opaque_draws[run_begin].pipeline_id;
+            const bool    mirrored = opaque_draws[run_begin].mirrored;
             size_t        run_end = run_begin + 1;
 
-            while (run_end < opaque_draws.size() && opaque_draws[run_end].pipeline_id == pipeline_id)
+            // A run ends when the pipeline or the winding changes: both are
+            // state the recording sets between the draws.
+            while (run_end < opaque_draws.size() &&
+                   opaque_draws[run_end].pipeline_id == pipeline_id &&
+                   opaque_draws[run_end].mirrored == mirrored)
                 ++run_end;
 
-            opaque_runs.push_back({ pipeline_id, static_cast<uint32_t>(run_begin), static_cast<uint32_t>(run_end - run_begin) });
+            opaque_runs.push_back({ pipeline_id, mirrored, static_cast<uint32_t>(run_begin), static_cast<uint32_t>(run_end - run_begin) });
 
             run_begin = run_end;
         }

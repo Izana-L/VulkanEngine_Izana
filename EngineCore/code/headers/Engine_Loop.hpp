@@ -26,13 +26,19 @@ namespace EngineCore
     //   2. Window::Poll_events()         - GLFW dispatches callbacks
     //      (minimized: discard pending input, wait for events, restart)
     //   3. Time::Update()                - delta time, FPS
-    //   4. Resize handling               - Window flag -> Renderer swapchain
+    //   4. Resize handling               - Window flag -> Renderer swapchain;
+    //      the only place that recreates it
     //   5. Input::Update()               - publish deltas, flush actions
     //      Debug switches                - input -> Renderer debug settings
     //   6. Camera_Controller::Update()   - input -> camera transform
     //   7. Transform_System::Update()    - recompute TRS matrices
     //   8. Extractor::Extract()          - ECS -> RenderPacket
     //   9. Renderer::Render()            - draw the frame
+    //
+    // The Renderer's calls in steps 4 and 9 may throw. A failure is logged
+    // and the loop goes on with the next frame, since a failed frame is
+    // undone by the Renderer; it leaves the loop when the Renderer reports
+    // itself lost, or after several failures in a row.
     //
     // Separated from Engine so the loop strategy can be changed
     // (fixed timestep, render thread) without touching Engine's
@@ -47,7 +53,8 @@ namespace EngineCore
         Engine_Loop(const Engine_Loop&) = delete;
         Engine_Loop& operator=(const Engine_Loop&) = delete;
 
-        // Runs the loop until window.Should_close() returns true.
+        // Runs the loop until window.Should_close() returns true, or the
+        // Renderer is lost or keeps failing.
         // _camera_entity: the ECS entity with Transform + Camera_Component
         //   that Camera_Controller will drive.
         void Run(Platform::Window& _window,

@@ -154,7 +154,10 @@ namespace MathLib
         //
         // REQUIRES a floating-point depth buffer (VK_FORMAT_D32_SFLOAT).
         // On a UNORM depth buffer the spacing is already uniform and this
-        // gains exactly nothing.
+        // gains exactly nothing. The requirement is enforced by the
+        // Renderer, not assumed: Vulkan_Device only selects GPUs that offer
+        // D32_SFLOAT or D32_SFLOAT_S8_UINT as a depth attachment
+        // (Device_Support::depth_format, Vulkan_Device::Get_depth_format).
         //
         // Multiply on the LEFT of a standard [0,1] projection:
         //   reversed = Reverse_z_correction() * standard;

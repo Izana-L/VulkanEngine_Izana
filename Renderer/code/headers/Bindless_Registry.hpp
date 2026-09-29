@@ -163,8 +163,8 @@ namespace Renderer_System
         // UPDATE_UNUSED_WHILE_PENDING only descriptors they do not use.
         // It holds after vkDeviceWaitIdle, which Renderer::Recreate_swapchain
         // performs before resolution-dependent images are recreated, or
-        // once the fence of every frame in flight that may read the slot
-        // has signaled.
+        // once every frame in flight that may read the slot has completed
+        // (the timeline serial of its last submission was reached).
         //
         // Throws std::invalid_argument if _image_view is VK_NULL_HANDLE, if
         // _index is not a registered slot, or if it is a reserved default

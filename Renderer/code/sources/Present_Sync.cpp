@@ -44,13 +44,20 @@ namespace Renderer_System
 
         image_sync.assign(_image_count, Image_Sync{});
 
+        // A handle is stored only after its creation succeeded: the value
+        // an output parameter holds after a failed vkCreate* call is
+        // undefined, and Retire() destroys whatever the set holds. If a
+        // creation throws, the objects created so far stay in the set and
+        // are released by the next Retire() (or by the destructor).
         for (Image_Sync& sync : image_sync)
         {
             VkSemaphoreCreateInfo semaphore_info{};
             semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 
-            VK_CHECK(vkCreateSemaphore(dev, &semaphore_info, nullptr, &sync.render_finished),
+            VkSemaphore render_finished = VK_NULL_HANDLE;
+            VK_CHECK(vkCreateSemaphore(dev, &semaphore_info, nullptr, &render_finished),
                 "Renderer: failed to create render_finished semaphore");
+            sync.render_finished = render_finished;
 
             if (use_present_fences)
             {
@@ -59,8 +66,10 @@ namespace Renderer_System
                 VkFenceCreateInfo fence_info{};
                 fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 
-                VK_CHECK(vkCreateFence(dev, &fence_info, nullptr, &sync.present_fence),
+                VkFence present_fence = VK_NULL_HANDLE;
+                VK_CHECK(vkCreateFence(dev, &fence_info, nullptr, &present_fence),
                     "Renderer: failed to create present fence");
+                sync.present_fence = present_fence;
             }
         }
     }
@@ -101,6 +110,10 @@ namespace Renderer_System
 
         for (Image_Sync& sync : image_sync)
         {
+            // An entry whose creation failed halfway holds no semaphore.
+            if (sync.render_finished == VK_NULL_HANDLE && sync.present_fence == VK_NULL_HANDLE)
+                continue;
+
             if (sync.present_fence != VK_NULL_HANDLE)
             {
                 // With a present fence the completion of the last present

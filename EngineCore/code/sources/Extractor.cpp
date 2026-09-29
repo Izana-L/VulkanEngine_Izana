@@ -235,10 +235,19 @@ namespace EngineCore
                 // (pipeline, material, mesh, then front-to-back).
                 const bool transparent = base_alpha < 1.0f;
 
+                // Objects whose transform inverts the winding are drawn with
+                // the opposite front face: the key keeps them together, right
+                // below their pipeline, so the front face changes as rarely
+                // as possible. Only an ordering hint; the Renderer decides
+                // the winding from the transform itself.
+                const uint8_t winding_bits = CoreTypes::Inverts_winding(transform.world_matrix)
+                    ? CoreTypes::Sort_Key_Mirrored_Bit
+                    : uint8_t{ 0 };
+
                 if (transparent)
                 {
                     item.pass_mask = CoreTypes::Render_Pass_Bit::Transparent;
-                    item.sort_key = CoreTypes::Make_sort_key(_params.transparent_pipeline_id, 0,
+                    item.sort_key = CoreTypes::Make_sort_key(_params.transparent_pipeline_id, winding_bits,
                         static_cast<uint16_t>(gpu_id & 0xFFFF), CoreTypes::Depth_to_sortable_bits(depth));
 
                     _out_packet.transparent_items.push_back(item);
@@ -246,7 +255,7 @@ namespace EngineCore
                 else
                 {
                     item.pass_mask = CoreTypes::Render_Pass_Bit::Opaque;
-                    item.sort_key = CoreTypes::Make_sort_key(_params.opaque_pipeline_id, 0,
+                    item.sort_key = CoreTypes::Make_sort_key(_params.opaque_pipeline_id, winding_bits,
                         static_cast<uint16_t>(gpu_id & 0xFFFF), CoreTypes::Depth_to_sortable_bits(depth));
 
                     _out_packet.opaque_items.push_back(item);
@@ -262,7 +271,7 @@ namespace EngineCore
                 return a.sort_key < b.sort_key;
             };
 
-        // Both lists: grouped by pipeline/material/mesh, front-to-back
+        // Both lists: grouped by pipeline/winding/mesh, front-to-back
         // inside each group. The transparent list needs no back-to-front
         // order: the Renderer composites it order-independently, and the
         // depth bits only keep its order deterministic between frames.

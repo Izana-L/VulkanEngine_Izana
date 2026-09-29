@@ -16,37 +16,31 @@ namespace Renderer_System {
         const Vulkan_Depth_Resources& _depth_resources,
         const Vulkan_OIT_Resources& _oit_resources)
 
-        : device_handle(_device.Get_logical_device_handle()) {
+        : device_handle(_device.Get_logical_device_handle()),
+        framebuffers(Create(_device.Get_logical_device_handle(), _render_pass, _swapchain, _depth_resources, _oit_resources)) {
 
         assert(device_handle != VK_NULL_HANDLE && "Vulkan_Device must be fully constructed before creating framebuffers");
-
-        Create(_render_pass, _swapchain, _depth_resources, _oit_resources);
-    }
-
-    // ---------- Destructor ----------
-    Vulkan_Framebuffer::~Vulkan_Framebuffer() {
-        Destroy();
-    }
-
-    // ---------- Destroy ----------
-    void Vulkan_Framebuffer::Destroy() {
-        for (VkFramebuffer framebuffer : framebuffers) {
-            vkDestroyFramebuffer(device_handle, framebuffer, nullptr);
-        }
-        framebuffers.clear();
     }
 
     // ---------- Create ----------
-    void Vulkan_Framebuffer::Create(
+    std::vector<Unique_Framebuffer> Vulkan_Framebuffer::Create(
+        VkDevice _device,
         const Vulkan_Render_Pass& _render_pass,
         const Vulkan_Swapchain& _swapchain,
         const Vulkan_Depth_Resources& _depth_resources,
         const Vulkan_OIT_Resources& _oit_resources) {
 
-        const std::vector<VkImageView>& color_image_views = _swapchain.Get_image_views();
+        const uint32_t image_count = _swapchain.Get_image_count();
         VkExtent2D extent = _swapchain.Get_extent();
 
-        framebuffers.resize(color_image_views.size());
+        // Built in a local vector: if the creation of framebuffer i throws,
+        // the vector destroys the i - 1 wrappers that already own theirs.
+        // The handle of a failed vkCreateFramebuffer is never stored: a
+        // wrapper is constructed only from a handle that was created
+        // successfully. The capacity is reserved up front, so appending a
+        // wrapper cannot throw between the creation and the ownership.
+        std::vector<Unique_Framebuffer> created;
+        created.reserve(image_count);
 
         // Create one framebuffer per swapchain color image view. Each
         // framebuffer shares the SAME depth image view and the SAME two OIT
@@ -72,10 +66,10 @@ namespace Renderer_System {
         // transfers) with the render pass of the other, but not two render
         // passes. If either dependency is ever relaxed, or another render
         // pass uses these images, they must be revisited.
-        for (size_t i = 0; i < color_image_views.size(); ++i) {
+        for (uint32_t i = 0; i < image_count; ++i) {
             // Render_Pass_Attachment order.
             std::array<VkImageView, Render_Pass_Attachment::Count> attachments{};
-            attachments[Render_Pass_Attachment::Color] = color_image_views[i];
+            attachments[Render_Pass_Attachment::Color] = _swapchain.Get_image_view(i);
             attachments[Render_Pass_Attachment::Depth] = _depth_resources.Get_image_view();
             attachments[Render_Pass_Attachment::Oit_Accumulation] = _oit_resources.Get_accumulation_view();
             attachments[Render_Pass_Attachment::Oit_Revealage] = _oit_resources.Get_revealage_view();
@@ -93,12 +87,17 @@ namespace Renderer_System {
             framebuffer_info.height = extent.height;
             framebuffer_info.layers = 1; // not using multiview/stereo rendering
 
-            VK_CHECK(vkCreateFramebuffer(device_handle, &framebuffer_info, nullptr, &framebuffers[i]),
+            VkFramebuffer framebuffer = VK_NULL_HANDLE;
+            VK_CHECK(vkCreateFramebuffer(_device, &framebuffer_info, nullptr, &framebuffer),
                 ("Failed to create framebuffer " + std::to_string(i)).c_str());
+
+            created.emplace_back(_device, framebuffer);
         }
 
-        std::cout << "[Vulkan_Framebuffer] Created " << framebuffers.size() << " framebuffer(s), size "
+        std::cout << "[Vulkan_Framebuffer] Created " << created.size() << " framebuffer(s), size "
             << extent.width << "x" << extent.height << "\n";
+
+        return created;
     }
 
     // ---------- Recreate ----------
@@ -108,33 +107,15 @@ namespace Renderer_System {
         const Vulkan_Depth_Resources& _depth_resources,
         const Vulkan_OIT_Resources& _oit_resources) {
 
-        assert(!framebuffers.empty() && "Recreate() called on a moved-from or already-destroyed Vulkan_Framebuffer");
+        assert(!framebuffers.empty() && "Recreate() called on a moved-from or destroyed Vulkan_Framebuffer");
 
-        Destroy();
-        Create(_render_pass, _swapchain, _depth_resources, _oit_resources);
+        // The new set is complete before the current one is released: the
+        // assignment below cannot throw.
+        std::vector<Unique_Framebuffer> replacement = Create(device_handle, _render_pass, _swapchain, _depth_resources, _oit_resources);
+
+        framebuffers = std::move(replacement);
 
         std::cout << "[Vulkan_Framebuffer] Framebuffers recreated.\n";
-    }
-
-    // ---------- Move constructor ----------
-    Vulkan_Framebuffer::Vulkan_Framebuffer(Vulkan_Framebuffer&& _other) noexcept
-        : device_handle(_other.device_handle),
-        framebuffers(std::move(_other.framebuffers)) {
-
-        _other.framebuffers.clear();
-    }
-
-    // ---------- Move assignment ----------
-    Vulkan_Framebuffer& Vulkan_Framebuffer::operator=(Vulkan_Framebuffer&& _other) noexcept {
-        if (this != &_other) {
-            Destroy();
-
-            device_handle = _other.device_handle;
-            framebuffers = std::move(_other.framebuffers);
-
-            _other.framebuffers.clear();
-        }
-        return *this;
     }
 
     // ---------- Get_framebuffer ----------
@@ -142,7 +123,7 @@ namespace Renderer_System {
         assert(!framebuffers.empty() && "Get_framebuffer() called on a moved-from or destroyed Vulkan_Framebuffer");
         assert(_image_index < framebuffers.size() && "Get_framebuffer() called with an out-of-range image index");
 
-        return framebuffers[_image_index];
+        return framebuffers[_image_index].Get();
     }
 
     // ---------- Get_count ----------

@@ -46,6 +46,10 @@ namespace Renderer_System
             VkFence     present_fence = VK_NULL_HANDLE;
 
             // True while a present that signals present_fence is pending.
+            // Set by the Renderer only when vkQueuePresentKHR queued the
+            // present (its result is SUCCESS, SUBOPTIMAL, OUT_OF_DATE or
+            // SURFACE_LOST): a present that failed without queueing anything
+            // never signals the fence, and waiting for it would hang.
             bool        present_pending = false;
         };
 

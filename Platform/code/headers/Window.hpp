@@ -61,8 +61,10 @@ namespace Platform {
         bool Should_close() const;
         void Poll_events();
         // Blocks until an OS event arrives. For idle states (minimized)
-        // where polling in a loop would just burn a core.
-        void Wait_events() const;
+        // where polling in a loop would just burn a core. Not const: it
+        // dispatches the callbacks, which modify the window (resize flag,
+        // input state), so only the owner of the main loop calls it.
+        void Wait_events();
         // =========================================================
         // Size
         // =========================================================

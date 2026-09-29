@@ -158,8 +158,9 @@ namespace Renderer_System
         // untouched, when timestamps are unsupported, the slot never
         // recorded a complete frame, or the results are not available.
         //
-        // Precondition: the fence of the submission that recorded the slot
-        // has been waited on, and the slot has not been recorded again yet.
+        // Precondition: the submission that recorded the slot has completed
+        // (its serial was waited on), and the slot has not been recorded
+        // again yet.
         bool Read_frame(uint32_t _frame_slot, Gpu_Frame_Timings& _out);
 
     private:

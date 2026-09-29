@@ -2,6 +2,7 @@
 #include <Vulkan_Utils.hpp>
 #include <Vulkan_Vertex_Layout.hpp>
 #include <Descriptor_Sets.hpp>
+#include <algorithm>
 #include <stdexcept>
 #include <iostream>
 #include <set>
@@ -39,15 +40,38 @@ namespace Renderer_System {
         // words, for the error raised when no GPU qualifies. Empty when the
         // device is suitable; Is_device_suitable is defined as exactly that,
         // so the message and the decision cannot disagree.
+        // First floating-point depth format of the candidates that can be a
+        // depth attachment with optimal tiling, in order of preference:
+        // D32_SFLOAT first, because the stencil aspect is not used and
+        // costs memory. VK_FORMAT_UNDEFINED when none qualifies.
+        VkFormat Select_float_depth_format(VkPhysicalDevice _device)
+        {
+            constexpr VkFormat candidates[] = { VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT };
+
+            for (VkFormat format : candidates)
+            {
+                VkFormatProperties properties{};
+                vkGetPhysicalDeviceFormatProperties(_device, format, &properties);
+
+                if ((properties.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0)
+                    return format;
+            }
+
+            return VK_FORMAT_UNDEFINED;
+        }
+
         std::vector<std::string> Find_missing_requirements(const Device_Support& _support)
         {
             std::vector<std::string> missing;
 
-            // Extended dynamic state (vkCmdSetCullMode, vkCmdSetDepthTestEnable, ...)
-            // is core AND required in Vulkan 1.3 - no feature bit, no extension.
-            // Vulkan_Instance::Determine_api_version caps the *instance* version;
-            // this is the *device* version, which is what actually gates those
-            // entry points.
+            // Extended dynamic state (vkCmdSetCullMode, vkCmdSetFrontFace,
+            // vkCmdSetDepthTestEnable, ...) is core AND required in Vulkan
+            // 1.3 - no feature bit, no extension. The functionality
+            // available to the application is bounded by both versions,
+            // the instance's and the device's, so api_version is their
+            // minimum (Query_device_support). The instance is always
+            // created with 1.3, which leaves the device version as the
+            // deciding one, but the check does not depend on it.
             if (_support.api_version < VK_API_VERSION_1_3)
                 missing.push_back("Vulkan 1.3");
 
@@ -81,6 +105,17 @@ namespace Renderer_System {
 
             if (!_support.draw_indirect_count)
                 missing.push_back("drawIndirectCount");
+
+            // The progress of the frames in flight is tracked by one timeline
+            // semaphore that the Renderer waits on and reads.
+            if (!_support.timeline_semaphore)
+                missing.push_back("timelineSemaphore");
+
+            // The reverse-Z projection with an infinite far plane needs a
+            // floating-point depth buffer; a GPU that only offers UNORM
+            // depth is rejected here, where another GPU can still be chosen.
+            if (_support.depth_format == VK_FORMAT_UNDEFINED)
+                missing.push_back("a floating-point depth format (D32_SFLOAT or D32_SFLOAT_S8_UINT) usable as a depth attachment");
 
             // Weighted blended OIT: the transparent pipeline blends its two
             // color attachments differently.
@@ -126,7 +161,8 @@ namespace Renderer_System {
                                   fill_mode_non_solid_enabled(false),
                                   max_draw_indirect_count(0),
                                   timestamp_valid_bits(0),
-                                  timestamp_period(0.0f)
+                                  timestamp_period(0.0f),
+                                  depth_format(VK_FORMAT_UNDEFINED)
     {
         VkInstance instance_handle = _instance.Get_handle();
         VkSurfaceKHR surface_handle = _surface.Get_handle();
@@ -209,14 +245,17 @@ namespace Renderer_System {
         max_draw_indirect_count = best_support.max_draw_indirect_count;
         timestamp_valid_bits = best_support.timestamp_valid_bits;
         timestamp_period = best_support.timestamp_period;
+        depth_format = best_support.depth_format;
+
+        std::cout << "[Vulkan_Device] Depth format: " << Vulkan_Utils::Vk_format_to_string(depth_format) << ".\n";
 
         std::cout << "[Vulkan_Device] Sampler anisotropy "
             << (sampler_anisotropy_enabled ? "enabled (max " + std::to_string(max_sampler_anisotropy) + ")" : "not available")
             << ".\n";
 
         std::cout << "[Vulkan_Device] Indirect drawing enabled (multiDrawIndirect, drawIndirectFirstInstance, "
-            "drawIndirectCount; maxDrawIndirectCount " << max_draw_indirect_count << "). independentBlend enabled. "
-            "fillModeNonSolid " << (fill_mode_non_solid_enabled ? "enabled" : "not available") << ".\n";
+            "drawIndirectCount; maxDrawIndirectCount " << max_draw_indirect_count << "). independentBlend and "
+            "timelineSemaphore enabled. fillModeNonSolid " << (fill_mode_non_solid_enabled ? "enabled" : "not available") << ".\n";
 
         if (timestamp_valid_bits > 0)
             std::cout << "[Vulkan_Device] Timestamps: " << timestamp_valid_bits << " valid bits, "
@@ -314,6 +353,10 @@ namespace Renderer_System {
         // commands as the culling pass wrote. Required by device selection.
         vulkan12_features.drawIndirectCount = VK_TRUE;
 
+        // Timeline semaphore of the frames in flight. Core in Vulkan 1.2,
+        // but the feature has to be enabled. Required by device selection.
+        vulkan12_features.timelineSemaphore = VK_TRUE;
+
         VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR swapchain_maintenance1_features{};
         swapchain_maintenance1_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_KHR;
         swapchain_maintenance1_features.swapchainMaintenance1 = VK_TRUE;
@@ -388,6 +431,7 @@ namespace Renderer_System {
         max_draw_indirect_count(_other.max_draw_indirect_count),
         timestamp_valid_bits(_other.timestamp_valid_bits),
         timestamp_period(_other.timestamp_period),
+        depth_format(_other.depth_format),
         bindless_limits(_other.bindless_limits)
     {
     
@@ -416,6 +460,7 @@ namespace Renderer_System {
             max_draw_indirect_count = _other.max_draw_indirect_count;
             timestamp_valid_bits = _other.timestamp_valid_bits;
             timestamp_period = _other.timestamp_period;
+            depth_format = _other.depth_format;
             bindless_limits = _other.bindless_limits;
 
             _other.physical_device = VK_NULL_HANDLE;
@@ -488,6 +533,10 @@ namespace Renderer_System {
         return timestamp_period;
     }
 
+    VkFormat Vulkan_Device::Get_depth_format() const {
+        return depth_format;
+    }
+
     const Bindless_Limits& Vulkan_Device::Get_bindless_limits() const {
         return bindless_limits;
     }
@@ -506,42 +555,6 @@ namespace Renderer_System {
         return devices;
     }
 
-    // ---------- Find_supported_format ----------
-    VkFormat Vulkan_Device::Find_supported_format(
-        const std::vector<VkFormat>& _candidates,
-        VkImageTiling                _tiling,
-        VkFormatFeatureFlags         _features) const
-    {
-        assert(physical_device != VK_NULL_HANDLE);
-        assert(!_candidates.empty());
-
-        for (VkFormat format : _candidates) {
-            VkFormatProperties properties{};
-            vkGetPhysicalDeviceFormatProperties(physical_device, format, &properties);
-
-            if (_tiling == VK_IMAGE_TILING_LINEAR &&
-                (properties.linearTilingFeatures & _features) == _features)
-                return format;
-
-            if (_tiling == VK_IMAGE_TILING_OPTIMAL &&
-                (properties.optimalTilingFeatures & _features) == _features)
-                return format;
-        }
-
-        throw std::runtime_error("Failed to find a supported format among the given candidates");
-    }
-
-    // ---------- Find_supported_depth_format ----------
-    VkFormat Vulkan_Device::Find_supported_depth_format() const {
-        assert(physical_device != VK_NULL_HANDLE);
-        return Find_supported_format(
-            { VK_FORMAT_D32_SFLOAT,
-              VK_FORMAT_D32_SFLOAT_S8_UINT,
-              VK_FORMAT_D24_UNORM_S8_UINT },
-            VK_IMAGE_TILING_OPTIMAL,
-            VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT);
-    }
-
     // ---------- Query_device_support ----------
     Device_Support Vulkan_Device::Query_device_support(VkPhysicalDevice _device,VkSurfaceKHR _surface,const Vulkan_Instance& _instance) const
     {
@@ -550,10 +563,12 @@ namespace Renderer_System {
 
         Device_Support support;
 
-        // Properties: API version and limits.
+        // Properties: API version and limits. The version the application
+        // can rely on is the minimum of the instance's and the device's:
+        // the device may report a higher one than the instance enables.
         VkPhysicalDeviceProperties properties{};
         vkGetPhysicalDeviceProperties(_device, &properties);
-        support.api_version = properties.apiVersion;
+        support.api_version = std::min(_instance.Get_api_version(), properties.apiVersion);
         support.max_sampler_anisotropy = properties.limits.maxSamplerAnisotropy;
         support.max_bound_descriptor_sets = properties.limits.maxBoundDescriptorSets;
         support.max_draw_indirect_count = properties.limits.maxDrawIndirectCount;
@@ -564,7 +579,7 @@ namespace Renderer_System {
         // Descriptor indexing limits. The properties struct is core only
         // from Vulkan 1.2, and chaining it on an older device is invalid;
         // such devices keep all-zero limits and are rejected anyway.
-        if (properties.apiVersion >= VK_API_VERSION_1_2) {
+        if (support.api_version >= VK_API_VERSION_1_2) {
             VkPhysicalDeviceDescriptorIndexingProperties indexing_properties{};
             indexing_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES;
 
@@ -609,7 +624,7 @@ namespace Renderer_System {
         VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR maintenance1_features{};
         maintenance1_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_KHR;
 
-        const bool query_vulkan12 = properties.apiVersion >= VK_API_VERSION_1_2;
+        const bool query_vulkan12 = support.api_version >= VK_API_VERSION_1_2;
         const bool query_maintenance1 = support.swapchain_maintenance1_extension != nullptr && _instance.Is_surface_maintenance1_enabled();
 
         void* feature_chain = query_maintenance1 ? &maintenance1_features : nullptr;
@@ -632,6 +647,8 @@ namespace Renderer_System {
         support.fill_mode_non_solid = features2.features.fillModeNonSolid == VK_TRUE;
         support.independent_blend = features2.features.independentBlend == VK_TRUE;
         support.draw_indirect_count = vulkan12_features.drawIndirectCount == VK_TRUE;
+        support.timeline_semaphore = vulkan12_features.timelineSemaphore == VK_TRUE;
+        support.depth_format = Select_float_depth_format(_device);
         support.vertex_formats = true;
         for (VkFormat format : Vulkan_Vertex_Layout::OPTIONAL_VERTEX_FORMATS)
         {

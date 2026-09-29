@@ -10,186 +10,166 @@
 namespace Renderer_System
 {
 
-    // ---------- Constructor ----------
-    Vulkan_Swapchain::Vulkan_Swapchain( const Vulkan_Device& _device,const Vulkan_Surface& _surface,const 
-                                        Platform::Window& _window,uint32_t _preferred_image_count,bool _prefer_mailbox)
-                                        : device_handle(_device.Get_logical_device_handle()),
-                                        physical_device_handle(_device.Get_physical_device_handle()),
-                                        surface_handle(_surface.Get_handle()),
-                                        present_queue_handle(_device.Get_present_queue()),
-                                        window(&_window),
+    // ---------- Constructors ----------
+    Vulkan_Swapchain::Vulkan_Swapchain( const Vulkan_Device& _device,const Vulkan_Surface& _surface,
+                                        VkExtent2D _desired_extent,uint32_t _preferred_image_count,bool _prefer_mailbox)
+                                        : Vulkan_Swapchain(_device.Get_logical_device_handle(),
+                                                           _device.Get_physical_device_handle(),
+                                                           _surface.Get_handle(),
+                                                           _device.Get_queue_family_indices(),
+                                                           _preferred_image_count,
+                                                           _prefer_mailbox,
+                                                           _desired_extent,
+                                                           VK_NULL_HANDLE)
+    {
+    }
+
+    Vulkan_Swapchain::Vulkan_Swapchain( VkDevice _device,VkPhysicalDevice _physical_device,VkSurfaceKHR _surface,
+                                        const Queue_Family_Indices& _queue_family_indices,uint32_t _preferred_image_count,
+                                        bool _prefer_mailbox,VkExtent2D _desired_extent,VkSwapchainKHR _old_swapchain)
+                                        : device_handle(_device),
+                                        physical_device_handle(_physical_device),
+                                        surface_handle(_surface),
                                         preferred_image_count(_preferred_image_count),
                                         prefer_mailbox(_prefer_mailbox),
-                                        queue_family_indices(_device.Get_queue_family_indices()),
-                                        swapchain(VK_NULL_HANDLE),
+                                        queue_family_indices(_queue_family_indices),
                                         image_format(VK_FORMAT_UNDEFINED),
                                         extent{ 0, 0 },
-                                        selected_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+                                        selected_present_mode(VK_PRESENT_MODE_FIFO_KHR),
+                                        retired(false)
     {
         assert(device_handle != VK_NULL_HANDLE && "Vulkan_Device must be fully constructed before creating a swapchain");
         assert(surface_handle != VK_NULL_HANDLE && "Vulkan_Surface must be fully constructed before creating a swapchain");
         assert(_preferred_image_count >= 1 && "Preferred image count must be at least 1");
-        assert(present_queue_handle != VK_NULL_HANDLE && "Vulkan_Device must have a valid present queue before creating a swapchain");
 
-        Create_swapchain(_device, _surface, _window, _preferred_image_count, _prefer_mailbox);
+        Create_swapchain(_desired_extent, _old_swapchain);
         Create_image_views();
-    }
-
-    // ---------- Destructor ----------
-    Vulkan_Swapchain::~Vulkan_Swapchain()
-    {
-        Destroy();
-    }
-
-    // ---------- Destroy ----------
-    void Vulkan_Swapchain::Destroy()
-    {
-        for (VkImageView view : image_views)
-            vkDestroyImageView(device_handle, view, nullptr);
-        image_views.clear();
-
-        if (swapchain != VK_NULL_HANDLE) {
-            vkDestroySwapchainKHR(device_handle, swapchain, nullptr);
-            swapchain = VK_NULL_HANDLE;
-        }
-    }
-
-    // ---------- Recreate ----------
-    // Waits for a valid window size, destroys the old swapchain and
-    // rebuilds it using the parameters already cached as members.
-    // No parameters needed — everything was stored at construction time.
-    void Vulkan_Swapchain::Recreate()
-    {
-        assert(swapchain != VK_NULL_HANDLE && "Recreate() called on a moved-from or already-destroyed Vulkan_Swapchain");
-
-        // Handle minimization: block until the window has a non-zero size.
-        // The size is read once per iteration and tested BEFORE blocking,
-        // so the loop leaves as soon as the size is valid instead of
-        // waiting for one more event after it already is.
-        while (true) {
-            int width = 0, height = 0;
-            window->Get_framebuffer_size(width, height);
-            if (width > 0 && height > 0) break;
-            window->Wait_events();
-        }
-
-        VK_CHECK(vkDeviceWaitIdle(device_handle), "Vulkan_Swapchain: wait for device idle before recreation");
-
-        Destroy();
-        Create_swapchain_internal();
-        Create_image_views();
-
-        std::cout << "[Vulkan_Swapchain] Swapchain recreated: "
-            << extent.width << "x" << extent.height << "\n";
-    }
-
-   
-
-    // ---------- Move constructor ----------
-    Vulkan_Swapchain::Vulkan_Swapchain(Vulkan_Swapchain&& _other) noexcept
-        : device_handle(_other.device_handle),
-        physical_device_handle(_other.physical_device_handle),
-        surface_handle(_other.surface_handle),
-        present_queue_handle(_other.present_queue_handle),
-        window(_other.window),
-        preferred_image_count(_other.preferred_image_count),
-        prefer_mailbox(_other.prefer_mailbox),
-        queue_family_indices(_other.queue_family_indices),
-        swapchain(_other.swapchain),
-        images(std::move(_other.images)),
-        image_views(std::move(_other.image_views)),
-        image_format(_other.image_format),
-        extent(_other.extent),
-        selected_present_mode(_other.selected_present_mode)
-    {
-        _other.swapchain = VK_NULL_HANDLE;
-        _other.image_views.clear();
     }
 
     // ---------- Move assignment ----------
     Vulkan_Swapchain& Vulkan_Swapchain::operator=(Vulkan_Swapchain&& _other) noexcept
     {
         if (this != &_other) {
-            Destroy();
+            // The image views look at the images of the current swapchain:
+            // they go first, then the swapchain.
+            image_views.clear();
+            images.clear();
+            swapchain.Reset();
 
             device_handle = _other.device_handle;
             physical_device_handle = _other.physical_device_handle;
             surface_handle = _other.surface_handle;
-            present_queue_handle = _other.present_queue_handle;
-            window = _other.window;
             preferred_image_count = _other.preferred_image_count;
             prefer_mailbox = _other.prefer_mailbox;
             queue_family_indices = _other.queue_family_indices;
-            swapchain = _other.swapchain;
-            images = std::move(_other.images);
-            image_views = std::move(_other.image_views);
             image_format = _other.image_format;
             extent = _other.extent;
             selected_present_mode = _other.selected_present_mode;
+            retired = _other.retired;
 
-            _other.swapchain = VK_NULL_HANDLE;
+            swapchain = std::move(_other.swapchain);
+            images = std::move(_other.images);
+            image_views = std::move(_other.image_views);
+
+            _other.images.clear();
             _other.image_views.clear();
         }
         return *this;
     }
 
+    // ---------- Can_recreate ----------
+    bool Vulkan_Swapchain::Can_recreate(VkExtent2D _desired_extent) const
+    {
+        assert(device_handle != VK_NULL_HANDLE && "Can_recreate() called on a moved-from Vulkan_Swapchain");
+
+        VkSurfaceCapabilitiesKHR capabilities{};
+        VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device_handle, surface_handle, &capabilities),
+            "Vulkan_Swapchain: query surface capabilities");
+
+        const VkExtent2D chosen = Choose_extent(capabilities, _desired_extent);
+
+        return chosen.width > 0 && chosen.height > 0;
+    }
+
+    // ---------- Recreate ----------
+    // Builds the replacement with the current swapchain as oldSwapchain and
+    // swaps it in. Never waits: the caller has already made sure that
+    // nothing pending uses the current images.
+    bool Vulkan_Swapchain::Recreate(VkExtent2D _desired_extent)
+    {
+        assert(device_handle != VK_NULL_HANDLE && "Recreate() called on a moved-from Vulkan_Swapchain");
+
+        // A surface without area cannot hold a swapchain. Nothing has been
+        // touched, so the current swapchain stays as it is.
+        if (!Can_recreate(_desired_extent))
+            return false;
+
+        // The swapchain left behind by a failed creation is retired and
+        // cannot be the oldSwapchain of a new one: it is destroyed first and
+        // the creation starts from scratch.
+        if (retired) {
+            image_views.clear();
+            images.clear();
+            swapchain.Reset();
+            retired = false;
+        }
+
+        // From the moment it is passed as oldSwapchain the current swapchain
+        // is retired, even if the creation fails: recorded before the call.
+        VkSwapchainKHR old_swapchain = swapchain.Get();
+        retired = old_swapchain != VK_NULL_HANDLE;
+
+        Vulkan_Swapchain replacement(device_handle, physical_device_handle, surface_handle, queue_family_indices,
+                                     preferred_image_count, prefer_mailbox, _desired_extent, old_swapchain);
+
+        // Destroys the old image views and the old swapchain, and clears
+        // the retired flag (the replacement is a fresh swapchain).
+        *this = std::move(replacement);
+
+        std::cout << "[Vulkan_Swapchain] Swapchain recreated: "
+            << extent.width << "x" << extent.height << "\n";
+
+        return true;
+    }
+
     // ---------- Getters ----------
     VkSwapchainKHR Vulkan_Swapchain::Get_handle() const
     {
-        assert(swapchain != VK_NULL_HANDLE && "Get_handle() called on a moved-from or destroyed Vulkan_Swapchain");
-        return swapchain;
+        assert(swapchain && "Get_handle() called on a moved-from or destroyed Vulkan_Swapchain");
+        return swapchain.Get();
     }
 
     VkFormat Vulkan_Swapchain::Get_image_format() const
     {
-        assert(swapchain != VK_NULL_HANDLE && "Get_image_format() called on a moved-from or destroyed Vulkan_Swapchain");
         return image_format;
     }
 
     VkExtent2D Vulkan_Swapchain::Get_extent() const
     {
-        assert(swapchain != VK_NULL_HANDLE && "Get_extent() called on a moved-from or destroyed Vulkan_Swapchain");
         return extent;
     }
 
-    const std::vector<VkImageView>& Vulkan_Swapchain::Get_image_views() const
+    VkImageView Vulkan_Swapchain::Get_image_view(uint32_t _index) const
     {
-        assert(swapchain != VK_NULL_HANDLE && "Get_image_views() called on a moved-from or destroyed Vulkan_Swapchain");
-        return image_views;
+        assert(_index < image_views.size() && "Get_image_view() called with an out-of-range index or on a destroyed Vulkan_Swapchain");
+        return image_views[_index].Get();
     }
 
     uint32_t Vulkan_Swapchain::Get_image_count() const
     {
-        assert(swapchain != VK_NULL_HANDLE && "Get_image_count() called on a moved-from or destroyed Vulkan_Swapchain");
         return static_cast<uint32_t>(images.size());
     }
 
     VkPresentModeKHR Vulkan_Swapchain::Get_present_mode() const
     {
-        assert(swapchain != VK_NULL_HANDLE && "Get_present_mode() called on a moved-from or destroyed Vulkan_Swapchain");
         return selected_present_mode;
     }
 
     // ---------- Create_swapchain ----------
-    // Public entry point: caches the parameters that Recreate will need,
-    // then delegates to Create_swapchain_internal for the actual work.
-    void Vulkan_Swapchain::Create_swapchain(
-        const Vulkan_Device& _device,
-        const Vulkan_Surface& _surface,
-        const Platform::Window& _window,
-        uint32_t                _preferred_image_count,
-        bool                    _prefer_mailbox)
-    {
-        // All the handles needed by Create_swapchain_internal are already
-        // cached as members in the constructor before this is called.
-        // Nothing extra to cache here — delegate immediately.
-        Create_swapchain_internal();
-    }
-
-    // ---------- Create_swapchain_internal ----------
-    // Core creation logic. Uses only cached members so both the initial
-    // creation path and Recreate() can call it without parameters.
-    void Vulkan_Swapchain::Create_swapchain_internal()
+    // Core creation logic, shared by the constructor and Recreate() through
+    // the private constructor. Uses the cached members plus the two
+    // arguments that change between creations.
+    void Vulkan_Swapchain::Create_swapchain(VkExtent2D _desired_extent, VkSwapchainKHR _old_swapchain)
     {
         Swap_chain_support_details support =
             Query_swap_chain_support(physical_device_handle, surface_handle);
@@ -202,7 +182,11 @@ namespace Renderer_System
 
         VkSurfaceFormatKHR surface_format = Choose_surface_format(support.formats);
         VkPresentModeKHR   present_mode = Choose_present_mode(support.present_modes, prefer_mailbox);
-        VkExtent2D         chosen_extent = Choose_extent(support.capabilities, *window);
+        VkExtent2D         chosen_extent = Choose_extent(support.capabilities, _desired_extent);
+
+        if (chosen_extent.width == 0 || chosen_extent.height == 0) {
+            throw std::runtime_error("Vulkan_Swapchain: the surface has no area (minimized window), a swapchain cannot be created");
+        }
 
         uint32_t image_count = preferred_image_count;
         if (support.capabilities.maxImageCount > 0)
@@ -239,20 +223,28 @@ namespace Renderer_System
         create_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
         create_info.presentMode = present_mode;
         create_info.clipped = VK_TRUE;
-        create_info.oldSwapchain = VK_NULL_HANDLE;
 
-        VK_CHECK(vkCreateSwapchainKHR(device_handle, &create_info, nullptr, &swapchain),
+        // The previous swapchain lets the driver reuse its resources and
+        // gives the transition to the new one; it is retired by the call
+        // whether the creation succeeds or not.
+        create_info.oldSwapchain = _old_swapchain;
+
+        // The wrapper takes the handle only after VK_SUCCESS.
+        VkSwapchainKHR created = VK_NULL_HANDLE;
+        VK_CHECK(vkCreateSwapchainKHR(device_handle, &create_info, nullptr, &created),
             "Failed to create swapchain");
+
+        swapchain = Unique_Swapchain(device_handle, created);
 
         image_format = surface_format.format;
         extent = chosen_extent;
         selected_present_mode = present_mode;
 
         uint32_t actual_image_count = 0;
-        VK_CHECK(vkGetSwapchainImagesKHR(device_handle, swapchain, &actual_image_count, nullptr),
+        VK_CHECK(vkGetSwapchainImagesKHR(device_handle, swapchain.Get(), &actual_image_count, nullptr),
             "Vulkan_Swapchain: query swapchain images");
         images.resize(actual_image_count);
-        VK_CHECK(vkGetSwapchainImagesKHR(device_handle, swapchain, &actual_image_count, images.data()),
+        VK_CHECK(vkGetSwapchainImagesKHR(device_handle, swapchain.Get(), &actual_image_count, images.data()),
             "Vulkan_Swapchain: query swapchain images");
 
         std::cout << "[Vulkan_Swapchain] Swapchain created: "
@@ -277,7 +269,12 @@ namespace Renderer_System
     // ---------- Create_image_views ----------
     void Vulkan_Swapchain::Create_image_views()
     {
-        image_views.resize(images.size());
+        // Built in a local vector so that a failure on view i releases the
+        // views before it; the members are replaced once all exist. The
+        // capacity is reserved up front, so appending a wrapper cannot
+        // throw between the creation of a view and its ownership.
+        std::vector<Unique_Image_View> created;
+        created.reserve(images.size());
 
         for (size_t i = 0; i < images.size(); ++i) {
             VkImageViewCreateInfo view_create_info{};
@@ -295,9 +292,14 @@ namespace Renderer_System
             view_create_info.subresourceRange.baseArrayLayer = 0;
             view_create_info.subresourceRange.layerCount = 1;
 
-            VK_CHECK(vkCreateImageView(device_handle, &view_create_info, nullptr, &image_views[i]),
+            VkImageView view = VK_NULL_HANDLE;
+            VK_CHECK(vkCreateImageView(device_handle, &view_create_info, nullptr, &view),
                 "Failed to create swapchain image view");
+
+            created.emplace_back(device_handle, view);
         }
+
+        image_views = std::move(created);
     }
 
     // ---------- Query_swap_chain_support ----------
@@ -339,7 +341,7 @@ namespace Renderer_System
     {
         assert(!_available_formats.empty() && "Choose_surface_format() called with an empty format list");
 
-        for (const auto& format : _available_formats) 
+        for (const auto& format : _available_formats)
         {
             if (format.format == VK_FORMAT_B8G8R8A8_SRGB &&
                 format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
@@ -349,7 +351,7 @@ namespace Renderer_System
         // 2nd choice: any other sRGB format. The shaders output linear color
          // and depend on the hardware encode, so what matters is keeping an
          // *_SRGB format, not the exact channel order.
-        for (const auto& format : _available_formats) 
+        for (const auto& format : _available_formats)
         {
             if (Vulkan_Utils::Is_srgb_format(format.format) &&
                 format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
@@ -386,18 +388,18 @@ namespace Renderer_System
     // ---------- Choose_extent ----------
     VkExtent2D Vulkan_Swapchain::Choose_extent(
         const VkSurfaceCapabilitiesKHR& _capabilities,
-        const Platform::Window& _window) const
+        VkExtent2D _desired_extent) const
     {
         if (_capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max())
             return _capabilities.currentExtent;
 
-        int width = 0, height = 0;
-        _window.Get_framebuffer_size(width, height);
+        // The surface leaves the size to the swapchain and the caller has
+        // none to offer: the clamp below would invent a minimum-size
+        // swapchain for a window that has no area.
+        if (_desired_extent.width == 0 || _desired_extent.height == 0)
+            return { 0, 0 };
 
-        VkExtent2D actual_extent{
-            static_cast<uint32_t>(width),
-            static_cast<uint32_t>(height)
-        };
+        VkExtent2D actual_extent = _desired_extent;
 
         actual_extent.width = std::clamp(actual_extent.width,
             _capabilities.minImageExtent.width,

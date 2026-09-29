@@ -45,13 +45,16 @@ namespace Renderer_System
     {
         const VkBufferCopy cluster_copy{ 0, offsetof(Frame_Stats_GPU, cluster_light_references),
                                          sizeof(uint32_t) * 2 };   // light_index_count, dropped_light_count
-        const VkBufferCopy draw_copy{ 0, offsetof(Frame_Stats_GPU, gpu_opaque_draws), sizeof(uint32_t) };
+        // The total of the culling pass; the per-bucket counters are not
+        // needed by the statistics.
+        const VkBufferCopy draw_copy{ offsetof(Draw_Count_GPU, total_draw_count), offsetof(Frame_Stats_GPU, gpu_opaque_draws), sizeof(uint32_t) };
 
         vkCmdCopyBuffer(_command_buffer, _cluster_counters.buffer, _readback.buffer, 1, &cluster_copy);
         vkCmdCopyBuffer(_command_buffer, _draw_count.buffer, _readback.buffer, 1, &draw_copy);
 
         // Device writes reach host reads only through a barrier with the
-        // host as destination; the fence wait then orders the read.
+        // host as destination; the wait for the frame's serial then orders
+        // the read.
         Vulkan_Buffer_Utils::Record_memory_barrier(_command_buffer,
             { VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT },
             { VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT });
@@ -78,13 +81,6 @@ namespace Renderer_System
         assert(_slot < records.size() && "Frame_Statistics: slot out of range");
 
         records[_slot].recorded = true;
-    }
-
-    bool Frame_Statistics::Recorded_procedural(uint32_t _slot) const
-    {
-        assert(_slot < records.size() && "Frame_Statistics: slot out of range");
-
-        return records[_slot].procedural_recorded;
     }
 
     bool Frame_Statistics::Take_pending(uint32_t _slot, Frame_Record& _out_record)
@@ -153,10 +149,11 @@ namespace Renderer_System
             const Frame_Record& last = last_record;
 
             // The GPU paths report what the culling pass kept; the CPU paths
-            // draw every object they wrote.
+            // draw every object they wrote, which is what is left of the
+            // candidates after the CPU frustum test, if there was one.
             const uint32_t opaque_drawn = Is_gpu_draw_path(last.opaque_path) ? last_counters.gpu_opaque_draws : last.opaque_objects;
 
-            std::cout << "[Renderer] Opaque drawn " << opaque_drawn << " / " << last.opaque_objects << " (" << To_string(last.opaque_path)
+            std::cout << "[Renderer] Opaque drawn " << opaque_drawn << " / " << last.opaque_candidates << " (" << To_string(last.opaque_path)
                 << ") | transparent drawn " << last.transparent_drawn << " / " << last.transparent_candidates
                 << " | cluster light references " << last_counters.cluster_light_references << " / " << CLUSTER_LIGHT_INDEX_CAPACITY
                 << " (dropped " << last_counters.cluster_lights_dropped << ") | geometry pool "

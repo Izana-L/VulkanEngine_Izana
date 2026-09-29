@@ -6,20 +6,30 @@
 // One invocation per object of the frame's object buffer. An object that
 // is active, belongs to the pass and whose bounding ellipsoid (the mesh
 // bounding sphere placed by its model matrix, mesh_table.glsl) is not
-// entirely outside a frustum plane reserves a slot with one atomicAdd and
-// writes a complete indexed draw command there: its mesh range in the
-// geometry pool and firstInstance = its object index, which mesh.vert
-// receives as gl_InstanceIndex. The CPU then records a single
-// vkCmdDrawIndexedIndirectCount, reading the number of draws from
-// draw_count, without knowing how many objects survived.
+// entirely outside a frustum plane reserves a slot in its draw bucket with
+// one atomicAdd and writes a complete indexed draw command there: its mesh
+// range in the geometry pool and firstInstance = its object index, which
+// mesh.vert receives as gl_InstanceIndex.
 //
-// The slots are taken in no particular order, so the draw order changes
-// from frame to frame: opaque surfaces lose their front-to-back order, and
-// coplanar surfaces with equal depth may flicker between each other.
+// A draw bucket is the set of opaque objects that share a pipeline and a
+// triangle winding. The CPU assigns every object to a bucket (its index is
+// in the object flags) and reserves for each one a range of the command
+// buffer as large as its object count (frame.draw_buckets). The CPU then
+// records one vkCmdDrawIndexedIndirectCount per bucket, reading the number
+// of draws from the counter of the bucket, without knowing how many
+// objects survived.
+//
+// The slots of a bucket are taken in no particular order, so the draw
+// order changes from frame to frame: opaque surfaces lose their
+// front-to-back order, and coplanar surfaces with equal depth may flicker
+// between each other.
 //
 // Recorded before the render pass, after the reset of draw_count (fill +
 // barrier TRANSFER -> COMPUTE) and followed by a barrier COMPUTE ->
 // DRAW_INDIRECT (Renderer::Record_command_buffer).
+//
+// The frustum test is optional (Cull_Push_Constants::frustum_culling): with
+// it off the pass only compacts the active objects into their buckets.
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 #include "common/frame_set.glsl"
@@ -46,20 +56,24 @@ struct Draw_Command
     uint first_instance;
 };
 
-// Set 0, binding 6 (Binding_Per_Frame::Draw_Commands).
+// Set 0, binding 6 (Binding_Per_Frame::Draw_Commands). The commands of
+// bucket b occupy [frame.draw_buckets[b].first_command,
+// first_command + capacity).
 layout(set = 0, binding = 6, std430) writeonly buffer Draw_Command_Buffer
 {
     Draw_Command commands[];
 } draw_commands;
 
 // Set 0, binding 7 (Binding_Per_Frame::Draw_Count). EXACT mirror of
-// Renderer_System::Draw_Count_GPU; the count buffer of the indirect draw.
+// Renderer_System::Draw_Count_GPU: the count buffers of the indirect
+// draws, one counter per bucket, and the total of all of them.
 layout(set = 0, binding = 7, std430) buffer Draw_Count
 {
-    uint draw_count;
+    uint total_draw_count;
     uint _pad0;
     uint _pad1;
     uint _pad2;
+    uint bucket_draw_count[MAX_DRAW_BUCKETS];
 } draw_count;
 
 // False when the bounding ellipsoid of the mesh, placed by _model, lies
@@ -101,12 +115,26 @@ void main()
     if (push.frustum_culling != 0u && !Ellipsoid_in_frustum(object.model, mesh.bounding_sphere))
         return;
 
-    const uint slot = atomicAdd(draw_count.draw_count, 1u);
+    // The bucket the CPU assigned to the object. The mask keeps a corrupt
+    // index inside the table.
+    const uint bucket_index = (object.flags >> OBJECT_FLAG_BUCKET_SHIFT) & OBJECT_FLAG_BUCKET_MASK;
 
-    // Cannot happen while object_count <= command_capacity, which the
-    // Renderer guarantees; the guard keeps a broken invariant from writing
-    // past the buffer.
-    if (slot >= push.command_capacity)
+    if (bucket_index >= uint(MAX_DRAW_BUCKETS))
+        return;
+
+    const Draw_Bucket bucket = frame.draw_buckets[bucket_index];
+
+    atomicAdd(draw_count.total_draw_count, 1u);
+
+    const uint bucket_slot = atomicAdd(draw_count.bucket_draw_count[bucket_index], 1u);
+
+    // Cannot happen while the capacity of a bucket is its object count and
+    // the buckets fit the command buffer, which the Renderer guarantees;
+    // the guard keeps a broken invariant from writing into the range of
+    // another bucket or past the buffer.
+    const uint slot = bucket.first_command + bucket_slot;
+
+    if (bucket_slot >= bucket.capacity || slot >= push.command_capacity)
         return;
 
     draw_commands.commands[slot].index_count    = mesh.index_count;

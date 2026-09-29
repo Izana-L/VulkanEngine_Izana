@@ -26,10 +26,14 @@ namespace Renderer_System
         // they used to do (parameter validation, object lifetime tracking,
         // basic synchronization checks, best-practice warnings, etc.).
         // Wrapped in an anonymous namespace so it's only visible in this .cpp.
-        const std::vector<const char*> validation_layers = 
+        const std::vector<const char*> validation_layers =
         {
             "VK_LAYER_KHRONOS_validation"
         };
+
+        // API version of the instance: the engine's minimum and, since the
+        // instance is never created with a lower one, the only value.
+        constexpr uint32_t REQUIRED_API_VERSION = VK_API_VERSION_1_3;
 
         // Every instance extension exposed, by name.
          //   _layer_name == nullptr - the extensions of the loader, the
@@ -318,10 +322,13 @@ namespace Renderer_System
             gpu_assisted_enabled = false;
         }
 
-        // Cap the requested API version to whatever this system's driver
-        // actually supports, instead of blindly requesting 1.3 and letting
-        // vkCreateInstance fail on older drivers.
-        api_version = Determine_api_version(VK_API_VERSION_1_3);
+        // The engine calls Vulkan 1.3 core entry points (extended dynamic
+        // state: vkCmdSetCullMode, vkCmdSetFrontFace, ...), so the instance
+        // is created with exactly that version; a loader below it is
+        // rejected here instead of degrading the instance and leaving the
+        // device to use 1.3 functions the instance does not enable.
+        Require_api_version(REQUIRED_API_VERSION);
+        api_version = REQUIRED_API_VERSION;
 
         // Real descriptor set limits, read before any layer is involved.
         // Decides whether GPU-AV can be requested at all, and is the
@@ -589,39 +596,34 @@ namespace Renderer_System
         return api_version;
     }
 
-    // ---------- Determine_api_version ----------
-    uint32_t Vulkan_Instance::Determine_api_version(uint32_t _requested_version) const {
+    // ---------- Require_api_version ----------
+    void Vulkan_Instance::Require_api_version(uint32_t _required_version) const {
+        // Loaders that predate Vulkan 1.1 do not export
+        // vkEnumerateInstanceVersion. The function is looked up manually
+        // instead of assumed to be linkable, same pattern as the debug
+        // messenger functions above; a missing one means Vulkan 1.0.
         uint32_t supported_version = VK_API_VERSION_1_0;
 
-        // vkEnumerateInstanceVersion doesn't exist on very old systems
-        // (pre-Vulkan-1.1 loaders) - look it up manually instead of
-        // assuming it's always linkable, same pattern as the debug
-        // messenger functions above.
         auto enumerate_version_function = reinterpret_cast<PFN_vkEnumerateInstanceVersion>(
             vkGetInstanceProcAddr(nullptr, "vkEnumerateInstanceVersion"));
 
         if (enumerate_version_function != nullptr) {
             VK_CHECK(enumerate_version_function(&supported_version), "Vulkan_Instance: enumerate instance version");
         }
-        // If the function isn't found, we silently assume Vulkan 1.0,
-        // which is a safe, conservative fallback.
 
         std::cout << "[Vulkan_instance] System supports up to Vulkan "
             << VK_API_VERSION_MAJOR(supported_version) << "."
             << VK_API_VERSION_MINOR(supported_version) << "."
             << VK_API_VERSION_PATCH(supported_version) << "\n";
 
-        if (supported_version < _requested_version) {
-            std::cerr << "[Vulkan_instance] Requested Vulkan "
-                << VK_API_VERSION_MAJOR(_requested_version) << "."
-                << VK_API_VERSION_MINOR(_requested_version)
-                << " is not supported, falling back to "
-                << VK_API_VERSION_MAJOR(supported_version) << "."
-                << VK_API_VERSION_MINOR(supported_version) << "\n";
-            return supported_version;
+        if (supported_version < _required_version) {
+            throw std::runtime_error("Vulkan_Instance: the Vulkan loader reports version "
+                + std::to_string(VK_API_VERSION_MAJOR(supported_version)) + "."
+                + std::to_string(VK_API_VERSION_MINOR(supported_version)) + "."
+                + std::to_string(VK_API_VERSION_PATCH(supported_version)) + ", the engine requires "
+                + std::to_string(VK_API_VERSION_MAJOR(_required_version)) + "."
+                + std::to_string(VK_API_VERSION_MINOR(_required_version)) + " or later");
         }
-
-        return _requested_version;
     }
 
     // ---------- Get_required_validation_layers ----------

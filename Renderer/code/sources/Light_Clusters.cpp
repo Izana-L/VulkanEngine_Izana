@@ -31,7 +31,8 @@ namespace Renderer_System
 
         aabb_scratch.resize(CLUSTER_COUNT);
 
-        // Built by the first frame: nothing reads the buffer before it.
+        // Written by the first frame that reaches the GPU: nothing reads the
+        // buffer before it.
         boxes_valid = false;
     }
 
@@ -61,10 +62,10 @@ namespace Renderer_System
         vkUpdateDescriptorSets(device_handle, 1, &write, 0, nullptr);
     }
 
-    void Light_Clusters::Record_aabb_update(VkCommandBuffer _command_buffer, const MathLib::Matrix4& _projection, float _near_plane)
+    bool Light_Clusters::Record_aabb_update(VkCommandBuffer _command_buffer, const MathLib::Matrix4& _projection, float _near_plane)
     {
         if (boxes_valid && _projection == built_projection && _near_plane == built_near)
-            return;
+            return false;
 
         Cluster_Grid::Build_aabbs(_projection, Cluster_Grid::Make_slice_mapping(_near_plane), aabb_scratch.data());
 
@@ -87,6 +88,13 @@ namespace Renderer_System
             vkCmdUpdateBuffer(_command_buffer, aabb_buffer.buffer, offset, chunk, data + offset);
         }
 
+        // The state of the boxes is not touched here: the frame may still
+        // fail before its submit. Commit does it.
+        return true;
+    }
+
+    void Light_Clusters::Commit(const MathLib::Matrix4& _projection, float _near_plane)
+    {
         built_projection = _projection;
         built_near = _near_plane;
         boxes_valid = true;

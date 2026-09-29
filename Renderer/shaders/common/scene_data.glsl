@@ -30,8 +30,12 @@ struct Object
 };
 
 // Bits of Object::flags, mirror of Renderer_System::Object_Flag.
-const uint OBJECT_FLAG_PASS_MASK = 0xFFu;    // bits 0-7: RENDER_PASS_* mask of the draw
-const uint OBJECT_FLAG_ACTIVE    = 0x100u;   // bit 8: drawn this frame; the culling pass skips entries without it
+const uint OBJECT_FLAG_PASS_MASK    = 0xFFu;    // bits 0-7: RENDER_PASS_* mask of the draw
+const uint OBJECT_FLAG_ACTIVE       = 0x100u;   // bit 8: drawn this frame; the culling pass skips entries without it
+const uint OBJECT_FLAG_MIRRORED     = 0x200u;   // bit 9: the model matrix inverts the winding (negative determinant of its 3x3);
+                                                //        a tangent frame built from normal and tangent must flip its bitangent
+const uint OBJECT_FLAG_BUCKET_SHIFT = 10u;      // bits 10-17: draw bucket of an opaque object on the GPU paths
+const uint OBJECT_FLAG_BUCKET_MASK  = 0xFFu;    //             (Draw_Bucket in frame_set.glsl)
 
 // Mirror of CoreTypes::Render_Pass_Bit.
 const uint RENDER_PASS_OPAQUE      = 1u;

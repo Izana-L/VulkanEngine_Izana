@@ -30,6 +30,15 @@ namespace Renderer_System
     // barrier against the reads of earlier frames. The per-frame outputs
     // (cluster grid, light index list, counters) belong to Frame_Data.
     //
+    // The update works in two phases, because recording a command does not
+    // put its effect on the GPU: the frame may still fail before its
+    // submit. Record_aabb_update records the write and leaves the state of
+    // the boxes alone; Commit is what says "the boxes now hold this
+    // projection", and the Renderer calls it only after the submit
+    // succeeded. A frame that never reached the GPU therefore leaves the
+    // boxes marked as out of date, and the next frame records the update
+    // again (or, for the very first frame, the first update).
+    //
     // Owns the boxes buffer and the cluster_lights.comp pipeline. Not
     // copyable or movable.
     class Light_Clusters
@@ -55,12 +64,24 @@ namespace Renderer_System
         void Write_descriptor(VkDescriptorSet _per_pass_set) const;
 
         // Rebuilds the boxes and records their upload when _projection or
-        // _near_plane differ from the ones the boxes were built for, and
-        // does nothing otherwise. Recorded outside a render pass. The
-        // write becomes visible to the cluster pass through the barrier
-        // that follows the counter resets, which covers every transfer
-        // write before it.
-        void Record_aabb_update(VkCommandBuffer _command_buffer, const MathLib::Matrix4& _projection, float _near_plane);
+        // _near_plane differ from the ones the boxes were committed for (or
+        // no boxes were committed yet), and does nothing otherwise.
+        // Returns true when the update was recorded; the caller then owes
+        // a Commit with the same values once the frame was submitted.
+        // Does not change which boxes count as up to date. Recorded outside
+        // a render pass. The write becomes visible to the cluster pass
+        // through the barrier that follows the counter resets, which covers
+        // every transfer write before it.
+        bool Record_aabb_update(VkCommandBuffer _command_buffer, const MathLib::Matrix4& _projection, float _near_plane);
+
+        // The frame that recorded Record_aabb_update(_projection,
+        // _near_plane) was submitted: from now on the boxes hold that
+        // projection and near plane, and the next frame with the same
+        // values records nothing. The order of the queue guarantees that
+        // the update executes before the cluster pass of any later frame,
+        // and the barriers of the frame cover its visibility, so the
+        // commit does not wait for the GPU.
+        void Commit(const MathLib::Matrix4& _projection, float _near_plane);
 
         // Records the assignment pass: one invocation per cluster tests
         // the local lights [_first_local_light, _light_count) of the frame
@@ -86,7 +107,8 @@ namespace Renderer_System
         // CPU build of the boxes (Cluster_Grid::Build_aabbs), reused.
         std::vector<Cluster_AABB_GPU>            aabb_scratch;
 
-        // Projection and near plane the boxes were built for.
+        // Projection and near plane of the boxes on the GPU: the ones of
+        // the last committed update.
         MathLib::Matrix4                         built_projection{ 0.0f };
         float                                    built_near = 0.0f;
         bool                                     boxes_valid = false;

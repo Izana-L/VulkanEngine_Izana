@@ -91,9 +91,9 @@ namespace Renderer_System {
         VkFormat depth_format;
 
     public:
-        // _color_format: the swapchain format. _depth_format: a depth
-        // format supported for depth attachments
-        // (Vulkan_Device::Find_supported_depth_format). _accumulation_format
+        // _color_format: the swapchain format. _depth_format: the
+        // floating-point depth format chosen with the device
+        // (Vulkan_Device::Get_depth_format). _accumulation_format
         // and _revealage_format: the formats of the OIT targets
         // (Vulkan_OIT_Resources), which must support color attachment and
         // blending.

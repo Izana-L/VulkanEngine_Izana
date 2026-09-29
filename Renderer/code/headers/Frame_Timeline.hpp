@@ -16,11 +16,18 @@ namespace Renderer_System
     // the serial of the last frame that can read it, and may be reused or
     // destroyed once Is_complete(serial) holds.
     //
-    // Completion is learned from fences. The fence of a frame slot signals
-    // after every submission made before it, so waiting on the fence of a
-    // slot completes the serial that slot submitted last and, implicitly,
-    // every earlier serial. Nothing here talks to the device: the owner
-    // waits on the fences and reports the result.
+    // The serials are the values of the timeline semaphore that every
+    // submission of a frame signals (Renderer::Impl::frame_semaphore): the
+    // semaphore reaches serial N when the submission N has completed, and a
+    // timeline semaphore is monotonic, so it has then also reached every
+    // earlier serial. Completion is learned from its counter: the owner
+    // waits on the semaphore or reads its value, and reports the result
+    // here. Nothing here talks to the device.
+    //
+    // A serial is consumed only by a submission that succeeded
+    // (Record_submission). The next submission after a failed one signals
+    // the same serial again, so the counter never skips a value and never
+    // waits for one that no submission will signal.
     class Frame_Timeline
     {
     public:
@@ -43,17 +50,18 @@ namespace Renderer_System
             return slot_serials[_slot];
         }
 
-        // The fence of _slot was waited on: the last serial submitted from
-        // it, and every serial before it, have completed.
-        void Mark_slot_complete(uint32_t _slot)
+        // The counter of the timeline semaphore was observed at _value (by
+        // a wait that returned, or by reading it): every serial up to
+        // _value has completed. A value beyond the last submitted serial is
+        // clamped, so a stale reading cannot mark a frame that was never
+        // submitted.
+        void Mark_completed(uint64_t _value)
         {
-            assert(_slot < slot_serials.size() && "Frame_Timeline: slot out of range");
-
-            completed = std::max(completed, slot_serials[_slot]);
+            completed = std::max(completed, std::min(_value, submitted));
         }
 
-        // Every submitted frame has completed: the fences of all slots were
-        // waited on, or the device went idle.
+        // Every submitted frame has completed: the semaphore was waited on
+        // up to the last serial, or the device went idle.
         void Mark_all_complete()
         {
             completed = submitted;

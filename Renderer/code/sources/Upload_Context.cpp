@@ -21,24 +21,16 @@ namespace Renderer_System
     Upload_Context::Upload_Context(const Vulkan_Device& _device, VmaAllocator _allocator)
         : device(_device),
         allocator(_allocator),
-        command_pool(_device, 0, VK_COMMAND_POOL_CREATE_TRANSIENT_BIT)
+        command_pool(_device, 0, VK_COMMAND_POOL_CREATE_TRANSIENT_BIT),
+        fence(Create_fence(_device.Get_logical_device_handle(), false, "Upload_Context: failed to create the transfer fence"))
     {
-        VkFenceCreateInfo fence_info{};
-        fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-
-        VK_CHECK(vkCreateFence(device.Get_logical_device_handle(), &fence_info, nullptr, &fence),
-            "Upload_Context: failed to create the transfer fence");
     }
 
     Upload_Context::~Upload_Context()
     {
+        // The staging buffers go first, then the members (the fence and the
+        // command pool) in reverse order of declaration.
         Destroy_staging_buffers();
-
-        if (fence != VK_NULL_HANDLE)
-        {
-            vkDestroyFence(device.Get_logical_device_handle(), fence, nullptr);
-            fence = VK_NULL_HANDLE;
-        }
     }
 
     void Upload_Context::Destroy_staging_buffers() noexcept
@@ -94,17 +86,19 @@ namespace Renderer_System
         VK_CHECK(vkEndCommandBuffer(_command_buffer), "Upload_Context::Submit_and_wait: failed to end command buffer");
 
         // The fence is shared across transfers: unsignal it before reuse.
-        VK_CHECK(vkResetFences(device_handle, 1, &fence), "Upload_Context::Submit_and_wait: reset transfer fence");
+        const VkFence fence_handle = fence.Get();
+
+        VK_CHECK(vkResetFences(device_handle, 1, &fence_handle), "Upload_Context::Submit_and_wait: reset transfer fence");
 
         VkSubmitInfo submit_info{};
         submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         submit_info.commandBufferCount = 1;
         submit_info.pCommandBuffers = &_command_buffer;
 
-        VK_CHECK(vkQueueSubmit(device.Get_graphics_queue(), 1, &submit_info, fence),
+        VK_CHECK(vkQueueSubmit(device.Get_graphics_queue(), 1, &submit_info, fence_handle),
             "Upload_Context::Submit_and_wait: failed to submit");
 
-        VK_CHECK(vkWaitForFences(device_handle, 1, &fence, VK_TRUE, UINT64_MAX),
+        VK_CHECK(vkWaitForFences(device_handle, 1, &fence_handle, VK_TRUE, UINT64_MAX),
             "Upload_Context::Submit_and_wait: wait for transfer fence");
     }
 

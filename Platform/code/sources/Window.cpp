@@ -171,7 +171,7 @@ namespace Platform {
         assert(window_handle != nullptr && "Poll_events() called on a moved-from Window");
         glfwPollEvents();
     }
-    void Window::Wait_events() const {
+    void Window::Wait_events() {
         assert(window_handle != nullptr && "Wait_events() called on a moved-from Window");
         glfwWaitEvents();
     }

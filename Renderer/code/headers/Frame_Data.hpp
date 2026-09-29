@@ -6,6 +6,7 @@
 #include <Vulkan_Device.hpp>
 #include <Vulkan_Command_Pool.hpp>
 #include <Vulkan_Buffer_Utils.hpp>
+#include <Vulkan_Handles.hpp>
 #include <Vulkan_Utils.hpp>
 #include <Renderer_Limits.hpp>
 #include <Gpu_Layouts.hpp>
@@ -41,6 +42,10 @@ namespace Renderer_System
     // waiting on them when the slot comes around again, and there are
     // more images than slots. Present_Sync keeps them per image.
     //
+    // Nor is the completion of the slot's work: the Renderer tracks the
+    // progress of every frame with one timeline semaphore, and a slot is
+    // free when the serial of its last submission has been reached.
+    //
     // Lifetime: owned by the Renderer, constructed once at startup,
     // destroyed at shutdown. Move-only (owns Vulkan handles).
     //
@@ -51,9 +56,9 @@ namespace Renderer_System
     //
     // Buffers written by the GPU (cluster grid and list, counters, GPU draw
     // commands) are per slot as well: a frame then never writes what the
-    // previous frame, possibly still executing, reads, and the fence of the
-    // slot is the only ordering needed against the frame that used the
-    // same copy before.
+    // previous frame, possibly still executing, reads, and waiting for the
+    // slot's last submission is the only ordering needed against the frame
+    // that used the same copy before.
     class Frame_Data
     {
     public:
@@ -86,14 +91,14 @@ namespace Renderer_System
 
         // Signaled by the swapchain when the acquired image is ready to be
         // written to. The GPU waits on this before the color attachment
-        // output stage.
-        VkSemaphore image_available_semaphore = VK_NULL_HANDLE;
-
-        // Signaled by the GPU when this frame's commands are done.
-        // The CPU waits on this at the start of the next use of this
-        // slot to ensure the GPU has finished with these resources.
-        // Created pre-signaled so the first wait returns immediately.
-        VkFence in_flight_fence = VK_NULL_HANDLE;
+        // output stage. A binary semaphore: the presentation engine does
+        // not accept timeline semaphores.
+        //
+        // It is reusable once the wait of the submission that consumed it
+        // has executed, which the wait for the slot's last serial
+        // guarantees. That includes the recovery submission of a frame
+        // that failed after the acquire (Renderer::Impl::Render).
+        Unique_Semaphore image_available_semaphore;
 
         // =========================================================
         // Buffers written by the CPU (host-visible, persistently mapped)
@@ -147,7 +152,8 @@ namespace Renderer_System
         // =========================================================
 
         // One Frame_Stats_GPU, host-visible (Gpu_To_Cpu), filled by transfer
-        // copies of the counters and read after the fence of the slot.
+        // copies of the counters and read once the slot's last submission
+        // has completed.
         Vulkan_Buffer_Utils::Buffer_Allocation stats_readback_buffer;
 
     private:
@@ -174,25 +180,14 @@ namespace Renderer_System
         using Vulkan_Buffer_Utils::Create_buffer;
         using Vulkan_Buffer_Utils::Buffer_Access;
 
-        // Anything that throws below leaves the already created handles to
-        // Destroy(), called from the destructor of a partially built
-        // object: handles start null, so nothing is destroyed twice.
+        // Anything that throws below leaves the already created buffers to
+        // Destroy(), called from the catch block: handles start null, so
+        // nothing is destroyed twice. The semaphore is owned by a wrapper
+        // and needs no cleanup here.
         try
         {
-            VkSemaphoreCreateInfo semaphore_info{};
-            semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-
-            VK_CHECK(vkCreateSemaphore(device_handle, &semaphore_info, nullptr, &image_available_semaphore),
+            image_available_semaphore = Create_binary_semaphore(device_handle,
                 "Frame_Data: failed to create image_available semaphore");
-
-            // in_flight_fence is pre-signaled so the first vkWaitForFences
-            // on this slot returns immediately - there's nothing in flight yet.
-            VkFenceCreateInfo fence_info{};
-            fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-            fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-
-            VK_CHECK(vkCreateFence(device_handle, &fence_info, nullptr, &in_flight_fence),
-                "Frame_Data: failed to create in_flight fence");
 
             // Persistently mapped, written each frame with std::memcpy.
             uniform_buffer = Create_buffer(allocator, sizeof(Frame_UBO),
@@ -254,22 +249,14 @@ namespace Renderer_System
         for (Vulkan_Buffer_Utils::Buffer_Allocation* buffer : All_buffers())
             Vulkan_Buffer_Utils::Destroy_buffer(allocator, *buffer);
 
-        if (in_flight_fence != VK_NULL_HANDLE) {
-            vkDestroyFence(device_handle, in_flight_fence, nullptr);
-            in_flight_fence = VK_NULL_HANDLE;
-        }
-        if (image_available_semaphore != VK_NULL_HANDLE) {
-            vkDestroySemaphore(device_handle, image_available_semaphore, nullptr);
-            image_available_semaphore = VK_NULL_HANDLE;
-        }
+        image_available_semaphore.Reset();
     }
 
     // Steals every handle of _other and leaves it empty (its Destroy() then
     // does nothing). The command pool is moved by the callers.
     inline void Frame_Data::Take_from(Frame_Data& _other) noexcept
     {
-        image_available_semaphore = _other.image_available_semaphore;
-        in_flight_fence = _other.in_flight_fence;
+        image_available_semaphore = std::move(_other.image_available_semaphore);
         device_handle = _other.device_handle;
         allocator = _other.allocator;
 
@@ -282,8 +269,6 @@ namespace Renderer_System
             *source[i] = {};
         }
 
-        _other.image_available_semaphore = VK_NULL_HANDLE;
-        _other.in_flight_fence = VK_NULL_HANDLE;
         _other.device_handle = VK_NULL_HANDLE;
     }
 

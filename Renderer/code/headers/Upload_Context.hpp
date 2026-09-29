@@ -6,6 +6,7 @@
 #include <Vulkan_Device.hpp>
 #include <Vulkan_Command_Pool.hpp>
 #include <Vulkan_Buffer_Utils.hpp>
+#include <Vulkan_Handles.hpp>
 #include <Geometry_Pool.hpp>
 #include <Mesh_Registry.hpp>
 #include <MeshData.hpp>
@@ -103,8 +104,9 @@ namespace Renderer_System
 
         // Shared by every transfer and reset before each submit, instead of
         // created and destroyed per transfer. Not created signaled: its
-        // state at creation is irrelevant.
-        VkFence                                              fence = VK_NULL_HANDLE;
+        // state at creation is irrelevant. Owned by a wrapper, so it is
+        // released even when the constructor fails after creating it.
+        Unique_Fence                                         fence;
 
         std::vector<Vulkan_Buffer_Utils::Buffer_Allocation>  staging_buffers;
 

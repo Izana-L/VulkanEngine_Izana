@@ -175,9 +175,9 @@ namespace Renderer_System
 
         // Only the points the frame wrote: the rest of the range was reset
         // and never written, and including it would report VK_NOT_READY.
-        // No WAIT flag: the fence of the slot was waited on, so the results
-        // are available; VK_NOT_READY means the command buffer was not
-        // submitted.
+        // No WAIT flag: the last serial of the slot was waited on, so the
+        // results are available; VK_NOT_READY means the command buffer was
+        // not submitted.
         const VkResult result = vkGetQueryPoolResults(device_handle, query_pool,
             _frame_slot * points_per_frame, slot.points_written,
             static_cast<size_t>(slot.points_written) * sizeof(uint64_t), raw_results.data(), sizeof(uint64_t),

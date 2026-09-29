@@ -185,6 +185,7 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
     <ClInclude Include="..\code\headers\Vulkan_Depth_Resources.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Device.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Framebuffer.hpp" />
+    <ClInclude Include="..\code\headers\Vulkan_Handles.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Image_Utils.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Instance.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_OIT_Resources.hpp" />

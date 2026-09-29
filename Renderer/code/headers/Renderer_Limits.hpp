@@ -28,6 +28,16 @@ namespace Renderer_System
     // opaque object at most.
     static constexpr uint32_t MAX_OBJECTS = 16384;
 
+    // Buckets the GPU opaque paths can split a frame into. A bucket is the
+    // set of opaque objects that share a pipeline and a triangle winding
+    // (Draw_List_Builder): each one is drawn by its own
+    // vkCmdDrawIndexedIndirectCount, with its own region of the draw command
+    // buffer and its own counter (Draw_Count_GPU). A frame that needs more
+    // buckets than this draws its opaque objects on the CPU path instead.
+    // The bucket index of an object travels in 8 bits of Object_GPU::flags,
+    // so it cannot exceed 256.
+    static constexpr uint32_t MAX_DRAW_BUCKETS = 32;
+
     // Capacity of the material table (set 2). Append-only: a slot, once
     // written, never changes. Slot 0 is CoreTypes::Default_Material.
     static constexpr uint32_t MAX_MATERIALS = 1024;

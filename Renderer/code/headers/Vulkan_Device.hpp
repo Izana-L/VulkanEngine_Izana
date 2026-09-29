@@ -57,6 +57,10 @@ namespace Renderer_System {
     // disagree about what was checked.
     struct Device_Support
     {
+        // Version of the functionality the device offers to the
+        // application: the minimum of the version the instance was created
+        // with and the version the device reports. Both bound it, and this
+        // is the only value the requirement checks read.
         uint32_t api_version = 0;
 
         // Descriptor indexing features required for bindless textures:
@@ -94,6 +98,22 @@ namespace Renderer_System {
         bool multi_draw_indirect = false;
         bool draw_indirect_first_instance = false;
         bool draw_indirect_count = false;
+
+        // timelineSemaphore: REQUIRED (VkPhysicalDeviceVulkan12Features).
+        // The progress of the frames in flight is one timeline semaphore
+        // that the Renderer waits on and reads. The functionality is core
+        // in Vulkan 1.2, but the feature still has to be enabled.
+        bool timeline_semaphore = false;
+
+        // Depth format of the depth buffer: the first of D32_SFLOAT and
+        // D32_SFLOAT_S8_UINT that supports DEPTH_STENCIL_ATTACHMENT with
+        // optimal tiling, VK_FORMAT_UNDEFINED when neither does. REQUIRED
+        // to be defined: the reverse-Z projection with an infinite far
+        // plane only gains precision on a floating-point depth buffer, and
+        // the specification does not guarantee one of the two formats
+        // (only one of D32_SFLOAT and X8_D24_UNORM_PACK32, and one of
+        // D32_SFLOAT_S8_UINT and D24_UNORM_S8_UINT).
+        VkFormat depth_format = VK_FORMAT_UNDEFINED;
 
         // VkPhysicalDeviceLimits::maxDrawIndirectCount: upper bound of
         // drawCount / maxDrawCount in one indirect call. At least 2^16 - 1
@@ -195,6 +215,10 @@ namespace Renderer_System {
         uint32_t timestamp_valid_bits;
         float    timestamp_period;
 
+        // Floating-point depth format chosen at device selection
+        // (Device_Support::depth_format).
+        VkFormat depth_format;
+
         Bindless_Limits bindless_limits;
     public:
 
@@ -239,9 +263,15 @@ namespace Renderer_System {
 
         // VkPhysicalDeviceLimits::maxDrawIndirectCount of the selected
         // device. multiDrawIndirect, drawIndirectFirstInstance,
-        // drawIndirectCount and independentBlend are always enabled: device
-        // selection requires them.
+        // drawIndirectCount, independentBlend and timelineSemaphore are
+        // always enabled: device selection requires them.
         uint32_t Get_max_draw_indirect_count() const;
+
+        // Floating-point depth format of the depth buffer: D32_SFLOAT, or
+        // D32_SFLOAT_S8_UINT when the former cannot be a depth attachment.
+        // Chosen while the GPU is selected, so a GPU without one is never
+        // picked. The reverse-Z projection (Matrix4.hpp) relies on it.
+        VkFormat Get_depth_format() const;
 
         // Timestamp support of the graphics queue family. A valid bit count
         // of 0 means timestamp queries are not supported on it.
@@ -251,7 +281,6 @@ namespace Renderer_System {
         // Update-after-bind descriptor limits of the selected device.
         // Bindless_Registry clamps its array sizes to them.
         const Bindless_Limits& Get_bindless_limits() const;
-        VkFormat  Find_supported_depth_format()   const;
 
     private:
 
@@ -266,9 +295,6 @@ namespace Renderer_System {
         Queue_Family_Indices Find_queue_families(VkPhysicalDevice _device, VkSurfaceKHR _surface) const;
         uint32_t         Rate_device_suitability(VkPhysicalDevice _device, const Device_Support& _support) const;
         void             Log_selected_device(VkPhysicalDevice _device);
-        VkFormat         Find_supported_format(const std::vector<VkFormat>& _candidates,
-            VkImageTiling _tiling,
-            VkFormatFeatureFlags _features) const;
     };
 
 } // namespace Renderer

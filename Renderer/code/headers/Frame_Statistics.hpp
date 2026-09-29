@@ -18,14 +18,19 @@ namespace Renderer_System
     // Frame_Statistics: what the Renderer measures about its frames, and
     // how it reports it.
     //
-    // Two kinds of data reach it, both read after the fence of the frame
-    // slot that produced them was waited on, so the CPU never stalls for
-    // them:
+    // Two kinds of data reach it, both read after the last submission of
+    // the frame slot that produced them completed (its serial was waited
+    // on), so the CPU never stalls for them:
     //   - the GPU counters of the frame (Frame_Stats_GPU): cluster light
     //     references, dropped lights, objects the culling pass kept;
     //   - the timestamps of its named scopes (Gpu_Frame_Timings).
     // Each frame is paired with the Frame_Record of what the CPU recorded
     // for it.
+    //
+    // Statistics only: nothing the Renderer's behaviour depends on lives
+    // here. State that means "this is already on the GPU" is applied by the
+    // Renderer after the submit (Frame_Effects), not read back from a
+    // statistics record.
     //
     // Timings and counters are averaged over a reporting interval (one
     // second) and printed when printing is enabled; the accumulators are
@@ -42,13 +47,16 @@ namespace Renderer_System
         {
             bool             recorded = false;
             Opaque_Draw_Path opaque_path = Opaque_Draw_Path::Direct;
+
+            // Valid opaque items of the frame, before any frustum test.
+            uint32_t         opaque_candidates = 0;
+
+            // Opaque objects written to the object buffer: the candidates
+            // that survived the CPU frustum test, when there is one.
             uint32_t         opaque_objects = 0;
+
             uint32_t         transparent_candidates = 0;
             uint32_t         transparent_drawn = 0;
-
-            // The frame recorded the procedural pass: once its submit
-            // succeeds, the procedural image is up to date.
-            bool             procedural_recorded = false;
         };
 
         // Fill of the Geometry_Pool, shown in the report.
@@ -83,7 +91,8 @@ namespace Renderer_System
                                     const Vulkan_Buffer_Utils::Buffer_Allocation& _readback);
 
         // Reads the counters copied by Record_readback. Precondition: the
-        // fence of the frame that recorded the copies was waited on.
+        // frame that recorded the copies has completed (its serial was
+        // waited on).
         static Frame_Stats_GPU Read_counters(VmaAllocator _allocator,
                                              const Vulkan_Buffer_Utils::Buffer_Allocation& _readback);
 
@@ -99,9 +108,6 @@ namespace Renderer_System
         // The staged frame of _slot was submitted: its counters will be
         // read when the slot comes around again.
         void Mark_submitted(uint32_t _slot);
-
-        // True when the frame staged for _slot recorded the procedural pass.
-        bool Recorded_procedural(uint32_t _slot) const;
 
         // Hands out the record of the last frame submitted from _slot and
         // clears it. False when nothing was submitted from the slot since

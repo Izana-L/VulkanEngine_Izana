@@ -56,6 +56,8 @@ namespace Renderer_System ::Vulkan_Utils
         case VK_FORMAT_R8G8B8A8_UNORM:           return "VK_FORMAT_R8G8B8A8_UNORM";
         case VK_FORMAT_A2B10G10R10_UNORM_PACK32: return "VK_FORMAT_A2B10G10R10_UNORM_PACK32";
         case VK_FORMAT_R16G16B16A16_SFLOAT:      return "VK_FORMAT_R16G16B16A16_SFLOAT";
+        case VK_FORMAT_D32_SFLOAT:               return "VK_FORMAT_D32_SFLOAT";
+        case VK_FORMAT_D32_SFLOAT_S8_UINT:       return "VK_FORMAT_D32_SFLOAT_S8_UINT";
         default:                                 return "VkFormat(" + std::to_string(_format) + ")";
         }
     }
@@ -74,7 +76,7 @@ namespace Renderer_System ::Vulkan_Utils
     {
         if (_result < 0)
         {
-            throw std::runtime_error(std::string(_what) + ": " + Vk_result_to_string(_result));
+            throw Vulkan_Error(_result, std::string(_what) + ": " + Vk_result_to_string(_result));
         }
 
         return _result;
@@ -84,7 +86,7 @@ namespace Renderer_System ::Vulkan_Utils
     {
         if (_result != VK_SUCCESS)
         {
-            throw std::runtime_error(std::string(_what) + ": " + Vk_result_to_string(_result));
+            throw Vulkan_Error(_result, std::string(_what) + ": " + Vk_result_to_string(_result));
         }
     }
     

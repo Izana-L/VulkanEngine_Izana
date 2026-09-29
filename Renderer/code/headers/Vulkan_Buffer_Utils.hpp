@@ -128,7 +128,7 @@ namespace Renderer_System
         //
         // Write-after-read against earlier readers of the same ranges is the
         // caller's: nothing here waits for them. Per-frame buffers are
-        // ordered by the fence of their frame slot.
+        // ordered by the wait for the last submission of their frame slot.
         void Record_zero_fill_and_barrier(VkCommandBuffer _command_buffer, std::initializer_list<Buffer_Range> _ranges,
                                           const Access_Scope& _consumer);
 

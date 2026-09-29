@@ -281,5 +281,8 @@
     <ClInclude Include="..\code\sources\Renderer_Impl.hpp">
       <Filter>Source Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\code\headers\Vulkan_Handles.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

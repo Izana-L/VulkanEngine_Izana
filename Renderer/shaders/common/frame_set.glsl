@@ -28,7 +28,23 @@
 //                        dot(plane.xyz, p) + plane.w >= 0. Left, right,
 //                        bottom, top and near: the projection has no far
 //                        plane.
+//   draw_buckets       - cull_objects.comp: where each draw bucket starts in
+//                        the draw command buffer and how many commands it
+//                        holds. The bucket of an object is in its flags
+//                        (scene_data.glsl).
 const int FRUSTUM_PLANE_COUNT = 5;
+
+// Mirror of Renderer_System::MAX_DRAW_BUCKETS (Renderer_Limits.hpp).
+const int MAX_DRAW_BUCKETS = 32;
+
+// EXACT mirror of Renderer_System::Draw_Bucket_GPU, std140, 16 bytes.
+struct Draw_Bucket
+{
+    uint first_command;   // index of the bucket's first command in draw_commands
+    uint capacity;        // commands reserved for the bucket
+    uint _pad0;
+    uint _pad1;
+};
 
 layout(set = 0, binding = 0, std140) uniform Frame_UBO
 {
@@ -41,6 +57,7 @@ layout(set = 0, binding = 0, std140) uniform Frame_UBO
     vec4  cluster_params;
     uvec4 debug_params;
     vec4  frustum_planes[FRUSTUM_PLANE_COUNT];
+    Draw_Bucket draw_buckets[MAX_DRAW_BUCKETS];
 } frame;
 
 // Values of debug_params.x, mirror of Renderer_System::Light_Culling_Mode.

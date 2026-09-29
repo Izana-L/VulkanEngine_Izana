@@ -178,13 +178,23 @@ namespace CoreTypes
     // uint64 is dominated by the most significant bits, so whatever sits
     // highest is the primary grouping.
     //   [56 - 63] pipeline_id  (8  bits, 256  pipelines max)  <- primary
-    //   [48 - 55] material_id  (8  bits, 256  materials max)
+    //   [48 - 55] material_id  (8  bits, 256  materials max), whose top bit
+    //             (Sort_Key_Mirrored_Bit) is the winding hint below
     //   [32 - 47] mesh_gpu_id  (16 bits, 65 k meshes max)
     //   [0  - 31] depth_bits   (32 bits, float made sortable as uint):
     //             Depth_to_sortable_bits (near -> far), for both lists
     //
-    // Sorting ascending therefore groups by pipeline -> material -> mesh, and
-    // sorts by depth WITHIN each group.
+    // Sorting ascending therefore groups by pipeline -> winding -> material
+    // -> mesh, and sorts by depth WITHIN each group.
+    //
+    // Winding hint: the objects whose transform inverts the winding
+    // (Inverts_winding) are drawn with the opposite front face, and every
+    // change of front face is a state change (and, on the CPU-indirect path,
+    // a new indirect draw). The Extractor sets the top bit of the material
+    // field for them, so they end up next to each other right below their
+    // pipeline. It is only an ordering hint: the Renderer looks at the
+    // transform itself to decide the winding, and a wrong or missing hint
+    // costs state changes, never correctness.
     //
     // The trade-off, stated plainly: depth is not the primary sort, so
     // front-to-back ordering is per-batch instead of global and some overdraw
@@ -199,8 +209,8 @@ namespace CoreTypes
     // bits only keep the order deterministic from frame to frame (the
     // half-precision accumulation rounds differently in another order).
     //
-    // The material_id field of the key is still 0: grouping draws by
-    // material only pays off once materials bind per-draw state, and every
+    // The rest of the material_id field of the key is still 0: grouping draws
+    // by material only pays off once materials bind per-draw state, and every
     // material is now read from one table (Draw_Item::material_index).
     struct Draw_Item
     {
@@ -282,8 +292,36 @@ namespace CoreTypes
     };
 
     // =========================================================
+    // Winding
+    // =========================================================
+
+    // True when _model inverts the winding of the triangles: the
+    // determinant of its upper 3x3 (the triple product of its columns) is
+    // negative, as with a negative scale on an odd number of axes or a
+    // reflection. Such an object is drawn with the opposite front face, or
+    // it would show its inside. A zero determinant (a collapsed object)
+    // draws nothing, so its winding does not matter.
+    //
+    // The Renderer decides the winding of every object with this function
+    // (Draw_List_Builder); the Extractor uses it for the ordering hint of
+    // the sort key.
+    inline bool Inverts_winding(const MathLib::Matrix4& _model)
+    {
+        const MathLib::Vector3 column_x(_model[0]);
+        const MathLib::Vector3 column_y(_model[1]);
+        const MathLib::Vector3 column_z(_model[2]);
+
+        return glm::dot(glm::cross(column_x, column_y), column_z) < 0.0f;
+    }
+
+    // =========================================================
     // sort_key helpers
     // =========================================================
+
+    // Top bit of the material_id field of a sort key: the object's
+    // transform inverts the winding. Groups the mirrored objects of a
+    // pipeline together (see the layout of the key).
+    inline constexpr uint8_t Sort_Key_Mirrored_Bit = 0x80;
 
     // Packs the components of a sort key into a single uint64_t.
     // Call this from the extract when building each Draw_Item.
