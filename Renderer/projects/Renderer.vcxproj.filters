@@ -284,5 +284,8 @@
     <ClInclude Include="..\code\headers\Vulkan_Handles.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\code\headers\Shader_Paths.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

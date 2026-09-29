@@ -249,12 +249,6 @@ namespace Input_System
         window.Set_scroll_callback(nullptr);
     }
 
-    void Input::Begin_frame()
-    {
-        previous_keys = current_keys;
-        previous_buttons = current_buttons;
-    }
-
     // =========================================================
     // Update - call once per frame after Poll_events()
     // =========================================================
@@ -273,8 +267,10 @@ namespace Input_System
         scroll_delta = scroll_accumulator;
         scroll_accumulator = 0.0f;
 
-        // Recompute action states based on the new snapshots.
-        Update_actions();
+        // The counts describe one frame: the previous frame's are dropped
+        // before this frame's events are replayed.
+        Clear_transition_counts();
+        Replay_events(true);
     }
 
     void Input::Discard_pending()
@@ -285,18 +281,130 @@ namespace Input_System
         // of producing a delta against a position from before the pause.
         first_mouse = true;
 
-        // Re-sync the edge snapshots with the present state, then compute
-        // the action values from it and drop the edges: a key pressed and
-        // released while nothing was listening never happened.
-        previous_keys = current_keys;
-        previous_buttons = current_buttons;
+        // Levels follow the queued events, so nothing stays held after its
+        // release; the transitions themselves are dropped: a key pressed
+        // and released while nothing was listening never happened.
+        Replay_events(false);
+        Clear_transition_counts();
+    }
 
-        Update_actions();
+    // =========================================================
+    // Event replay
+    // =========================================================
+
+    void Input::Replay_events(bool _count_transitions)
+    {
+        for (const Button_Event& event : pending_events)
+        {
+            const size_t index = event.code;
+            const bool   down = event.kind != Button_Event::Kind::Release;
+
+            // Both devices share the same handling; only the state block
+            // differs.
+            const auto apply = [&](auto& _states)
+                {
+                    if (index >= _states.down.size() || _states.down[index] == down)
+                        return;   // no level change: a repeat of a held key, or a duplicate
+
+                    _states.down[index] = down;
+
+                    // A repeat can only raise a level that missed its
+                    // press (for example, a key already held when the
+                    // window gained focus): it holds the key but is not a
+                    // press.
+                    const bool count = _count_transitions && event.kind != Button_Event::Kind::Repeat;
+
+                    if (count)
+                    {
+                        if (down) ++_states.press_count[index];
+                        else      ++_states.release_count[index];
+                    }
+
+                    Apply_binding_transition(_states.bound_actions[index], down, count);
+                };
+
+            if (event.device == Button_Event::Device::Keyboard)
+                apply(keys);
+            else
+                apply(buttons);
+        }
+
+        pending_events.clear();
+    }
+
+    void Input::Apply_binding_transition(const std::vector<size_t>& _bound_actions, bool _down, bool _count_transitions)
+    {
+        for (size_t action_index : _bound_actions)
+        {
+            Action& action = actions[action_index];
+
+            if (_down)
+            {
+                // Only the first held binding activates the action.
+                if (action.active_bindings++ == 0)
+                {
+                    action.value = 1.0f;
+                    if (_count_transitions) ++action.press_count;
+                }
+            }
+            else
+            {
+                assert(action.active_bindings > 0 && "Input: an action lost a binding it did not hold");
+
+                if (action.active_bindings == 0)
+                    continue;
+
+                // Only the last released binding deactivates the action.
+                if (--action.active_bindings == 0)
+                {
+                    action.value = 0.0f;
+                    if (_count_transitions) ++action.release_count;
+                }
+            }
+        }
+    }
+
+    void Input::Clear_transition_counts()
+    {
+        keys.press_count.fill(0);
+        keys.release_count.fill(0);
+        buttons.press_count.fill(0);
+        buttons.release_count.fill(0);
 
         for (Action& action : actions)
         {
-            action.pressed = false;
-            action.released = false;
+            action.press_count = 0;
+            action.release_count = 0;
+        }
+    }
+
+    void Input::Rebind_actions()
+    {
+        for (std::vector<size_t>& list : keys.bound_actions) list.clear();
+        for (std::vector<size_t>& list : buttons.bound_actions) list.clear();
+
+        for (size_t action_index = 0; action_index < actions.size(); ++action_index)
+        {
+            Action& action = actions[action_index];
+
+            action.active_bindings = 0;
+            action.press_count = 0;
+            action.release_count = 0;
+
+            for (const Action_Binding& binding : action.bindings)
+            {
+                if (binding.type == Action_Binding::Type::Key)
+                    keys.bound_actions[static_cast<size_t>(binding.key)].push_back(action_index);
+                else
+                    buttons.bound_actions[static_cast<size_t>(binding.mouse_button)].push_back(action_index);
+
+                // Inputs already held when the table is loaded count as
+                // held bindings, so their release later balances.
+                if (Binding_is_down(binding))
+                    ++action.active_bindings;
+            }
+
+            action.value = (action.active_bindings > 0) ? 1.0f : 0.0f;
         }
     }
 
@@ -316,19 +424,30 @@ namespace Input_System
 
     bool Input::Is_key_down(Key _key) const
     {
-        return current_keys.keys[static_cast<size_t>(_key)];
+        const size_t idx = static_cast<size_t>(_key);
+        return idx < KEY_COUNT && keys.down[idx];
     }
 
     bool Input::Was_key_pressed(Key _key) const
     {
-        const size_t idx = static_cast<size_t>(_key);
-        return current_keys.keys[idx] && !previous_keys.keys[idx];
+        return Get_key_press_count(_key) > 0;
     }
 
     bool Input::Was_key_released(Key _key) const
     {
+        return Get_key_release_count(_key) > 0;
+    }
+
+    uint32_t Input::Get_key_press_count(Key _key) const
+    {
         const size_t idx = static_cast<size_t>(_key);
-        return !current_keys.keys[idx] && previous_keys.keys[idx];
+        return idx < KEY_COUNT ? keys.press_count[idx] : 0u;
+    }
+
+    uint32_t Input::Get_key_release_count(Key _key) const
+    {
+        const size_t idx = static_cast<size_t>(_key);
+        return idx < KEY_COUNT ? keys.release_count[idx] : 0u;
     }
 
     // =========================================================
@@ -337,19 +456,30 @@ namespace Input_System
 
     bool Input::Is_mouse_button_down(Mouse_Button _button) const
     {
-        return current_buttons.buttons[static_cast<size_t>(_button)];
+        const size_t idx = static_cast<size_t>(_button);
+        return idx < BTN_COUNT && buttons.down[idx];
     }
 
     bool Input::Was_mouse_button_pressed(Mouse_Button _button) const
     {
-        const size_t idx = static_cast<size_t>(_button);
-        return current_buttons.buttons[idx] && !previous_buttons.buttons[idx];
+        return Get_mouse_button_press_count(_button) > 0;
     }
 
     bool Input::Was_mouse_button_released(Mouse_Button _button) const
     {
+        return Get_mouse_button_release_count(_button) > 0;
+    }
+
+    uint32_t Input::Get_mouse_button_press_count(Mouse_Button _button) const
+    {
         const size_t idx = static_cast<size_t>(_button);
-        return !current_buttons.buttons[idx] && previous_buttons.buttons[idx];
+        return idx < BTN_COUNT ? buttons.press_count[idx] : 0u;
+    }
+
+    uint32_t Input::Get_mouse_button_release_count(Mouse_Button _button) const
+    {
+        const size_t idx = static_cast<size_t>(_button);
+        return idx < BTN_COUNT ? buttons.release_count[idx] : 0u;
     }
 
     float Input::Get_mouse_delta_x() const { return mouse_delta_x; }
@@ -478,6 +608,8 @@ namespace Input_System
         actions = std::move(parsed);
         action_index = std::move(parsed_index);
 
+        Rebind_actions();
+
         std::cout << "[Input] Loaded " << actions.size()
             << " action(s) from '" << _path << "'\n";
     }
@@ -509,12 +641,22 @@ namespace Input_System
 
     bool Input::Was_action_pressed(size_t _action_id) const
     {
-        return (_action_id < actions.size()) ? actions[_action_id].pressed : false;
+        return Get_action_press_count(_action_id) > 0;
     }
 
     bool Input::Was_action_released(size_t _action_id) const
     {
-        return (_action_id < actions.size()) ? actions[_action_id].released : false;
+        return Get_action_release_count(_action_id) > 0;
+    }
+
+    uint32_t Input::Get_action_press_count(size_t _action_id) const
+    {
+        return (_action_id < actions.size()) ? actions[_action_id].press_count : 0u;
+    }
+
+    uint32_t Input::Get_action_release_count(size_t _action_id) const
+    {
+        return (_action_id < actions.size()) ? actions[_action_id].release_count : 0u;
     }
 
     bool Input::Is_action_down(const std::string& _action) const
@@ -536,14 +678,21 @@ namespace Input_System
     // GLFW event handlers
     // =========================================================
 
+    // The callbacks only queue the event: levels, counts and actions are
+    // updated when Update() replays the queue, in arrival order.
     void Input::Handle_key(int _glfw_key, int _glfw_action)
     {
         const Key key = Glfw_key_to_key(_glfw_key);
         if (key == Key::Unknown) return;
 
-        const size_t idx = static_cast<size_t>(key);
+        Button_Event event;
+        event.device = Button_Event::Device::Keyboard;
+        event.kind = (_glfw_action == GLFW_RELEASE) ? Button_Event::Kind::Release
+                   : (_glfw_action == GLFW_REPEAT)  ? Button_Event::Kind::Repeat
+                                                    : Button_Event::Kind::Press;
+        event.code = static_cast<uint16_t>(key);
 
-        current_keys.keys[idx] = (_glfw_action != GLFW_RELEASE);
+        pending_events.push_back(event);
     }
 
     void Input::Handle_mouse_button(int _glfw_button, int _glfw_action)
@@ -551,8 +700,12 @@ namespace Input_System
         const Mouse_Button btn = Glfw_button_to_btn(_glfw_button);
         if (btn == Mouse_Button::COUNT) return;
 
-        current_buttons.buttons[static_cast<size_t>(btn)] =
-            (_glfw_action != GLFW_RELEASE);
+        Button_Event event;
+        event.device = Button_Event::Device::Mouse;
+        event.kind = (_glfw_action == GLFW_RELEASE) ? Button_Event::Kind::Release : Button_Event::Kind::Press;
+        event.code = static_cast<uint16_t>(btn);
+
+        pending_events.push_back(event);
     }
 
     void Input::Handle_mouse_move(double _xpos, double _ypos)
@@ -582,31 +735,8 @@ namespace Input_System
     }
 
     // =========================================================
-    // Update_actions
+    // Bindings
     // =========================================================
-
-    void Input::Update_actions()
-    {
-        for (Action& action : actions)
-        {
-            const float prev_value = action.value;
-
-            // OR of all bindings: any active binding makes the action active.
-            float new_value = 0.0f;
-            for (const Action_Binding& binding : action.bindings)
-            {
-                if (Binding_is_down(binding))
-                {
-                    new_value = 1.0f;
-                    break;
-                }
-            }
-
-            action.value = new_value;
-            action.pressed = (new_value > 0.5f) && (prev_value < 0.5f);
-            action.released = (new_value < 0.5f) && (prev_value > 0.5f);
-        }
-    }
 
     bool Input::Binding_is_down(const Action_Binding& _binding) const
     {

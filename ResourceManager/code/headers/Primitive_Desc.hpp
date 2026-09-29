@@ -15,7 +15,7 @@ namespace ResourceManager
     {
         // ── No topological parameters (hardcoded geometry) ──
         Cube = 0,
-        Quad = 1,
+        Quad = 1,          // alias of Plane with 1 subdivision (see Canonical())
         Triangle = 2,
         Tetrahedron = 3,
 
@@ -136,6 +136,7 @@ namespace ResourceManager
         Unused_param_set,   // a parameter the type ignores is non-zero
         Param_below_min,    // a used parameter is below its legal minimum
         Param_above_max,    // a used parameter is above its legal maximum
+        Aliased_type,       // the type is an alias of another descriptor (Quad = Plane(1))
     };
 
     constexpr const char* Error_message(Desc_Error _error)
@@ -148,6 +149,7 @@ namespace ResourceManager
             "(e.g. Cube with param1 != 0)";
         case Desc_Error::Param_below_min:  return "a parameter is below the minimum the generator clamps to";
         case Desc_Error::Param_above_max:  return "a parameter is above MAX_TOPOLOGY_PARAM";
+        case Desc_Error::Aliased_type:     return "the type is an alias: Quad builds the same mesh as Plane(1)";
         }
 
         return "unknown error";
@@ -166,6 +168,7 @@ namespace ResourceManager
     //
     //   {Cube, 1, 999} and {Cube, 23, 214}   — Cube reads no parameters
     //   {Sphere, 1, 1} and {Sphere, 3, 2}    — the generator clamps to 3/2
+    //   {Quad} and {Plane, 1}                — the same 1x1 grid
     //
     // Keying the cache on the raw fields would store the same mesh twice
     // under two keys: wasted VRAM, a broken "same primitive == same
@@ -213,7 +216,8 @@ namespace ResourceManager
         // mistake that can be made. Each one returns a canonical desc.
 
         static constexpr Primitive_Desc Make_cube() { return Make(Primitive_Type::Cube, 0, 0); }
-        static constexpr Primitive_Desc Make_quad() { return Make(Primitive_Type::Quad, 0, 0); }
+        // A quad is Plane(1): the same mesh, so the same descriptor.
+        static constexpr Primitive_Desc Make_quad() { return Make(Primitive_Type::Plane, 1, 0); }
         static constexpr Primitive_Desc Make_triangle() { return Make(Primitive_Type::Triangle, 0, 0); }
         static constexpr Primitive_Desc Make_tetrahedron() { return Make(Primitive_Type::Tetrahedron, 0, 0); }
 
@@ -258,6 +262,9 @@ namespace ResourceManager
             if (!Is_known_type(type))
                 return Desc_Error::Unknown_type;
 
+            if (type == Primitive_Type::Quad)
+                return Desc_Error::Aliased_type;
+
             const Param_Spec  spec = Spec_of(type);
             const uint16_t    params[MAX_PARAMS] = { param1, param2, param3 };
 
@@ -292,7 +299,9 @@ namespace ResourceManager
 
         // Returns the one descriptor that stands for this geometry:
         // parameters the type ignores are zeroed, parameters it reads are
-        // clamped to the same range the generator clamps to.
+        // clamped to the same range the generator clamps to, and an alias
+        // type is replaced by the descriptor it stands for (Quad ->
+        // Plane(1)).
         //
         // The property that makes deduplication work:
         //   Build(a) == Build(b)  <=>  a.Canonical() == b.Canonical()
@@ -302,6 +311,9 @@ namespace ResourceManager
             // rewritten into a Cube: Spec_of() reports no parameters for
             // it, so the params are zeroed and the type still reaches
             // Primitive_Builder::Build(), which rejects it out loud.
+            if (type == Primitive_Type::Quad)
+                return Primitive_Desc{ Primitive_Type::Plane, 1, 0, 0 };
+
             const Param_Spec spec = Spec_of(type);
 
             Primitive_Desc out;

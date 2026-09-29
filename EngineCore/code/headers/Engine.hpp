@@ -12,8 +12,10 @@
 #include <Entity.hpp>
 #include <Asset_Handle.hpp>
 #include <Material_Component.hpp>
+#include <Alpha_Mode.hpp>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace EngineCore
 {
@@ -23,6 +25,7 @@ namespace EngineCore
     // Construction order (matches member declaration order: C++ guarantees
     // members are constructed in declaration order and destroyed in reverse):
     //
+    //   Startup check: required assets  (before any subsystem)
     //   Layer 0: window                 (foundation)
     //   Layer 1: input, resources       (services)
     //   Layer 2: renderer               (GPU subsystem)
@@ -50,11 +53,49 @@ namespace EngineCore
         // Blocks until the window is closed.
         void Run();
 
+        // =========================================================
+        // Materials
+        // =========================================================
+
+        // Registers _material in the Renderer's material table if it has no
+        // slot yet, stores the slot in _material.gpu_material_id and returns
+        // it; a material that already has a slot returns it unchanged,
+        // whatever its fields hold now. See Register_material.
+        uint32_t Ensure_material_registered(ECS::Material_Component& _material);
+
+        // Registers the CURRENT fields of _material, stores the resulting
+        // slot in _material.gpu_material_id and returns it. This is how a
+        // modified material takes effect: until it is registered again, an
+        // entity keeps being drawn (color, texture and pass) with the slot
+        // it had.
+        //
+        // Texture handles are resolved to bindless indices here, once: an
+        // unassigned albedo uses Default_Texture::White, and an assigned
+        // one without a GPU index (never uploaded, or a stale handle) uses
+        // Default_Texture::Error, so the mistake shows up magenta. Equal
+        // materials share one slot (Renderer::Register_material), and the
+        // alpha mode of the slot is recorded for the Extractor, which
+        // routes every draw by the mode of the slot it draws with.
+        //
+        // The table is append-only: registering many distinct variants
+        // (for example, a fade animated through base_color_factor) fills
+        // it. Per-frame material animation needs updatable slots or
+        // per-instance parameters, which do not exist yet.
+        uint32_t Register_material(ECS::Material_Component& _material);
+
     private:
 
         // =========================================================
         // Subsystems: declaration order = construction order
         // =========================================================
+
+        // Startup check: every file the engine cannot run without
+        // (compiled shaders, input actions) exists under the asset root.
+        // Declared first so it runs before any subsystem: a missing file
+        // is reported with the resolved root and the full list of missing
+        // files, instead of as the first exception a subsystem throws.
+        // Always true once constructed (the check throws otherwise).
+        bool                                required_assets_present;
 
         // Layer 0: Foundation
         Platform::Window                    window;
@@ -83,6 +124,11 @@ namespace EngineCore
         // Created by Setup_scene(), passed to Engine_Loop::Run().
         ECS::Entity camera_entity = ECS::INVALID_ENTITY;
 
+        // Alpha mode of every registered material slot, indexed by slot
+        // (Extract_Params::material_alpha_modes). Holds Default_Material
+        // (Opaque) from construction; Register_material records the rest.
+        std::vector<CoreTypes::Alpha_Mode> material_alpha_modes;
+
         // =========================================================
         // Internal helpers
         // =========================================================
@@ -94,14 +140,6 @@ namespace EngineCore
         // the id already registered.
         uint32_t Ensure_mesh_uploaded(CoreTypes::Asset_Handle _mesh);
         uint32_t Ensure_image_uploaded(CoreTypes::Asset_Handle _image);
-        // Registers _material in the Renderer's material table if it has no
-        // slot yet, stores the slot in _material.gpu_material_id and returns
-        // it. Texture handles are resolved to bindless indices here, once:
-        // an unassigned albedo uses Default_Texture::White, and an assigned
-        // one without a GPU index (never uploaded, or a stale handle) uses
-        // Default_Texture::Error, so the mistake shows up magenta. Equal
-        // materials share one slot (Renderer::Register_material).
-        uint32_t Ensure_material_registered(ECS::Material_Component& _material);
         // Creates an entity with a transform and a mesh at _position, with
         // the mesh uploaded if needed.
         ECS::Entity Spawn_mesh_entity(CoreTypes::Asset_Handle _mesh, const MathLib::Vector3& _position);

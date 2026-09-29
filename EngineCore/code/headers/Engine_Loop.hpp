@@ -2,8 +2,10 @@
 
 #include <Time.hpp>
 #include <Entity.hpp>
+#include <Alpha_Mode.hpp>
 
 #include <cstddef>
+#include <vector>
 
 namespace Platform { class Window; }
 namespace Input_System { class Input; }
@@ -20,22 +22,26 @@ namespace EngineCore
     // Engine_Loop: drives the main game loop.
     //
     // Owns the Time struct and iterates frames until the window requests
-    // close. Each frame runs the systems in a fixed, deterministic order:
+    // close. Before the first frame the clock is resynchronized
+    // (Time::Resync), so the engine construction and the scene setup that
+    // preceded Run() are not measured as the first frame's delta. Each
+    // frame runs the systems in a fixed, deterministic order:
     //
-    //   1. Input::Begin_frame()          - snapshot previous input state
-    //   2. Window::Poll_events()         - GLFW dispatches callbacks
+    //   1. Window::Poll_events()         - GLFW dispatches callbacks; Input
+    //                                      queues the key/button events
     //      (minimized: discard pending input, wait for events, restart)
-    //   3. Time::Update()                - delta time, FPS
-    //   4. Resize handling               - Window flag -> Renderer swapchain;
+    //   2. Time::Update()                - delta time, FPS
+    //   3. Resize handling               - Window flag -> Renderer swapchain;
     //      the only place that recreates it
-    //   5. Input::Update()               - publish deltas, flush actions
+    //   4. Input::Update()               - publish deltas, replay the queued
+    //                                      events into levels and actions
     //      Debug switches                - input -> Renderer debug settings
-    //   6. Camera_Controller::Update()   - input -> camera transform
-    //   7. Transform_System::Update()    - recompute TRS matrices
-    //   8. Extractor::Extract()          - ECS -> RenderPacket
-    //   9. Renderer::Render()            - draw the frame
+    //   5. Camera_Controller::Update()   - input -> camera transform
+    //   6. Transform_System::Update()    - recompute TRS matrices
+    //   7. Extractor::Extract()          - ECS -> RenderPacket
+    //   8. Renderer::Render()            - draw the frame
     //
-    // The Renderer's calls in steps 4 and 9 may throw. A failure is logged
+    // The Renderer's calls in steps 3 and 8 may throw. A failure is logged
     // and the loop goes on with the next frame, since a failed frame is
     // undone by the Renderer; it leaves the loop when the Renderer reports
     // itself lost, or after several failures in a row.
@@ -55,6 +61,9 @@ namespace EngineCore
 
         // Runs the loop until window.Should_close() returns true, or the
         // Renderer is lost or keeps failing.
+        // _material_alpha_modes: alpha mode of every registered material
+        //   slot (Extract_Params::material_alpha_modes). Read every frame,
+        //   so materials registered while the loop runs are covered.
         // _camera_entity: the ECS entity with Transform + Camera_Component
         //   that Camera_Controller will drive.
         void Run(Platform::Window& _window,
@@ -65,6 +74,7 @@ namespace EngineCore
             Transform_System& _transform_system,
             Camera_Controller& _camera_controller,
             Extractor& _extractor,
+            const std::vector<CoreTypes::Alpha_Mode>& _material_alpha_modes,
             ECS::Entity                        _camera_entity);
 
         const Platform::Time& Get_time() const { return time; }
@@ -72,7 +82,9 @@ namespace EngineCore
     private:
 
         // Applies the debug actions pressed this frame to the Renderer's
-        // runtime switches (Renderer_System::Render_Debug_Settings):
+        // runtime switches (Renderer_System::Render_Debug_Settings). Every
+        // press counts: a toggle pressed twice within one frame ends where
+        // it started, and a cycle advances once per press.
         //   DebugLightCulling   - clustered lights <-> every light (reference)
         //   DebugClusterView    - cycles the cluster grid overlays
         //   DebugOpaquePath     - cycles direct / CPU indirect / GPU indirect /

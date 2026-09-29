@@ -224,9 +224,9 @@ namespace Renderer_System
         // slot is never referenced by a command already submitted.
         //
         // Throws std::invalid_argument if albedo_texture_index is not a
-        // registered bindless slot or sampler is not a Sampler_Preset
-        // value, and std::runtime_error if the table is full
-        // (MAX_MATERIALS).
+        // registered bindless slot, sampler is not a Sampler_Preset value
+        // or alpha_mode is not an Alpha_Mode value, and std::runtime_error
+        // if the table is full (MAX_MATERIALS).
         uint32_t Register_material(const Material_Desc& _desc);
 
         // =========================================================

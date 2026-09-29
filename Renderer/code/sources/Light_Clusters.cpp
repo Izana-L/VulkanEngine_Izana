@@ -1,4 +1,5 @@
 #include <Light_Clusters.hpp>
+#include <Shader_Paths.hpp>
 #include <Cluster_Grid.hpp>
 #include <Descriptor_Sets.hpp>
 #include <Renderer_Limits.hpp>
@@ -24,7 +25,7 @@ namespace Renderer_System
                                    VkPipelineCache _pipeline_cache, VkPipelineLayout _compute_layout)
         : device_handle(_device.Get_logical_device_handle()),
         allocator(_allocator),
-        pipeline(_device, _pipeline_cache, _compute_layout, "..\\..\\Renderer\\shaders\\compiled\\cluster_lights.comp.spv")
+        pipeline(_device, _pipeline_cache, _compute_layout, Shader_Paths::Resolve(Shader_Paths::CLUSTER_LIGHTS_COMP))
     {
         aabb_buffer = Vulkan_Buffer_Utils::Create_buffer(allocator, AABB_BUFFER_SIZE,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, Vulkan_Buffer_Utils::Buffer_Access::Gpu_Only);

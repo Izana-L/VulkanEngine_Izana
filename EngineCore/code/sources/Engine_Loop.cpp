@@ -27,12 +27,20 @@ namespace EngineCore
         // would only print the same error forever.
         constexpr uint32_t MAX_CONSECUTIVE_RENDERER_FAILURES = 5;
 
-        // Next value of a cyclic enumeration with a Count enumerator.
+        // Value _steps positions after _value in a cyclic enumeration with
+        // a Count enumerator.
         template <typename ENUM>
-        ENUM Next_value(ENUM _value)
+        ENUM Advance_value(ENUM _value, uint32_t _steps)
         {
-            const uint32_t next = static_cast<uint32_t>(_value) + 1u;
-            return static_cast<ENUM>(next % static_cast<uint32_t>(ENUM::Count));
+            const uint32_t count = static_cast<uint32_t>(ENUM::Count);
+            const uint32_t next = static_cast<uint32_t>(_value) + _steps % count;
+            return static_cast<ENUM>(next % count);
+        }
+
+        // True when a toggle pressed _presses times ends flipped.
+        bool Is_odd(uint32_t _presses)
+        {
+            return (_presses % 2u) != 0u;
         }
     }
 
@@ -53,7 +61,9 @@ namespace EngineCore
         Renderer_System::Render_Debug_Settings settings = _renderer.Get_debug_settings();
         bool changed = false;
 
-        if (_input.Was_action_pressed(debug_action_ids.light_culling))
+        const auto presses = [&](size_t _action_id) { return _input.Get_action_press_count(_action_id); };
+
+        if (Is_odd(presses(debug_action_ids.light_culling)))
         {
             settings.light_culling = (settings.light_culling == Renderer_System::Light_Culling_Mode::Clustered)
                 ? Renderer_System::Light_Culling_Mode::Brute_Force
@@ -61,37 +71,37 @@ namespace EngineCore
             changed = true;
         }
 
-        if (_input.Was_action_pressed(debug_action_ids.cluster_view))
+        if (const uint32_t steps = presses(debug_action_ids.cluster_view); steps > 0)
         {
-            settings.cluster_view = Next_value(settings.cluster_view);
+            settings.cluster_view = Advance_value(settings.cluster_view, steps);
             changed = true;
         }
 
-        if (_input.Was_action_pressed(debug_action_ids.opaque_path))
+        if (const uint32_t steps = presses(debug_action_ids.opaque_path); steps > 0)
         {
-            settings.opaque_path = Next_value(settings.opaque_path);
+            settings.opaque_path = Advance_value(settings.opaque_path, steps);
             changed = true;
         }
 
-        if (_input.Was_action_pressed(debug_action_ids.freeze_culling))
+        if (Is_odd(presses(debug_action_ids.freeze_culling)))
         {
             settings.freeze_culling = !settings.freeze_culling;
             changed = true;
         }
 
-        if (_input.Was_action_pressed(debug_action_ids.show_bounds))
+        if (Is_odd(presses(debug_action_ids.show_bounds)))
         {
             settings.show_bounds = !settings.show_bounds;
             changed = true;
         }
 
-        if (_input.Was_action_pressed(debug_action_ids.stats))
+        if (Is_odd(presses(debug_action_ids.stats)))
         {
             settings.print_stats = !settings.print_stats;
             changed = true;
         }
 
-        if (_input.Was_action_pressed(debug_action_ids.isolate_timings))
+        if (Is_odd(presses(debug_action_ids.isolate_timings)))
         {
             settings.isolate_gpu_timings = !settings.isolate_gpu_timings;
             changed = true;
@@ -110,6 +120,7 @@ namespace EngineCore
         Transform_System& _transform_system,
         Camera_Controller& _camera_controller,
         Extractor& _extractor,
+        const std::vector<CoreTypes::Alpha_Mode>& _material_alpha_modes,
         ECS::Entity                        _camera_entity)
     {
         CoreTypes::RenderPacket packet;
@@ -117,6 +128,7 @@ namespace EngineCore
         Extract_Params extract_params;
         extract_params.opaque_pipeline_id = _renderer.Get_opaque_pipeline_id();
         extract_params.transparent_pipeline_id = _renderer.Get_transparent_pipeline_id();
+        extract_params.material_alpha_modes = &_material_alpha_modes;
 
         // Failures of the Renderer since its last successful frame.
         uint32_t consecutive_failures = 0;
@@ -162,12 +174,14 @@ namespace EngineCore
                 return false;
             };
 
+        // Everything before this point (engine construction, action
+        // loading, scene setup and its GPU uploads) is load time, not the
+        // first frame: the first delta measures only the first frame.
+        time.Resync();
+
         while (!_window.Should_close())
         {
-            // ── 1. Snapshot the input state of the previous frame ──
-            _input.Begin_frame();
-
-            // ── 2. OS events -> GLFW callbacks ────────────────────
+            // ── 1. OS events -> GLFW callbacks -> input queue ─────
             _window.Poll_events();
 
             if (_window.Is_minimized())
@@ -183,11 +197,11 @@ namespace EngineCore
                 continue;
             }
 
-            // ── 3. Timing ─────────────────────────────────────────
+            // ── 2. Timing ─────────────────────────────────────────
             time.Update();
             const float dt = time.Get_delta_time();
 
-            // ── 4. Resize: window flag -> renderer ────────────────
+            // ── 3. Resize: window flag -> renderer ────────────────
             // The only place that recreates the swapchain, whatever asked
             // for it (a resize, or the driver reporting it out of date).
             // Applied before extract, so the aspect ratio below and the
@@ -205,19 +219,19 @@ namespace EngineCore
                 continue;
             }
 
-            // ── 5. Input snapshots + named actions ────────────────
+            // ── 4. Input events -> levels + named actions ─────────
             _input.Update();
 
             // Runtime switches between the old and new render paths.
             Handle_debug_input(_input, _renderer);
 
-            // ── 6. Camera (input -> transform) ────────────────────
+            // ── 5. Camera (input -> transform) ────────────────────
             _camera_controller.Update(_camera_entity, _input, _world, dt);
 
-            // ── 7. Transform matrices (TRS, hierarchy) ────────────
+            // ── 6. Transform matrices (TRS, hierarchy) ────────────
             _transform_system.Update(_world);
 
-            // ── 8. Extract ECS -> RenderPacket ────────────────────
+            // ── 7. Extract ECS -> RenderPacket ────────────────────
             uint32_t render_width = 0;
             uint32_t render_height = 0;
             _renderer.Get_render_size(render_width, render_height);
@@ -228,7 +242,7 @@ namespace EngineCore
 
             const bool has_camera = _extractor.Extract(_world, _resources, extract_params, packet);
 
-            // ── 9. Render ─────────────────────────────────────────
+            // ── 8. Render ─────────────────────────────────────────
             // A failed frame has been undone by the Renderer, so the loop
             // goes on with the next one unless the Renderer is lost or keeps
             // failing.

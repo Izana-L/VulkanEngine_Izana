@@ -41,8 +41,9 @@ namespace EngineCore
         // ToggleCamera switches between captured (Camera) and free (Window)
         // cursor. Rotation is only applied while captured. Set_cursor_mode
         // discards the mouse delta of the frame it runs in, so the click
-        // that toggles never becomes a rotation.
-        if (_input.Was_action_pressed(ids.toggle_camera))
+        // that toggles never becomes a rotation. Every press of the frame
+        // toggles once: two presses within one frame cancel out.
+        if (_input.Get_action_press_count(ids.toggle_camera) % 2u != 0u)
         {
             const Input_System::Cursor_Mode new_mode =
                 (_input.Get_cursor_mode() == Input_System::Cursor_Mode::Camera)
@@ -52,22 +53,29 @@ namespace EngineCore
         }
 
         // =========================================================
-        // Initialize yaw/pitch from current rotation (first frame)
+        // Sync yaw/pitch with the Transform
         // =========================================================
 
-        if (!initialized)
+        // A rotation different from the last one written by this
+        // controller was set by other code (or nothing was written yet):
+        // yaw/pitch are derived from it, so input continues from there.
+        //
+        // Derived from the rotated basis vectors rather than from an
+        // Euler decomposition. glm::eulerAngles returns an equivalent
+        // (pitch = pi, yaw' = pi - yaw, roll = pi) decomposition for
+        // |yaw| > 90 degrees; reading only its x and y and dropping the
+        // roll rebuilds a different rotation, and the camera snaps. The
+        // basis vectors have no such ambiguity:
+        //   forward = (-cos(pitch) sin(yaw), sin(pitch), -cos(pitch) cos(yaw))
+        //   right   = ( cos(yaw), 0, -sin(yaw))
+        // for the yaw * pitch model rebuilt below, so pitch comes from
+        // forward.y and yaw from the right vector, which stays well defined
+        // even when the camera looks straight up or down.
+        const bool rotation_changed_externally =
+            !has_written_rotation || transform->rotation != last_written_rotation;
+
+        if (rotation_changed_externally)
         {
-            // Derived from the rotated basis vectors rather than from an
-            // Euler decomposition. glm::eulerAngles returns an equivalent
-            // (pitch = pi, yaw' = pi - yaw, roll = pi) decomposition for
-            // |yaw| > 90 degrees; reading only its x and y and dropping
-            // the roll rebuilds a different rotation, and the camera snaps
-            // on the first frame. The basis vectors have no such ambiguity:
-            //   forward = (-cos(pitch) sin(yaw), sin(pitch), -cos(pitch) cos(yaw))
-            //   right   = ( cos(yaw), 0, -sin(yaw))
-            // for the yaw * pitch model rebuilt below, so pitch comes from
-            // forward.y and yaw from the right vector, which stays well
-            // defined even when the camera looks straight up or down.
             const MathLib::Vector3 forward = MathLib::Quat::GetForward(transform->rotation);
             const MathLib::Vector3 right = MathLib::Quat::GetRight(transform->rotation);
 
@@ -75,13 +83,14 @@ namespace EngineCore
             yaw = std::atan2(-right.z, right.x);
 
             pitch = std::clamp(pitch, -pitch_limit, pitch_limit);
-
-            initialized = true;
         }
 
         // =========================================================
         // Rotation from mouse (only in Camera cursor mode)
         // =========================================================
+
+        const float previous_yaw = yaw;
+        const float previous_pitch = pitch;
 
         if (_input.Get_cursor_mode() == Input_System::Cursor_Mode::Camera)
         {
@@ -98,18 +107,29 @@ namespace EngineCore
             pitch = std::clamp(pitch, -pitch_limit, pitch_limit);
         }
 
-        // Rebuild the rotation quaternion from yaw and pitch every frame
-        // (also on the first one, so the transform matches the projected
-        // yaw/pitch state from then on).
-        // Order: yaw around world Y, then pitch around local X.
-        const MathLib::Quat::Quaternion q_yaw =
-            MathLib::Quat::From_axis_angle(MathLib::Vector3(0.0f, 1.0f, 0.0f), yaw);
+        // The rotation is written only when the angles changed, or on the
+        // first update (so the Transform matches the yaw/pitch model from
+        // then on). An external rotation with no input this frame is left
+        // untouched, roll included.
+        const bool angles_changed = (yaw != previous_yaw) || (pitch != previous_pitch);
 
-        const MathLib::Quat::Quaternion q_pitch =
-            MathLib::Quat::From_axis_angle(MathLib::Vector3(1.0f, 0.0f, 0.0f), pitch);
+        if (angles_changed || !has_written_rotation)
+        {
+            // Order: yaw around world Y, then pitch around local X.
+            const MathLib::Quat::Quaternion q_yaw =
+                MathLib::Quat::From_axis_angle(MathLib::Vector3(0.0f, 1.0f, 0.0f), yaw);
 
-        // yaw * pitch: pitch applied first (local), then yaw (world).
-        transform->Set_rotation(MathLib::Quat::Multiply(q_yaw, q_pitch));
+            const MathLib::Quat::Quaternion q_pitch =
+                MathLib::Quat::From_axis_angle(MathLib::Vector3(1.0f, 0.0f, 0.0f), pitch);
+
+            // yaw * pitch: pitch applied first (local), then yaw (world).
+            transform->Set_rotation(MathLib::Quat::Multiply(q_yaw, q_pitch));
+
+            // The stored (normalized) value, so the comparison above is
+            // exact on the next update.
+            last_written_rotation = transform->rotation;
+            has_written_rotation = true;
+        }
 
         // =========================================================
         // Movement from keyboard

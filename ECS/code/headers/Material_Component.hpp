@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Alpha_Mode.hpp>
 #include <Asset_Handle.hpp>
 #include <Sampler_Preset.hpp>
 #include <Vector.hpp>
@@ -70,8 +71,24 @@ namespace ECS
         // =========================================================
 
         // Base color tint. Multiplies the albedo texture sample (or used directly
-        // if no albedo texture). RGBA — alpha is reserved for future transparency.
+        // if no albedo texture). RGBA; how the resulting alpha is used is
+        // selected by alpha_mode, not by the value of alpha itself.
         MathLib::Vector4 base_color_factor = { 1.0f, 1.0f, 1.0f, 1.0f };
+
+        // =========================================================
+        // Alpha
+        // =========================================================
+
+        // Interpretation of the final alpha (vertex color * base_color_factor
+        // * albedo sample), as in glTF: Opaque ignores it, Mask discards the
+        // fragments below alpha_cutoff, Blend draws the surface in the
+        // transparent pass. It is also what routes the entity to the opaque
+        // or the transparent pass, read from the REGISTERED copy of the
+        // material (see gpu_material_id), the same copy the shaders read.
+        CoreTypes::Alpha_Mode alpha_mode = CoreTypes::Alpha_Mode::Opaque;
+
+        // Alpha threshold of Alpha_Mode::Mask; ignored by the other modes.
+        float alpha_cutoff = CoreTypes::DEFAULT_ALPHA_CUTOFF;
 
         // Metallic multiplier [0..1]. 0 = dielectric, 1 = full metal.
         float metallic_factor = 1.0f;
@@ -95,8 +112,11 @@ namespace ECS
         // Draw_Item::material_index; while it is INVALID_GPU_MATERIAL_ID
         // the item draws with CoreTypes::Default_Material.
         //
-        // Changing a field above does NOT update the GPU copy: the material
-        // has to be registered again, which yields a new slot.
+        // Changing a field above does NOT update the registered copy:
+        // neither the color the shaders read nor the pass the entity is
+        // drawn in change until the material is registered again
+        // (Engine::Register_material), which yields another slot. Rendering
+        // is therefore always consistent with one registered state.
         uint32_t gpu_material_id = INVALID_GPU_MATERIAL_ID;
     };
 

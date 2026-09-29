@@ -20,6 +20,11 @@ namespace Renderer_System
     // alternatives: warm-up is what fills this, and this is what makes
     // warm-up cheap from the second run on.
     //
+    // The blob is generated data, so it is kept in the per-user data
+    // directory (Platform::Filesystem::Get_user_data_directory, e.g.
+    // %LOCALAPPDATA%\VulkanEngine\pipeline_cache.bin), never next to the
+    // executable, whose folder may not be writable.
+    //
     // The blob is driver- and device-specific. A GPU swap or a driver update
     // invalidates it — Is_blob_usable() checks that before handing anything
     // to Vulkan, so a stale file degrades to "start empty" instead of

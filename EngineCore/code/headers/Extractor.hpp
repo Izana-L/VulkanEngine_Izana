@@ -1,9 +1,12 @@
 #pragma once
 
+#include <Alpha_Mode.hpp>
+#include <Entity.hpp>
 #include <RenderPacket.hpp>
 #include <Matrix.hpp>
 
 #include <cstdint>
+#include <unordered_set>
 #include <vector>
 
 namespace ECS { class World; }
@@ -24,6 +27,15 @@ namespace EngineCore
         // Pipeline ids handed out by the Renderer, packed into sort keys.
         uint8_t opaque_pipeline_id = 0;
         uint8_t transparent_pipeline_id = 0;
+
+        // Alpha mode of every registered material slot, indexed by slot:
+        // the mode each slot was registered with, maintained by whoever
+        // registers materials (Engine::Register_material). The pass of an
+        // item is looked up here by the slot it draws with, so the pass and
+        // the shading always come from the same registered material. A
+        // slot outside the table, or a null table, is treated as Opaque.
+        // Read-only for the Extractor; must stay alive while Extract runs.
+        const std::vector<CoreTypes::Alpha_Mode>* material_alpha_modes = nullptr;
     };
 
     // Extractor: reads the ECS state once per frame and produces a
@@ -41,18 +53,24 @@ namespace EngineCore
     //      camera parameters and the same basis as the view matrix.
     //   2. Iterates entities with Transform_Component + Mesh_Component,
     //      resolves Asset_Handle -> gpu_id, reads the optional
-    //      Material_Component (its material table slot, and the tint alpha
-    //      that routes each item to the opaque or the transparent list)
-    //      and fills the transforms. Textures are not resolved here: the
+    //      Material_Component's registered slot and fills the transforms.
+    //      The item goes to the opaque or the transparent list according
+    //      to the alpha mode of that slot (Extract_Params::
+    //      material_alpha_modes), never to fields of the component that
+    //      may have changed since it was registered. An unregistered
+    //      material draws with Default_Material in the opaque pass, and is
+    //      reported once per entity. Textures are not resolved here: the
     //      Engine did it once, when it registered the material.
     //   3. Iterates entities with Transform_Component + Light_Component,
     //      fills the GPU_Light array from WORLD positions and directions.
     //   4. Sorts both item lists by sort_key: grouped by pipeline, then by
     //      winding (objects whose transform inverts it, such as a negative
     //      scale on one axis, sit together), material and mesh,
-    //      front-to-back inside each group. Transparent items need no
-    //      back-to-front order: the Renderer composites them with weighted
-    //      blended order-independent transparency.
+    //      front-to-back inside each group. Equal keys are ordered by
+    //      Draw_Item::stable_id (the entity index), so the order is the
+    //      same every frame. Transparent items need no back-to-front order:
+    //      the Renderer composites them with weighted blended
+    //      order-independent transparency.
     //
     // Everything spatial is taken from Transform_Component::world_matrix,
     // never from the local position/rotation: a camera or a light parented
@@ -88,6 +106,11 @@ namespace EngineCore
         // exist has been reported; such materials fall back to the default
         // preset silently afterwards.
         bool warned_invalid_sampler = false;
+
+        // Entities already reported for carrying a Material_Component that
+        // was never registered. The full Entity (index and generation) is
+        // stored, so a recycled index is reported again for its new owner.
+        std::unordered_set<ECS::Entity> warned_unregistered_material;
     };
 
 } // namespace EngineCore

@@ -51,20 +51,29 @@ namespace Input_System
     // more bindings. The game code queries actions by name, never by
     // raw key — this is what allows remapping via the JSON file.
     //
-    // value:    0.0 (inactive) or 1.0 (active). Always 0.0 or 1.0 for
-    //           keyboard/mouse; reserved for analogue range when gamepad
-    //           support is added.
-    // pressed:  true only on the frame the action became active.
-    // released: true only on the frame the action became inactive.
+    // value:           0.0 (inactive) or 1.0 (active). Always 0.0 or 1.0
+    //                  for keyboard/mouse; reserved for analogue range when
+    //                  gamepad support is added.
+    // active_bindings: number of bindings currently held. The action is
+    //                  active while it is above zero, so holding a second
+    //                  binding of an already active action is not a new
+    //                  activation (OR semantics).
+    // press_count:     inactive -> active transitions during the last
+    //                  processed frame. Several when the action was
+    //                  pressed and released more than once in one frame.
+    // release_count:   active -> inactive transitions during the last
+    //                  processed frame.
     struct Action
     {
         std::string                  name;
         std::vector<Action_Binding>  bindings;
 
-        // Per-frame state — written by Action_Map::Update(), read by callers.
-        float value = 0.0f;
-        bool  pressed = false;   // transition inactive → active this frame
-        bool  released = false;   // transition active → inactive this frame
+        // State written by Input while it replays the input events of a
+        // frame (Input::Update), read by callers through Input.
+        float    value = 0.0f;
+        uint32_t active_bindings = 0;
+        uint32_t press_count = 0;
+        uint32_t release_count = 0;
     };
 
 } 

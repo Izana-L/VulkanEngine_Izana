@@ -46,6 +46,12 @@ namespace Renderer_System
             throw std::invalid_argument("Register_material: sampler " + std::to_string(sampler_index)
                 + " is not a Sampler_Preset value");
 
+        const uint32_t alpha_mode = static_cast<uint32_t>(_desc.alpha_mode);
+
+        if (alpha_mode >= static_cast<uint32_t>(CoreTypes::Alpha_Mode::Count))
+            throw std::invalid_argument("Register_material: alpha_mode " + std::to_string(alpha_mode)
+                + " is not an Alpha_Mode value");
+
         // Deduplication by value. Linear: runs at registration time only,
         // over at most `capacity` entries.
         for (uint32_t slot = 0; slot < Get_count(); ++slot)
@@ -68,8 +74,8 @@ namespace Renderer_System
         gpu_material.base_color = _desc.base_color;
         gpu_material.albedo_texture_index = _desc.albedo_texture_index;
         gpu_material.albedo_sampler_index = sampler_index;
-        gpu_material._padding0 = 0;
-        gpu_material._padding1 = 0;
+        gpu_material.alpha_mode = alpha_mode;
+        gpu_material.alpha_cutoff = _desc.Normalized_cutoff();
 
         return slot;
     }

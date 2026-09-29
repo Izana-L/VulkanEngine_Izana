@@ -12,6 +12,10 @@ namespace Renderer_System
     namespace
     {
         constexpr const char* CACHE_FILENAME = "pipeline_cache.bin";
+
+        // Folder of the per-user data directory the cache lives in
+        // (Platform::Filesystem::Get_user_data_directory).
+        constexpr const char* USER_DATA_FOLDER = "VulkanEngine";
     }
 
     // ---------- Constructor ----------
@@ -20,7 +24,7 @@ namespace Renderer_System
         physical_device(_device.Get_physical_device_handle()),
         cache(VK_NULL_HANDLE),
         file_path(Platform::Filesystem::Combine_path(
-            Platform::Filesystem::Get_executable_directory(), CACHE_FILENAME))
+            Platform::Filesystem::Get_user_data_directory(USER_DATA_FOLDER), CACHE_FILENAME))
     {
         std::vector<uint8_t> blob;
 

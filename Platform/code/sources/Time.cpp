@@ -62,6 +62,16 @@ namespace Platform {
         }
     }
 
+    void Time::Resync()
+    {
+        const Time_point now = Clock::now();
+
+        // The interval since the previous Update() is removed from the
+        // unscaled clock by moving its origin forward by the same amount.
+        start_time += now - last_frame_time;
+        last_frame_time = now;
+    }
+
     // =========================================================
     // Delta time
     // =========================================================

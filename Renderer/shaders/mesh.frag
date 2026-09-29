@@ -23,8 +23,13 @@ layout(location = 0) out vec4 out_color;
 void main()
 {
     const vec4  base       = Material_base_color(frag_material_index, frag_color, frag_uv);
+
+    if (!Material_passes_alpha_test(frag_material_index, base.a))
+        discard;
+
     const float view_depth = View_depth(frag_world_pos);
     const vec3  color      = Shade_surface(base.rgb, frag_world_pos, frag_world_normal, gl_FragCoord.xy, view_depth);
 
-    out_color = vec4(color, base.a);
+    // Opaque and Mask surfaces are fully opaque once past the alpha test.
+    out_color = vec4(color, 1.0);
 }
