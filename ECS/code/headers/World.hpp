@@ -112,15 +112,16 @@ namespace ECS
         // the world is left exactly as it was.
         Entity Create_entity()
         {
-            const CoreTypes::Id index = id_provider.Allocate_id();
-
-            if (static_cast<size_t>(index) >= MAX_ENTITIES)
+            if (id_provider.Allocated_count() >= MAX_ENTITIES)
             {
-                id_provider.Release(index);
                 throw std::length_error(
                     "World::Create_entity: MAX_ENTITIES (" + std::to_string(MAX_ENTITIES) +
                     ") exceeded - destroy unused entities or raise the limit");
             }
+
+            const CoreTypes::Id index = id_provider.Allocate_id();
+
+            assert(static_cast<size_t>(index) < MAX_ENTITIES);
 
             const Entity entity = Make_entity(index, id_provider.Generation(index));
 

@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cstdint>
-
+#include <Id.hpp>
 namespace ECS
 {
 
@@ -24,9 +24,10 @@ namespace ECS
     using Entity = std::uint64_t;
 
     // Sentinel value representing an entity that doesn't exist or
-    // hasn't been assigned yet. Its index (0xFFFFFFFF) can never be
-    // allocated, so it never collides with a live entity.
-    constexpr Entity INVALID_ENTITY = ~Entity{ 0 };
+     // hasn't been assigned yet. Built from CoreTypes::INVALID_ID so the
+     // sentinel has a single source of truth: its index can never be
+     // allocated, so it never collides with a live entity.
+    constexpr Entity INVALID_ENTITY = Make_entity(CoreTypes::INVALID_ID, CoreTypes::INVALID_ID);
 
     constexpr std::uint32_t Entity_index(Entity _entity)
     {
@@ -43,6 +44,10 @@ namespace ECS
         return (static_cast<Entity>(_generation) << 32) | static_cast<Entity>(_index);
     }
 
+    
+
+    // Returns true if the entity is a valid (non-sentinel) value.
+
     // Returns true if the entity is a valid (non-sentinel) value.
     constexpr bool Is_valid_entity(Entity _entity)
     {
@@ -57,7 +62,7 @@ namespace ECS
 
     static_assert(Entity_index(Make_entity(7u, 3u)) == 7u);
     static_assert(Entity_generation(Make_entity(7u, 3u)) == 3u);
-    static_assert(Make_entity(7u, 3u) != Make_entity(7u, 4u),
-        "Two generations of the same slot must be distinct entities");
+    static_assert(Make_entity(7u, 3u) != Make_entity(7u, 4u),"Two generations of the same slot must be distinct entities");
+    static_assert(Entity_index(INVALID_ENTITY) == CoreTypes::INVALID_ID,"INVALID_ENTITY must carry CoreTypes::INVALID_ID as its index");
 
 }
