@@ -205,16 +205,9 @@ namespace CoreTypes
     // composites them with weighted blended order-independent transparency,
     // whose result does not depend on the draw order. A global back-to-front
     // order would not be enough anyway: it cannot resolve objects that
-    // intersect, contain one another or overlap cyclically.
-    //
-    // Determinism: the draw order must still be the same from frame to
-    // frame, because the half-precision accumulation rounds differently in
-    // another order. The key alone does not guarantee it: items with the
-    // same pipeline, winding and mesh at the same depth (an object nested
-    // in another, two objects sharing a center, a row of objects at the
-    // same view depth) have identical keys. Both lists are therefore
-    // sorted by (sort_key, stable_id), a strict total order that depends
-    // neither on how the ECS stores its entities nor on camera motion.
+    // intersect, contain one another or overlap cyclically. Their depth
+    // bits only keep the order deterministic from frame to frame (the
+    // half-precision accumulation rounds differently in another order).
     //
     // The rest of the material_id field of the key is still 0: grouping draws
     // by material only pays off once materials bind per-draw state, and every
@@ -234,23 +227,8 @@ namespace CoreTypes
         // Which passes draw this item (Render_Pass_Bit).
         uint8_t          pass_mask = Render_Pass_Bit::Opaque;
 
-        // Persistent identifier of the item's source, unique within one
-        // packet and stable across frames (the Extractor stores the
-        // entity index). Tie-break of sort_key: see "Determinism" above.
-        // A plain integer, so the packet stays independent of the ECS.
-        uint32_t         stable_id = 0;
-
         uint64_t         sort_key = 0;
     };
-
-    // Strict weak ordering of draw items: sort_key, then stable_id.
-    inline bool Draw_item_less(const Draw_Item& _a, const Draw_Item& _b)
-    {
-        if (_a.sort_key != _b.sort_key)
-            return _a.sort_key < _b.sort_key;
-
-        return _a.stable_id < _b.stable_id;
-    }
 
     // =========================================================
     // GPU_Light

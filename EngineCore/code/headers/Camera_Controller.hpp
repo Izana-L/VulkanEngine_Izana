@@ -2,7 +2,6 @@
 
 #include <Entity.hpp>
 #include <Input.hpp>
-#include <Quaternion.hpp>
 
 namespace ECS { class World; }
 
@@ -18,25 +17,12 @@ namespace EngineCore
     // from Input, never raw keys, so controls can be remapped via the
     // input JSON without touching this code.
     //
-    // Rotation model: the Transform's rotation is the source of truth;
-    // yaw and pitch are a cache of it, validated on every Update():
-    //   - The controller remembers the last rotation it wrote. When the
-    //     Transform holds a different one, other code (a cutscene, a
-    //     teleport, an editor) wrote it, and yaw/pitch are derived again
-    //     from the Transform, so mouse input continues from that rotation
-    //     without a jump.
-    //   - The rotation is rebuilt from yaw and pitch and written only when
-    //     they changed (mouse input in camera mode) or on the first update.
-    //     Without input nothing is written and the Transform is not marked
-    //     dirty, so a still camera costs no transform recomputation.
-    // Rebuilding the quaternion from the two angles, instead of composing
-    // incremental rotations with the stored one, keeps it free of drift;
-    // the angles are only re-derived after an external write, so they do
-    // not drift either.
-    //
-    // Roll is not supported: a rolled rotation (initial or written by
-    // other code) is projected onto the yaw/pitch model, and its roll is
-    // lost the next time the controller writes the rotation.
+    // Rotation model: the controller keeps its own yaw and pitch as
+    // internal state, updates them from the mouse delta each frame, and
+    // rebuilds the Transform's rotation quaternion from scratch. This
+    // avoids drift that would accumulate if it read and re-applied the
+    // existing rotation. Roll is not supported: a rolled initial rotation
+    // is projected onto the yaw/pitch model on the first update.
     //
     // The transform written is the camera's LOCAL rotation/position, as
     // for any other entity; the Extractor derives the view from the world
@@ -105,21 +91,14 @@ namespace EngineCore
         // Internal state
         // =========================================================
 
-        // Yaw (around world Y) and pitch (around local X), in radians:
-        // cache of the Transform's rotation, see "Rotation model" above.
+        // Accumulated yaw (around world Y) and pitch (around local X),
+        // in radians. Source of truth for the camera's orientation.
         float yaw = 0.0f;
         float pitch = 0.0f;
 
-        // Rotation stored in the Transform by the last write of this
-        // controller (already normalized by Set_rotation, so it compares
-        // bit for bit with the stored value). Only meaningful while
-        // has_written_rotation is true.
-        MathLib::Quat::Quaternion last_written_rotation = MathLib::Quat::Identity();
-
-        // False until the first write: the first Update() always derives
-        // yaw/pitch from the Transform and writes the rotation, so the
-        // Transform matches the yaw/pitch model from then on.
-        bool has_written_rotation = false;
+        // First Update() initializes yaw/pitch from the entity's current
+        // rotation so the camera doesn't snap on the first frame.
+        bool  initialized = false;
     };
 
 } // namespace EngineCore

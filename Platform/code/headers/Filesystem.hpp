@@ -60,7 +60,6 @@ namespace Platform {
         // Useful for building asset paths relative to where the engine
         // actually lives, instead of relying on the current working
         // directory (which can vary depending on how the app was launched).
-        // Returns an empty string if it cannot be determined.
         std::string Get_executable_path();
 
         // Returns the directory containing the currently running executable
@@ -72,42 +71,6 @@ namespace Platform {
 
         // Changes the current working directory of the process
         bool Set_current_directory(const std::string& _path);
-
-        // =========================================================
-        // Asset root and user data
-        // =========================================================
-        //
-        // Two locations with distinct purposes, neither of them derived
-        // from the current working directory:
-        //   - Asset root: READ-ONLY data deployed next to the executable
-        //     (compiled shaders, input configuration, textures). The build
-        //     copies it into the output folder, so that folder runs as-is
-        //     from any launch directory and can be packaged unchanged.
-        //   - User data directory: data GENERATED at run time (pipeline
-        //     cache), in a location the user can always write to. The
-        //     executable's folder may be read-only (Program Files).
-
-        // Directory every asset path is relative to: the directory of the
-        // executable, resolved on the first call and cached. Falls back to
-        // the current directory, with a warning, only if the executable
-        // path cannot be determined.
-        const std::string& Get_asset_root();
-
-        // Absolute path of an asset given relative to the asset root, with
-        // '/' as separator in _relative_path on every platform
-        // (e.g. "shaders/mesh.vert.spv").
-        std::string Resolve_asset_path(const std::string& _relative_path);
-
-        // Subset of _relative_paths (relative to the asset root) that does
-        // not exist as a regular file. Empty when every file is present.
-        std::vector<std::string> Find_missing_assets(const std::vector<std::string>& _relative_paths);
-
-        // Per-user writable directory of the application, created if
-        // needed: %LOCALAPPDATA%\<_application> on Windows,
-        // $XDG_CACHE_HOME/<_application> (or ~/.cache/<_application>)
-        // elsewhere. Falls back to the asset root, with a warning, when
-        // neither location is available or it cannot be created.
-        std::string Get_user_data_directory(const std::string& _application);
 
         // =========================================================
         // Directory listing

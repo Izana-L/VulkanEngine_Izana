@@ -73,22 +73,6 @@ namespace Platform
         // frames are paced evenly instead of alternating long and short.
         void Update();
 
-        // Discards the time elapsed since the previous Update(), as if it
-        // had not happened. For synchronous work done outside the frame
-        // loop (engine construction, scene setup, a blocking level load):
-        //   - the next Update() measures only from this call, so its delta
-        //     is a regular frame instead of the whole load clamped to
-        //     max_delta;
-        //   - start_time advances by the discarded interval, so
-        //     Get_unscaled_total_time() does not include it;
-        //   - total_time is unaffected, since it only accumulates measured
-        //     intervals;
-        //   - frame_count, the FPS window and the current delta are kept:
-        //     no sample is added or removed.
-        // Unlike a full reset, the totals and statistics collected so far
-        // are preserved, so the call is valid at any point of a session.
-        void Resync();
-
         // =========================================================
         // Delta time
         // =========================================================

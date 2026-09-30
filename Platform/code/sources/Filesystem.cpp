@@ -3,7 +3,6 @@
 #include <iostream>
 #include <algorithm>
 #include <chrono>
-#include <cstdlib>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -120,13 +119,8 @@ namespace Platform {
             }
             return std::string(buffer, length);
 #else
-            std::error_code error_code;
-            const fs::path exe_path = fs::read_symlink("/proc/self/exe", error_code);
-            if (error_code) {
-                std::cerr << "[Filesystem] Failed to get executable path\n";
-                return "";
-            }
-            return exe_path.string();
+            std::cerr << "[Filesystem] Get_executable_path not implemented on this platform\n";
+            return "";
 #endif
         }
 
@@ -146,93 +140,6 @@ namespace Platform {
             std::error_code error_code;
             fs::current_path(_path, error_code);
             return !error_code;
-        }
-
-        // =========================================================
-        // Asset root and user data
-        // =========================================================
-
-        namespace {
-
-            // Value of an environment variable, or an empty string.
-            std::string Get_environment_variable(const char* _name) {
-#ifdef _MSC_VER
-                // std::getenv is flagged as unsafe by MSVC (C4996, an error
-                // with SDL checks); _dupenv_s returns a heap copy.
-                char* value = nullptr;
-                size_t length = 0;
-                std::string result;
-                if (_dupenv_s(&value, &length, _name) == 0 && value != nullptr) {
-                    result = value;
-                }
-                std::free(value);
-                return result;
-#else
-                const char* value = std::getenv(_name);
-                return value != nullptr ? std::string(value) : std::string();
-#endif
-            }
-
-        }
-
-        const std::string& Get_asset_root() {
-            static const std::string root = [] {
-                const std::string exe_directory = Get_executable_directory();
-                if (!exe_directory.empty()) {
-                    return exe_directory;
-                }
-
-                std::cerr << "[Filesystem] Executable directory unknown: assets are resolved against "
-                             "the current directory\n";
-                return Get_current_directory();
-            }();
-
-            return root;
-        }
-
-        std::string Resolve_asset_path(const std::string& _relative_path) {
-            // generic format: '/' separators in the relative path are valid
-            // on every platform and are converted to the native ones.
-            return (fs::path(Get_asset_root()) / fs::path(_relative_path).make_preferred()).string();
-        }
-
-        std::vector<std::string> Find_missing_assets(const std::vector<std::string>& _relative_paths) {
-            std::vector<std::string> missing;
-
-            for (const std::string& relative_path : _relative_paths) {
-                if (!Is_file(Resolve_asset_path(relative_path))) {
-                    missing.push_back(relative_path);
-                }
-            }
-
-            return missing;
-        }
-
-        std::string Get_user_data_directory(const std::string& _application) {
-            fs::path base;
-
-#ifdef _WIN32
-            base = Get_environment_variable("LOCALAPPDATA");
-#else
-            base = Get_environment_variable("XDG_CACHE_HOME");
-            if (base.empty()) {
-                const std::string home = Get_environment_variable("HOME");
-                if (!home.empty()) {
-                    base = fs::path(home) / ".cache";
-                }
-            }
-#endif
-
-            if (!base.empty()) {
-                const fs::path directory = base / _application;
-                if (Create_directory(directory.string())) {
-                    return directory.string();
-                }
-            }
-
-            std::cerr << "[Filesystem] No writable user data directory for '" << _application
-                      << "': using the asset root\n";
-            return Get_asset_root();
         }
 
         // =========================================================

@@ -228,14 +228,12 @@ namespace Renderer_System
         MathLib::Vector4 base_color;             // tint multiplied with vertex color and albedo sample
         uint32_t         albedo_texture_index;   // bindless texture slot; untextured = CoreTypes::Default_Texture::White
         uint32_t         albedo_sampler_index;   // slot in the bindless sampler array (a CoreTypes::Sampler_Preset value)
-        uint32_t         alpha_mode;             // CoreTypes::Alpha_Mode value (MATERIAL_ALPHA_MODE_* in the shaders)
-        float            alpha_cutoff;           // threshold of Alpha_Mode::Mask; 0 for the other modes
+        uint32_t         _padding0;
+        uint32_t         _padding1;
     };
     static_assert(sizeof(Material_GPU) == 32, "Material_GPU breaks the std430 layout of scene_data.glsl");
     static_assert(offsetof(Material_GPU, albedo_texture_index) == 16, "Material_GPU breaks the std430 layout of scene_data.glsl");
     static_assert(offsetof(Material_GPU, albedo_sampler_index) == 20, "Material_GPU breaks the std430 layout of scene_data.glsl");
-    static_assert(offsetof(Material_GPU, alpha_mode) == 24, "Material_GPU breaks the std430 layout of scene_data.glsl");
-    static_assert(offsetof(Material_GPU, alpha_cutoff) == 28, "Material_GPU breaks the std430 layout of scene_data.glsl");
 
     // Mirror of `Mesh_Info` in mesh_table.glsl (std430). One entry per mesh
     // gpu id in the mesh table (set 2, Binding_Per_Material::Meshes),

@@ -70,8 +70,11 @@
       <EnableSegmentHeap>true</EnableSegmentHeap>
     </Manifest>
     <PreBuildEvent>
-      <Command>
-      </Command>
+      <Command>if not exist "$(ProjectDir)..\shaders\compiled" mkdir "$(ProjectDir)..\shaders\compiled"
+for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$(ProjectDir)..\shaders\*.comp") do (
+    echo Compiling %%~nxf
+    "%VULKAN_SDK%\Bin\glslc.exe" "%%f" -o "$(ProjectDir)..\shaders\compiled\%%~nxf.spv" || exit 1
+)</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -94,8 +97,11 @@
       <EnableSegmentHeap>true</EnableSegmentHeap>
     </Manifest>
     <PreBuildEvent>
-      <Command>
-      </Command>
+      <Command>if not exist "$(ProjectDir)..\shaders\compiled" mkdir "$(ProjectDir)..\shaders\compiled"
+for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$(ProjectDir)..\shaders\*.comp") do (
+    echo Compiling %%~nxf
+    "%VULKAN_SDK%\Bin\glslc.exe" "%%f" -o "$(ProjectDir)..\shaders\compiled\%%~nxf.spv" || exit 1
+)</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -166,7 +172,6 @@
     <ClInclude Include="..\code\headers\Renderer_Limits.hpp" />
     <ClInclude Include="..\code\headers\Render_Debug_Settings.hpp" />
     <ClInclude Include="..\code\headers\Sampler_Cache.hpp" />
-    <ClInclude Include="..\code\headers\Shader_Paths.hpp" />
     <ClInclude Include="..\code\headers\Shader_Stages.hpp" />
     <ClInclude Include="..\code\headers\Storage_Image.hpp" />
     <ClInclude Include="..\code\headers\Texture_GPU.hpp" />

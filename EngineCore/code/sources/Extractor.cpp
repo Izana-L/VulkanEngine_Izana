@@ -77,18 +77,6 @@ namespace EngineCore
 
             return frustum;
         }
-
-        // Alpha mode a material slot was registered with; Opaque for a slot
-        // the table does not cover (see Extract_Params::material_alpha_modes).
-        CoreTypes::Alpha_Mode Alpha_mode_of_slot(const Extract_Params& _params, uint32_t _slot)
-        {
-            const std::vector<CoreTypes::Alpha_Mode>* modes = _params.material_alpha_modes;
-
-            if (modes == nullptr || _slot >= modes->size())
-                return CoreTypes::Alpha_Mode::Opaque;
-
-            return (*modes)[_slot];
-        }
     }
 
     bool Extractor::Extract(const ECS::World& _world,
@@ -219,20 +207,17 @@ namespace EngineCore
                 CoreTypes::Draw_Item item{};
                 item.mesh_gpu_id = gpu_id;
                 item.material_index = CoreTypes::Default_Material;
-                item.stable_id = ECS::Entity_index(entity);
+
+                // Alpha of the material tint: what routes the item to the
+                // opaque or the transparent pass below.
+                float base_alpha = 1.0f;
 
                 if (const ECS::Material_Component* material = _world.Try_get_component<ECS::Material_Component>(entity))
                 {
                     if (material->gpu_material_id != ECS::Material_Component::INVALID_GPU_MATERIAL_ID)
-                    {
                         item.material_index = material->gpu_material_id;
-                    }
-                    else if (warned_unregistered_material.insert(entity).second)
-                    {
-                        std::cerr << "[Extractor] Entity " << entity << " has a Material_Component that was never "
-                                     "registered: drawn with the default material in the opaque pass. Register it "
-                                     "through Engine::Ensure_material_registered or Engine::Register_material.\n";
-                    }
+
+                    base_alpha = material->base_color_factor.a;
                 }
 
                 // Store the world matrix and record its index.
@@ -243,14 +228,12 @@ namespace EngineCore
                 // the same space the matrix that draws the item lives in.
                 const float depth = glm::dot(transform.World_position() - cam_pos, cam_forward);
 
-                // The alpha mode of the slot the item draws with routes it:
-                // Blend goes to the transparent pass (accumulated by the
-                // weighted blended OIT, depth tested without writes);
-                // Opaque and Mask go to the opaque pass. The composite does
-                // not depend on the draw order, so the key groups a
-                // transparent item like an opaque one (pipeline, material,
-                // mesh, then front-to-back).
-                const bool transparent = CoreTypes::Is_transparent(Alpha_mode_of_slot(_params, item.material_index));
+                // Alpha below one routes the item to the transparent pass:
+                // accumulated by the weighted blended OIT, depth tested
+                // without writes. The composite does not depend on the
+                // draw order, so the key groups the item like an opaque one
+                // (pipeline, material, mesh, then front-to-back).
+                const bool transparent = base_alpha < 1.0f;
 
                 // Objects whose transform inverts the winding are drawn with
                 // the opposite front face: the key keeps them together, right
@@ -283,17 +266,17 @@ namespace EngineCore
         _out_packet.transforms = transform_buffer.data();
         _out_packet.transform_count = static_cast<uint32_t>(transform_buffer.size());
 
+        const auto by_key = [](const CoreTypes::Draw_Item& a, const CoreTypes::Draw_Item& b)
+            {
+                return a.sort_key < b.sort_key;
+            };
+
         // Both lists: grouped by pipeline/winding/mesh, front-to-back
-        // inside each group, and by stable_id between equal keys. The
-        // transparent list needs no back-to-front order: the Renderer
-        // composites it order-independently, and the full order (key, then
-        // stable_id) only keeps it deterministic between frames. The
-        // tie-break makes the order total, so std::sort gives the same
-        // result whatever order the ECS iterated the entities in; a
-        // stable sort would instead preserve that iteration order, which
-        // changes whenever an entity is destroyed.
-        std::sort(_out_packet.opaque_items.begin(), _out_packet.opaque_items.end(), CoreTypes::Draw_item_less);
-        std::sort(_out_packet.transparent_items.begin(), _out_packet.transparent_items.end(), CoreTypes::Draw_item_less);
+        // inside each group. The transparent list needs no back-to-front
+        // order: the Renderer composites it order-independently, and the
+        // depth bits only keep its order deterministic between frames.
+        std::sort(_out_packet.opaque_items.begin(), _out_packet.opaque_items.end(), by_key);
+        std::sort(_out_packet.transparent_items.begin(), _out_packet.transparent_items.end(), by_key);
 
         // =========================================================
         // 4. Build GPU_Light array from (Transform + Light) entities

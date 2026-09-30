@@ -32,25 +32,12 @@ const float DEBUG_VIEW_OPACITY = 0.8;
 // default texture, which leaves the tint unchanged. Sample_bindless
 // applies nonuniformEXT: the material, and so the texture index, may
 // differ between invocations of one subgroup once draws are merged.
-// The alpha is returned as computed; its meaning depends on the material's
-// alpha mode (Material_opaque_alpha, and the transparent pass for Blend).
+// Alpha < 1 is what routes an item to the transparent pass.
 vec4 Material_base_color(uint _material_index, vec4 _vertex_color, vec2 _uv)
 {
     const Material material = material_buffer.materials[_material_index];
 
     return _vertex_color * material.base_color * Sample_bindless(material.albedo_texture_index, material.albedo_sampler_index, _uv);
-}
-
-// Alpha handling of the opaque pass. Returns false when the fragment must
-// be discarded (MATERIAL_ALPHA_MODE_MASK below its cutoff). A surviving
-// fragment is fully opaque in both opaque-pass modes: Mask keeps no
-// partial coverage and Opaque ignores alpha. A Blend material never
-// reaches the opaque pass; if it did, it would be drawn opaque.
-bool Material_passes_alpha_test(uint _material_index, float _alpha)
-{
-    const Material material = material_buffer.materials[_material_index];
-
-    return material.alpha_mode != MATERIAL_ALPHA_MODE_MASK || _alpha >= material.alpha_cutoff;
 }
 
 // Distance of a world space point along the view direction (-z in view

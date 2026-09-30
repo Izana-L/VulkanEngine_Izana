@@ -41,19 +41,14 @@ const uint OBJECT_FLAG_BUCKET_MASK  = 0xFFu;    //             (Draw_Bucket in f
 const uint RENDER_PASS_OPAQUE      = 1u;
 const uint RENDER_PASS_TRANSPARENT = 2u;
 
-// Values of Material::alpha_mode, mirror of CoreTypes::Alpha_Mode.
-const uint MATERIAL_ALPHA_MODE_OPAQUE = 0u;   // alpha ignored, opaque pass
-const uint MATERIAL_ALPHA_MODE_MASK   = 1u;   // alpha test against alpha_cutoff, opaque pass
-const uint MATERIAL_ALPHA_MODE_BLEND  = 2u;   // alpha is coverage, transparent pass
-
 // EXACT mirror of Renderer_System::Material_GPU, std430, 32 bytes.
 struct Material
 {
-    vec4  base_color;           // offset 0:  tint
-    uint  albedo_texture_index; // offset 16: bindless texture slot, always a written slot
-    uint  albedo_sampler_index; // offset 20: slot in samplers[] (a CoreTypes::Sampler_Preset value)
-    uint  alpha_mode;           // offset 24: MATERIAL_ALPHA_MODE_*
-    float alpha_cutoff;         // offset 28: threshold of MATERIAL_ALPHA_MODE_MASK, 0 otherwise
+    vec4 base_color;            // offset 0:  tint, alpha < 1 = transparent pass
+    uint albedo_texture_index;  // offset 16: bindless texture slot, always a written slot
+    uint albedo_sampler_index;  // offset 20: slot in samplers[] (a CoreTypes::Sampler_Preset value)
+    uint _pad0;                 // offset 24
+    uint _pad1;                 // offset 28
 };
 
 // Unsized arrays: raising MAX_OBJECTS or MAX_MATERIALS (Renderer_Limits.hpp)

@@ -1,7 +1,6 @@
 #include "Renderer_Impl.hpp"
 
 #include <Cluster_Grid.hpp>
-#include <Shader_Paths.hpp>
 #include <Vulkan_Utils.hpp>
 
 #include <MathConstants.hpp>
@@ -126,8 +125,8 @@ namespace Renderer_System
         Pipeline_Config Make_opaque_config()
         {
             Pipeline_Config config;
-            config.vertex_shader_path = Shader_Paths::Resolve(Shader_Paths::MESH_VERT);
-            config.fragment_shader_path = Shader_Paths::Resolve(Shader_Paths::MESH_FRAG);
+            config.vertex_shader_path = "..\\..\\Renderer\\shaders\\compiled\\mesh.vert.spv";
+            config.fragment_shader_path = "..\\..\\Renderer\\shaders\\compiled\\mesh.frag.spv";
             config.subpass = Render_Subpass::Opaque;
             config.color_attachment_count = 1;
             config.color_blend[0] = Color_Blend_State{};   // no blending
@@ -139,8 +138,8 @@ namespace Renderer_System
         Pipeline_Config Make_bounds_config(bool _wireframe)
         {
             Pipeline_Config config;
-            config.vertex_shader_path = Shader_Paths::Resolve(Shader_Paths::BOUNDS_VERT);
-            config.fragment_shader_path = Shader_Paths::Resolve(Shader_Paths::BOUNDS_FRAG);
+            config.vertex_shader_path = "..\\..\\Renderer\\shaders\\compiled\\bounds.vert.spv";
+            config.fragment_shader_path = "..\\..\\Renderer\\shaders\\compiled\\bounds.frag.spv";
 
             // Drawn after the OIT composite, over the final color, and tested
             // against the opaque depth.
@@ -171,8 +170,8 @@ namespace Renderer_System
             // of the transparent subpass instead of a color. Depth writes are
             // disabled at draw time through dynamic state, not here.
             Pipeline_Config config;
-            config.vertex_shader_path = Shader_Paths::Resolve(Shader_Paths::MESH_VERT);
-            config.fragment_shader_path = Shader_Paths::Resolve(Shader_Paths::MESH_OIT_FRAG);
+            config.vertex_shader_path = "..\\..\\Renderer\\shaders\\compiled\\mesh.vert.spv";
+            config.fragment_shader_path = "..\\..\\Renderer\\shaders\\compiled\\mesh_oit.frag.spv";
             config.subpass = Render_Subpass::Transparent;
             config.color_attachment_count = 2;
 
@@ -209,8 +208,8 @@ namespace Renderer_System
             // the opaque color:
             //   color = average * (1 - revealage) + opaque * revealage.
             Pipeline_Config config;
-            config.vertex_shader_path = Shader_Paths::Resolve(Shader_Paths::OIT_COMPOSITE_VERT);
-            config.fragment_shader_path = Shader_Paths::Resolve(Shader_Paths::OIT_COMPOSITE_FRAG);
+            config.vertex_shader_path = "..\\..\\Renderer\\shaders\\compiled\\oit_composite.vert.spv";
+            config.fragment_shader_path = "..\\..\\Renderer\\shaders\\compiled\\oit_composite.frag.spv";
             config.subpass = Render_Subpass::Composite;
             config.vertex_input = Vertex_Input::None;
             config.color_attachment_count = 1;
@@ -249,8 +248,8 @@ namespace Renderer_System
         pipeline_layout(device, descriptor_layouts),
         pipeline_registry(device, render_pass, pipeline_cache.Get_handle(), pipeline_layout.Get_handle()),
         compute_pipeline_layout(device, descriptor_layouts, Pipeline_Kind::Compute, VK_SHADER_STAGE_COMPUTE_BIT, COMPUTE_PUSH_CONSTANT_SIZE),
-        procedural_pipeline(device, pipeline_cache.Get_handle(), compute_pipeline_layout.Get_handle(), Shader_Paths::Resolve(Shader_Paths::PROCEDURAL_COMP)),
-        cull_pipeline(device, pipeline_cache.Get_handle(), compute_pipeline_layout.Get_handle(), Shader_Paths::Resolve(Shader_Paths::CULL_OBJECTS_COMP)),
+        procedural_pipeline(device, pipeline_cache.Get_handle(), compute_pipeline_layout.Get_handle(), "..\\..\\Renderer\\shaders\\compiled\\procedural.comp.spv"),
+        cull_pipeline(device, pipeline_cache.Get_handle(), compute_pipeline_layout.Get_handle(), "..\\..\\Renderer\\shaders\\compiled\\cull_objects.comp.spv"),
         light_clusters(device, allocator.Get_handle(), pipeline_cache.Get_handle(), compute_pipeline_layout.Get_handle()),
         opaque_config(Make_opaque_config()),
         transparent_config(Make_transparent_config()),

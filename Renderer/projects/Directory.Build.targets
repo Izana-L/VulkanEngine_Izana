@@ -9,12 +9,21 @@
   folder is not imported while this one exists: MSBuild stops at the first
   one it finds walking up from the project.
 
-  This target is the only place where shaders are compiled:
+  It replaces the PreBuildEvent that used to compile the shaders, which had
+  three problems:
+    - Visual Studio's fast up-to-date check only looks at project items, and
+      the shaders were not items: after editing only a shader or a
+      common/*.glsl include, the project counted as up to date, the
+      PreBuildEvent did not run and the old .spv kept being used without
+      any warning.
+    - The command was duplicated in the Debug and Release configurations.
+    - It did not pass a target environment to glslc.
+
+  How this target fixes each one:
     - DisableFastUpToDateCheck makes Visual Studio hand every build to
-      MSBuild, so editing only a shader or a common/*.glsl include is never
-      treated as "up to date". MSBuild's own incremental checks keep a build
-      with no changes fast: the C++ compiler skips up-to-date files, and
-      this target is skipped when every .spv is newer than its inputs.
+      MSBuild. MSBuild's own incremental checks keep a build with no changes
+      fast: the C++ compiler skips up-to-date files, and this target is
+      skipped when every .spv is newer than its inputs.
     - Inputs / Outputs: each stage file maps to its own .spv, so editing one
       stage recompiles only that stage. The files in common/ are included by
       several stages and cannot be mapped to one output, so editing any of
@@ -24,19 +33,12 @@
       target environment (RendererShaderTargetEnv) matching the Vulkan 1.3
       device the engine requires (Vulkan_Device rejects anything older).
 
-  Output: Renderer/shaders/compiled/<file>.<stage>.spv. The Game project
-  deploys that folder next to the executable (shaders/), where the Renderer
-  loads it from (Shader_Paths.hpp).
-
-  A PreBuildEvent that runs glslc must not exist in Renderer.vcxproj: it
-  runs before this target on every build, recompiles every stage without
-  the target environment, and leaves every .spv newer than its inputs, so
-  this target is always skipped. Reject_Shader_PreBuildEvent fails the
-  build if one is added back (for example from the project properties in
-  Visual Studio).
-
   Requirement: the VULKAN_SDK environment variable, set by the Vulkan SDK
   installer; glslc.exe ships with the SDK.
+
+  After adding this file, remove the two PreBuildEvent blocks from
+  Renderer.vcxproj; otherwise the shaders are also compiled there, on every
+  build, without the target environment.
 -->
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
 
@@ -57,36 +59,8 @@
     <RendererShaderInclude Include="$(RendererShaderDir)common\**\*.glsl" />
   </ItemGroup>
 
-  <!--
-    Fails the build when the project's PreBuildEvent invokes glslc.
-
-    PreBuildEvent is an item definition (ItemDefinitionGroup metadata), not
-    a property: its Command is read from a probe item created here, which
-    receives the definition's metadata like any PreBuildEvent item, and is
-    removed again before the PreBuildEvent target runs.
-  -->
-  <Target Name="Reject_Shader_PreBuildEvent"
-          BeforeTargets="PreBuildEvent">
-
-    <ItemGroup>
-      <PreBuildEvent Include="Renderer_Shader_PreBuildEvent_Probe" />
-    </ItemGroup>
-
-    <PropertyGroup>
-      <_RendererPreBuildCommand>@(PreBuildEvent->WithMetadataValue('Identity', 'Renderer_Shader_PreBuildEvent_Probe')->'%(Command)')</_RendererPreBuildCommand>
-    </PropertyGroup>
-
-    <ItemGroup>
-      <PreBuildEvent Remove="Renderer_Shader_PreBuildEvent_Probe" />
-    </ItemGroup>
-
-    <Error Condition="$(_RendererPreBuildCommand.ToLowerInvariant().Contains('glslc'))"
-           Text="Renderer.vcxproj has a PreBuildEvent that runs glslc. Shaders are compiled only by the Compile_Renderer_Shaders target of Directory.Build.targets: remove the PreBuildEvent (Project Properties > Build Events > Pre-Build Event, every configuration)." />
-  </Target>
-
   <Target Name="Compile_Renderer_Shaders"
           BeforeTargets="ClCompile"
-          DependsOnTargets="Reject_Shader_PreBuildEvent"
           Inputs="@(RendererShaderStage);@(RendererShaderInclude);$(MSBuildThisFileFullPath)"
           Outputs="@(RendererShaderStage->'$(RendererShaderOutputDir)%(Filename)%(Extension).spv')">
 

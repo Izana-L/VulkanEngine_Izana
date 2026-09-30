@@ -7,8 +7,6 @@
 #include <Light_Component.hpp>
 #include <Primitive_Desc.hpp>
 #include <MathConstants.hpp>
-#include <Filesystem.hpp>
-#include <Shader_Paths.hpp>
 
 #include <algorithm>
 #include <array>
@@ -18,8 +16,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <string>
-#include <vector>
 
 namespace EngineCore
 {
@@ -78,44 +74,6 @@ namespace EngineCore
             return { r, g, b };
         }
 
-        // ── Asset paths, relative to the asset root ────────────────────
-        // (Platform::Filesystem::Get_asset_root, the executable's folder).
-        // The Game project deploys Input/jsons into input/ and Game/assets
-        // into assets/ next to the executable.
-        constexpr const char* INPUT_ACTIONS_PATH = "input/default_input_actions.json";
-        constexpr const char* UV_CHECKER_PATH = "assets/textures/uv-checker.png";
-
-        // Verifies that every file the engine cannot start without exists
-        // under the asset root: the Renderer's shaders and the input
-        // actions. Optional assets (textures of the test scene) are not
-        // listed: their absence is reported where they are loaded and the
-        // scene goes on without them.
-        //
-        // Throws std::runtime_error naming the resolved asset root and
-        // every missing file. Returns true otherwise.
-        bool Verify_required_assets()
-        {
-            std::vector<std::string> required(Renderer_System::Shader_Paths::ALL.begin(),
-                                              Renderer_System::Shader_Paths::ALL.end());
-            required.emplace_back(INPUT_ACTIONS_PATH);
-
-            const std::vector<std::string> missing = Platform::Filesystem::Find_missing_assets(required);
-
-            if (missing.empty())
-                return true;
-
-            std::string message = "Required asset files are missing from the asset root '"
-                + Platform::Filesystem::Get_asset_root() + "':";
-
-            for (const std::string& file : missing)
-                message += "\n  " + file;
-
-            message += "\nBuild the Game project, which compiles the shaders and deploys the data next to "
-                       "the executable, and run the executable from its output folder.";
-
-            throw std::runtime_error(message);
-        }
-
         // Validation level for the Renderer:
         //   Release (NDEBUG) - Off. The layer adds CPU cost to every API
         //                      call and must not load in a shipped build,
@@ -164,11 +122,8 @@ namespace EngineCore
     // =========================================================
 
     Engine::Engine()
-        // Startup check, before any subsystem touches the disk or the GPU.
-        : required_assets_present(Verify_required_assets())
-
         // Layer 0: Foundation
-        , window(1280, 720, "Vulkan Engine")
+        : window(1280, 720, "Vulkan Engine")
 
         // Layer 1: Services
         , input(window)
@@ -185,12 +140,9 @@ namespace EngineCore
 
         // Layer 4: Orchestration
         , loop()
-
-        // The Renderer registered Default_Material (Opaque) at construction.
-        , material_alpha_modes(static_cast<size_t>(CoreTypes::Default_Material) + 1, CoreTypes::Alpha_Mode::Opaque)
     {
         // Load action bindings from JSON.
-        input.Load_actions(Platform::Filesystem::Resolve_asset_path(INPUT_ACTIONS_PATH));
+        input.Load_actions("../../Input/jsons/default_input_actions.json");
 
         std::cout << "[Engine] All subsystems initialized.\n";
     }
@@ -213,7 +165,6 @@ namespace EngineCore
             transform_system,
             camera_controller,
             extractor,
-            material_alpha_modes,
             camera_entity);
 
         std::cout << "[Engine] Main loop ended.\n";
@@ -252,16 +203,9 @@ namespace EngineCore
         if (_material.gpu_material_id != ECS::Material_Component::INVALID_GPU_MATERIAL_ID)
             return _material.gpu_material_id;
 
-        return Register_material(_material);
-    }
-
-    uint32_t Engine::Register_material(ECS::Material_Component& _material)
-    {
         Renderer_System::Material_Desc desc;
         desc.base_color = _material.base_color_factor;
         desc.sampler = _material.sampler;
-        desc.alpha_mode = _material.alpha_mode;
-        desc.alpha_cutoff = _material.alpha_cutoff;
 
         // Albedo not assigned: White (the Material_Desc default). Assigned
         // but with no GPU index (never uploaded, or a stale handle): Error,
@@ -274,19 +218,9 @@ namespace EngineCore
                                         ? texture_index : CoreTypes::Default_Texture::Error;
         }
 
-        const uint32_t slot = renderer.Register_material(desc);
+        _material.gpu_material_id = renderer.Register_material(desc);
 
-        // Deduplication returns an existing slot for an equal description,
-        // whose alpha mode is equal as well, so the entry is simply
-        // (re)written.
-        if (slot >= material_alpha_modes.size())
-            material_alpha_modes.resize(static_cast<size_t>(slot) + 1, CoreTypes::Alpha_Mode::Opaque);
-
-        material_alpha_modes[slot] = desc.alpha_mode;
-
-        _material.gpu_material_id = slot;
-
-        return slot;
+        return _material.gpu_material_id;
     }
 
 
@@ -344,7 +278,7 @@ namespace EngineCore
         try
         {
             const CoreTypes::Asset_Handle checker =
-                resources.Load_image(Platform::Filesystem::Resolve_asset_path(UV_CHECKER_PATH), CoreTypes::Pixel_Format::RGBA8_SRGB);
+                resources.Load_image("../../Game/assets/textures/uv-checker.png", CoreTypes::Pixel_Format::RGBA8_SRGB);
 
             Ensure_image_uploaded(checker);
             sphere_material.albedo = checker;
@@ -448,10 +382,9 @@ namespace EngineCore
             Ensure_material_registered(palette[i]);
         }
 
-        // Blend routes the items to the transparent pass.
+        // Alpha below one routes the items to the transparent pass.
         ECS::Material_Component glass_material;
         glass_material.base_color_factor = { 0.55f, 0.8f, 1.0f, 0.45f };
-        glass_material.alpha_mode = CoreTypes::Alpha_Mode::Blend;
         Ensure_material_registered(glass_material);
 
         // ── Object grid ────────────────────────────────────────
@@ -540,12 +473,12 @@ namespace EngineCore
 
         // Colors far apart: with equal layers the order does not change the
         // result, and the single glass material of the grid hides any
-        // order error. Blend routes every item to the transparent pass.
+        // order error. Alpha below one routes every item to the
+        // transparent pass.
         const auto make_glass = [&](const MathLib::Vector3& _color)
             {
                 ECS::Material_Component material;
                 material.base_color_factor = MathLib::Vector4(_color, TEST_OIT_ALPHA);
-                material.alpha_mode = CoreTypes::Alpha_Mode::Blend;
                 Ensure_material_registered(material);
                 return material;
             };
