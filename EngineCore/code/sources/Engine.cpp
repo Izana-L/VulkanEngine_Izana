@@ -251,10 +251,7 @@ namespace EngineCore
         world.Add_component<ECS::Transform_Component>(camera_entity).Set_position({ 0.0f, 1.0f, 5.0f });
 
         world.Add_component<ECS::Camera_Component>(camera_entity,
-            ECS::Camera_Component::Make_perspective(
-                MathLib::Constants::FOV_DEFAULT,
-                MathLib::Constants::NEAR_PLANE_DEFAULT,
-                MathLib::Constants::FAR_PLANE_DEFAULT));
+            ECS::Camera_Component::Make_perspective());
 
         transform_system.Register(camera_entity, world);
 

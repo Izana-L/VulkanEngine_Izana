@@ -204,7 +204,7 @@ namespace Renderer_System
             // the descriptor is written once at startup and the contents
             // change by memcpy. Frame_UBO::light_count says how many entries
             // are valid.
-            light_info.range = sizeof(Light_GPU) * MAX_LIGHTS;
+            light_info.range = sizeof(CoreTypes::GPU_Light) * MAX_LIGHTS;
 
             // Same rule as the lights: the whole capacity. Only the entries
             // written this frame are read, because every draw indexes its own

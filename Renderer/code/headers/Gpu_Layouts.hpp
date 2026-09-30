@@ -25,24 +25,6 @@ namespace Renderer_System
     // VkDrawIndexedIndirectCommand, which the culling shader also
     // mirrors, is asserted in Frame_Data.hpp.
 
-    // Mirror of `Light` in frame_set.glsl (std430).
-    struct Light_GPU
-    {
-        MathLib::Vector3 position_or_direction;
-        float            intensity;
-        MathLib::Vector3 color;
-        float            range;
-        MathLib::Vector3 spot_direction;
-        float            inner_angle;
-        float            outer_angle;
-        int32_t          type;            // 0=directional, 1=point, 2=spot
-        float            _padding0;
-        float            _padding1;
-    };
-
-    static_assert(sizeof(Light_GPU) == 64, "Light_GPU breaks the std430 layout of frame_set.glsl");
-    static_assert(offsetof(Light_GPU, color) == 16, "Light_GPU breaks the std430 layout of frame_set.glsl");
-    static_assert(offsetof(Light_GPU, spot_direction) == 32, "Light_GPU breaks the std430 layout of frame_set.glsl");
 
     // Mirror of `Draw_Bucket` in frame_set.glsl (std140, 16 bytes). One
     // bucket of the opaque draws: a range of the draw command buffer that

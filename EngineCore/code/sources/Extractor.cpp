@@ -91,6 +91,7 @@ namespace EngineCore
         _out_packet.opaque_items.clear();
         _out_packet.transparent_items.clear();
         _out_packet.lights.clear();
+        _out_packet.directional_light_count = 0;
         _out_packet.transforms = nullptr;
         _out_packet.transform_count = 0;
         transform_buffer.clear();
@@ -322,6 +323,17 @@ namespace EngineCore
 
                 _out_packet.lights.push_back(gpu_light);
             });
+
+        // Directional lights first, each group keeping the query order.
+        // They reach every fragment and are never clustered, so the
+        // Renderer cuts the array at MAX_LIGHTS knowing it drops local
+        // lights and never a sun.
+        const auto first_local = std::stable_partition(
+            _out_packet.lights.begin(), _out_packet.lights.end(),
+            [](const CoreTypes::GPU_Light& _light) { return _light.type == 0; });
+
+        _out_packet.directional_light_count =
+            static_cast<uint32_t>(first_local - _out_packet.lights.begin());
 
         return true;
     }

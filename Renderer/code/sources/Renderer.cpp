@@ -859,50 +859,19 @@ namespace Renderer_System
             reported_light_overflow = 0;
         }
 
-        // Lights go to their own buffer, written straight into the mapped
-        // memory: the destination already is a contiguous array of the
-        // right type, so no intermediate array is needed.
-        //
-        // Directional lights first, then the point and spot lights, each
-        // group in packet order. Directional lights reach every fragment
-        // and are never clustered: mesh.frag loops over the first
+        // The packet's array already is the std430 layout of the light
+        // buffer (CoreTypes::GPU_Light) and the Extractor left the
+        // directional lights first: mesh.frag loops over the first
         // directional_light_count entries, and the cluster pass only
-        // distributes the rest. Filling them first also means that an
-        // overflow drops local lights, never a sun.
-        Light_GPU* gpu_lights = static_cast<Light_GPU*>(_frame.light_buffer.mapped_ptr);
+        // distributes the rest. Cutting the array at MAX_LIGHTS therefore
+        // drops local lights, never a sun.
+        const uint32_t light_count = std::min<uint32_t>(packet_lights, MAX_LIGHTS);
+        const uint32_t directional_count = std::min<uint32_t>(_packet.directional_light_count, light_count);
 
-        uint32_t light_count = 0;
-        uint32_t directional_count = 0;
-
-        const auto write_light = [&](const CoreTypes::GPU_Light& _src)
-            {
-                Light_GPU& dst = gpu_lights[light_count++];
-
-                dst.position_or_direction = _src.position_or_direction;
-                dst.intensity = _src.intensity;
-                dst.color = _src.color;
-                dst.range = _src.range;
-                dst.spot_direction = _src.spot_direction;
-                dst.inner_angle = _src.inner_angle;
-                dst.outer_angle = _src.outer_angle;
-                dst.type = static_cast<int32_t>(_src.type);
-                dst._padding0 = 0.0f;
-                dst._padding1 = 0.0f;
-            };
-
-        for (const CoreTypes::GPU_Light& light : _packet.lights)
+        if (light_count > 0)
         {
-            if (light.type == 0 && light_count < MAX_LIGHTS)
-            {
-                write_light(light);
-                ++directional_count;
-            }
-        }
-
-        for (const CoreTypes::GPU_Light& light : _packet.lights)
-        {
-            if (light.type != 0 && light_count < MAX_LIGHTS)
-                write_light(light);
+            std::memcpy(_frame.light_buffer.mapped_ptr, _packet.lights.data(),
+                sizeof(CoreTypes::GPU_Light) * light_count);
         }
 
         ubo.light_count = static_cast<int32_t>(light_count);

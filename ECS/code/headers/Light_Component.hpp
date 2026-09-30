@@ -38,11 +38,11 @@ namespace ECS
         Type             type = Type::Directional;
 
         // Linear RGB color of the emitted light (not gamma-corrected).
-        MathLib::Vector3 color = { 1.0f, 1.0f, 1.0f };
+        MathLib::Vector3 color ;
 
         // Intensity in arbitrary units. The PBR shader multiplies
         // color * intensity to get the final radiance contribution.
-        float            intensity = 1.0f;
+        float            intensity ;
 
         // =========================================================
         // Point + Spot only

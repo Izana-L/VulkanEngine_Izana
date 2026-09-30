@@ -70,7 +70,7 @@ const uint CLUSTER_VIEW_LIGHT_HEATMAP = 1u;
 const uint CLUSTER_VIEW_DEPTH_SLICES  = 2u;
 const uint CLUSTER_VIEW_CLUSTERS      = 3u;
 
-// EXACT mirror of Renderer_System::Light_GPU, std430.
+// EXACT mirror of CoreTypes::GPU_Light (RenderPacket.hpp), std430.
 struct Light
 {
     vec3  position_or_direction;

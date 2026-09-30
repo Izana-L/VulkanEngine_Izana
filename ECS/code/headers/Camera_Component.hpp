@@ -1,7 +1,7 @@
 #pragma once
 
 #include <Vector.hpp>
-
+#include <MathConstants.hpp>
 namespace ECS
 {
 
@@ -39,7 +39,7 @@ namespace ECS
         // Vertical field of view in degrees.
         // 60 degrees is a common default — wide enough to feel natural,
         // narrow enough to avoid excessive perspective distortion.
-        float fov = 60.0f;
+        float fov ;
 
         // =========================================================
         // Orthographic parameters (Projection::Orthographic only)
@@ -60,7 +60,7 @@ namespace ECS
         // Under Reverse-Z with an infinite far plane this is the ONLY value
         // that affects depth precision (z_ndc = near_plane / distance), so
         // keep it as large as the game tolerates.
-        float near_plane = 0.1f;
+        float near_plane ;
 
         // Far clip plane distance.
         //
@@ -73,7 +73,7 @@ namespace ECS
         // Still used by Projection::Orthographic, which has no perspective
         // divide and therefore needs a finite range. Kept as a field for
         // that, and because frustum culling will want a finite bound later.
-        float far_plane = 1000.0f;
+        float far_plane ;
 
         // =========================================================
         // Aspect ratio
@@ -114,7 +114,8 @@ namespace ECS
         // Convenience constructors
         // =========================================================
 
-        static Camera_Component Make_perspective(float _fov = 60.0f, float _near_plane = 0.1f,float _far_plane = 1000.0f)
+        static Camera_Component Make_perspective(float _fov = MathLib::Constants::FOV_DEFAULT, float _near_plane = MathLib::Constants::NEAR_PLANE_DEFAULT,
+                                                 float _far_plane = MathLib::Constants::FAR_PLANE_DEFAULT)
         {
             Camera_Component cam;
             cam.projection = Projection::Perspective;
@@ -124,7 +125,8 @@ namespace ECS
             return cam;
         }
 
-        static Camera_Component Make_orthographic(float _ortho_size = 5.0f, float _near_plane = 0.1f, float _far_plane = 1000.0f)
+        static Camera_Component Make_orthographic(float _ortho_size = 5.0f, float _near_plane = MathLib::Constants::NEAR_PLANE_DEFAULT,
+                                                  float _far_plane = MathLib::Constants::FAR_PLANE_DEFAULT)
         {
             Camera_Component cam;
             cam.projection = Projection::Orthographic;

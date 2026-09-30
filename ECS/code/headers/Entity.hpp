@@ -23,11 +23,7 @@ namespace ECS
     // engine: the helpers below are the only way to take one apart.
     using Entity = std::uint64_t;
 
-    // Sentinel value representing an entity that doesn't exist or
-     // hasn't been assigned yet. Built from CoreTypes::INVALID_ID so the
-     // sentinel has a single source of truth: its index can never be
-     // allocated, so it never collides with a live entity.
-    constexpr Entity INVALID_ENTITY = Make_entity(CoreTypes::INVALID_ID, CoreTypes::INVALID_ID);
+    
 
     constexpr std::uint32_t Entity_index(Entity _entity)
     {
@@ -43,7 +39,11 @@ namespace ECS
     {
         return (static_cast<Entity>(_generation) << 32) | static_cast<Entity>(_index);
     }
-
+    // Sentinel value representing an entity that doesn't exist or
+     // hasn't been assigned yet. Built from CoreTypes::INVALID_ID so the
+     // sentinel has a single source of truth: its index can never be
+     // allocated, so it never collides with a live entity.
+    constexpr Entity INVALID_ENTITY = Make_entity(CoreTypes::INVALID_ID, CoreTypes::INVALID_ID);
     
 
     // Returns true if the entity is a valid (non-sentinel) value.

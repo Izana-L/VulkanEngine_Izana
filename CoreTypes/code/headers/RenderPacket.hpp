@@ -3,9 +3,12 @@
 #include <Vector.hpp>
 #include <Matrix.hpp>
 #include <Sampler_Preset.hpp>
+#include <MathConstants.hpp>
 #include <array>
 #include <bit>
+#include <cstddef>
 #include <cstdint>
+#include <type_traits>
 #include <vector>
 
 namespace CoreTypes
@@ -118,7 +121,7 @@ namespace CoreTypes
 
         // Distance from the eye to the near plane: where the depth slices of
         // the clustered lighting start.
-        float            near_plane = 0.1f;
+        float            near_plane = MathLib::Constants::NEAR_PLANE_DEFAULT;
 
         // Culling planes of the camera (see Frustum).
         Frustum          frustum;
@@ -230,25 +233,45 @@ namespace CoreTypes
         uint64_t         sort_key = 0;
     };
 
-    // =========================================================
-    // GPU_Light
-    // =========================================================
+     // =========================================================
+     // GPU_Light
+     // =========================================================
 
-    // Light data already converted to GPU-friendly layout.
-    // Directional lights: position_or_direction = direction (normalized).
-    // Point/spot lights:  position_or_direction = world position.
-    // The shader selects behavior via `type`.
+     // One entry of the light storage buffer, in its final GPU form. The
+     // Extractor fills it and the Renderer copies the packet's array into
+     // the mapped buffer as it is: there is no second struct in between.
+     //
+     // EXACT mirror of `Light` in Renderer/shaders/common/frame_set.glsl
+     // (std430, 64 bytes). A field added here is added there, in the same
+     // position; the static_asserts below pin the offsets the shader reads.
+     //
+     // Directional lights: position_or_direction = direction the light POINTS TO (normalized).
+     // Point/spot lights:  position_or_direction = world position.
+     // The shader selects behavior via `type`.
     struct GPU_Light
     {
         MathLib::Vector3 position_or_direction;
         float            intensity = 1.0f;
         MathLib::Vector3 color;
-        MathLib::Vector3 spot_direction = { 0.0f, 0.0f, -1.0f };
-        uint8_t          type = 0;   // 0=directional, 1=point, 2=spot
         float            range = 0.0f;
+        MathLib::Vector3 spot_direction = { 0.0f, 0.0f, -1.0f };
         float            inner_angle = 0.0f;
         float            outer_angle = 0.0f;
+        int32_t          type = 0;            // 0=directional, 1=point, 2=spot
+        float            _padding0 = 0.0f;
+        float            _padding1 = 0.0f;
     };
+
+    static_assert(sizeof(GPU_Light) == 64, "GPU_Light breaks the std430 layout of frame_set.glsl");
+    static_assert(offsetof(GPU_Light, position_or_direction) == 0, "GPU_Light breaks the std430 layout of frame_set.glsl");
+    static_assert(offsetof(GPU_Light, intensity) == 12, "GPU_Light breaks the std430 layout of frame_set.glsl");
+    static_assert(offsetof(GPU_Light, color) == 16, "GPU_Light breaks the std430 layout of frame_set.glsl");
+    static_assert(offsetof(GPU_Light, range) == 28, "GPU_Light breaks the std430 layout of frame_set.glsl");
+    static_assert(offsetof(GPU_Light, spot_direction) == 32, "GPU_Light breaks the std430 layout of frame_set.glsl");
+    static_assert(offsetof(GPU_Light, inner_angle) == 44, "GPU_Light breaks the std430 layout of frame_set.glsl");
+    static_assert(offsetof(GPU_Light, outer_angle) == 48, "GPU_Light breaks the std430 layout of frame_set.glsl");
+    static_assert(offsetof(GPU_Light, type) == 52, "GPU_Light breaks the std430 layout of frame_set.glsl");
+    static_assert(std::is_trivially_copyable_v<GPU_Light>, "GPU_Light is copied with memcpy");
 
     // =========================================================
     // RenderPacket
@@ -283,6 +306,7 @@ namespace CoreTypes
         std::vector< Draw_Item >    transparent_items;  // grouped like the opaque ones; composited order-independently
 
         std::vector< GPU_Light >    lights;
+        uint32_t                    directional_light_count = 0;
 
         // Flat array of model matrices, indexed by Draw_Item::transform_idx.
         // Pointer + count instead of std::vector to avoid an extra copy:

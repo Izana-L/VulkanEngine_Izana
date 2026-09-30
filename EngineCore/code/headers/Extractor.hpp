@@ -46,7 +46,8 @@ namespace EngineCore
     //      and fills the transforms. Textures are not resolved here: the
     //      Engine did it once, when it registered the material.
     //   3. Iterates entities with Transform_Component + Light_Component,
-    //      fills the GPU_Light array from WORLD positions and directions.
+    //      fills the GPU_Light array from WORLD positions and directions,
+    //      directional lights first (RenderPacket::directional_light_count).
     //   4. Sorts both item lists by sort_key: grouped by pipeline, then by
     //      winding (objects whose transform inverts it, such as a negative
     //      scale on one axis, sit together), material and mesh,
