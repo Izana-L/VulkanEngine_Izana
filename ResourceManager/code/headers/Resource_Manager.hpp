@@ -143,7 +143,6 @@ namespace ResourceManager
         {
             CoreTypes::MeshData data;
             uint32_t            gpu_id = INVALID_GPU_ID;
-            uint32_t            generation = 0;
             std::string         source;            // path or primitive description
         };
 
@@ -151,7 +150,6 @@ namespace ResourceManager
         {
             CoreTypes::ImageData data;
             uint32_t             gpu_id = INVALID_GPU_ID;   // bindless texture index
-            uint32_t             generation = 0;
             std::string          source;
         };
 

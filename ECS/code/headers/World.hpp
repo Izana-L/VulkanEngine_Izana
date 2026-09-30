@@ -70,11 +70,8 @@ namespace ECS
         std::array< std::unique_ptr< IComponent_Storage >, MAX_COMPONENT_TYPES > storages;
 
         // Heap-allocated to avoid stack overflow (see class comment).
+        // Liveness, generations and the alive count live in id_provider.
         std::unique_ptr< std::array< Entity_Mask, MAX_ENTITIES > > entity_masks;
-        std::unique_ptr< std::array< bool, MAX_ENTITIES > >        alive_flags;
-        std::unique_ptr< std::array< uint32_t, MAX_ENTITIES > >    generations;
-
-        size_t alive_entity_count = 0;
 
         // Incremented on every change to the SET of entities or to the SET
         // of components an entity has (create, destroy, clone, add, remove,
@@ -94,15 +91,9 @@ namespace ECS
         // Constructor
         // =========================================================
 
-        World()
-            : entity_masks(std::make_unique< std::array< Entity_Mask, MAX_ENTITIES > >()),
-            alive_flags(std::make_unique< std::array< bool, MAX_ENTITIES > >()),
-            generations(std::make_unique< std::array< uint32_t, MAX_ENTITIES > >())
+        World() : entity_masks(std::make_unique< std::array< Entity_Mask, MAX_ENTITIES > >())
         {
             // entity_masks: bitsets default-initialize to all zeros.
-            // alive_flags / generations: must be explicitly zeroed.
-            alive_flags->fill(false);
-            generations->fill(0u);
         }
 
         World(const World&) = delete;
@@ -131,11 +122,9 @@ namespace ECS
                     ") exceeded - destroy unused entities or raise the limit");
             }
 
-            const Entity entity = Make_entity(index, (*generations)[index]);
+            const Entity entity = Make_entity(index, id_provider.Generation(index));
 
             Mask_of(entity).reset();
-            Alive_flag_of(entity) = true;
-            ++alive_entity_count;
             ++structural_version;
 
             return entity;
@@ -172,14 +161,10 @@ namespace ECS
             }
 
             mask.reset();
-            Alive_flag_of(_entity) = false;
 
-            // Advancing the generation is what invalidates every copy of
-            // this Entity value still held elsewhere.
-            ++(*generations)[Entity_index(_entity)];
-
+            // Release() advances the slot's generation, which is what invalidates
+            // every copy of this Entity value still held elsewhere.
             id_provider.Release(Entity_index(_entity));
-            --alive_entity_count;
             ++structural_version;
 
             return true;
@@ -221,14 +206,13 @@ namespace ECS
             const uint32_t index = Entity_index(_entity);
             if (static_cast<size_t>(index) >= MAX_ENTITIES) return false;
 
-            return (*alive_flags)[index] &&
-                (*generations)[index] == Entity_generation(_entity);
+            return id_provider.Is_current(index, Entity_generation(_entity));
         }
 
         // Returns the number of currently alive entities.
         size_t Entity_count() const
         {
-            return alive_entity_count;
+            return id_provider.Allocated_count();
         }
 
         // See structural_version.
@@ -479,21 +463,11 @@ namespace ECS
         // slot's generation advances), and slot numbering restarts at 0.
         void Clear()
         {
-            for (auto& storage : storages)
-            {
-                if (storage) storage->Clear();
-            }
-
-            for (size_t index = 0; index < MAX_ENTITIES; ++index)
-            {
-                if ((*alive_flags)[index]) ++(*generations)[index];
-            }
-
             entity_masks->fill(Entity_Mask{});
-            alive_flags->fill(false);
-            alive_entity_count = 0;
 
-            id_provider.Reset();
+            // Every allocated slot advances its generation, so each Entity handed
+            // out before the call is dead; slot numbering restarts at 0.
+            id_provider.Invalidate_all();
             ++structural_version;
         }
 
@@ -541,10 +515,7 @@ namespace ECS
             return (*entity_masks)[Entity_index(_entity)];
         }
 
-        bool& Alive_flag_of(Entity _entity)
-        {
-            return (*alive_flags)[Entity_index(_entity)];
-        }
+       
 
         void Require_alive(Entity _entity, const char* _operation) const
         {

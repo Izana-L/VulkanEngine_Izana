@@ -1,7 +1,7 @@
 #pragma once
 
 #include <Id.hpp>
-
+#include <cstdint>
 #include <cstddef>
 #include <vector>
 
@@ -35,6 +35,7 @@ namespace CoreTypes
         {
             Node* next = nullptr;
             Id    id = INVALID_ID;
+            uint32_t generation = 0;
             bool  allocated = false;
         };
 
@@ -104,6 +105,39 @@ namespace CoreTypes
                 segments.clear();
             }
 
+            //Frees every node and threads the free list through all segments in
+            // index order. A node that was allocated gets its generation advanced,
+            // so every ID handed out before the call is stale afterwards.
+            // Returns the head of the new free list (nullptr without segments).
+            Node * Invalidate_all()
+            {
+                Node* head = nullptr;
+                Node* tail = nullptr;
+
+                for (Segment& segment : segments)
+                {
+                    for (size_t i = 0; i < segment_size; ++i)
+                    {
+                        Node& node = segment[i];
+
+                        if (node.allocated)
+                        {
+                            node.allocated = false;
+                            ++node.generation;
+                        }
+
+                        node.next = nullptr;
+
+                        if (tail) tail->next = &node;
+                        else      head = &node;
+
+                        tail = &node;
+                    }
+                }
+
+                return head;
+            }
+
             Node& operator [] (Id index)
             {
                 return segments[index >> segment_shift][index & segment_mask];
@@ -153,6 +187,7 @@ namespace CoreTypes
 
             Node& node = pool[id];
             node.allocated = false;
+            ++node.generation;
             node.next = first_free_node;
             first_free_node = &node;
             --allocated_count;
@@ -169,7 +204,22 @@ namespace CoreTypes
 
             return pool[id].allocated;
         }
+        // Generation the slot currently carries. A handle for a live ID must
+        // carry this value. An ID outside the pool reports 0.
+        uint32_t Generation(const Id id) const
+        {
+            if (Not_valid(id)) return 0;
+            if (static_cast<size_t>(id) >= pool.Capacity()) return 0;
 
+            return pool[id].generation;
+        }
+
+        // True if the ID is allocated AND the generation matches: the check
+        // that detects a handle kept after its slot was released and reused.
+        bool Is_current(const Id id, const uint32_t generation) const
+        {
+            return Is_allocated(id) && pool[id].generation == generation;
+        }
         // Number of IDs currently allocated.
         size_t Allocated_count() const
         {
@@ -181,7 +231,6 @@ namespace CoreTypes
         {
             return pool.Capacity();
         }
-
         // Forgets every allocation. The next Allocate_id() returns 0 again.
         // Callers must make sure no ID handed out before the reset is used
         // afterwards; a generation counter on the caller's side (see
@@ -190,6 +239,14 @@ namespace CoreTypes
         {
             pool.Clear();
             first_free_node = nullptr;
+            allocated_count = 0;
+        }
+        // Releases every allocation at once. Each allocated ID advances its
+        // generation, so every handle handed out before the call fails
+        // Is_current() afterwards. The next Allocate_id() returns 0 again.
+        void Invalidate_all()
+        {
+            first_free_node = pool.Invalidate_all();
             allocated_count = 0;
         }
     };

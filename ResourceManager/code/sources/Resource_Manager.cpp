@@ -31,12 +31,11 @@ namespace ResourceManager
         Mesh_Entry& entry = meshes[id];
         entry.data = std::move(_data);
         entry.gpu_id = INVALID_GPU_ID;
-        entry.generation++;
         entry.source = _source;
 
         CoreTypes::Asset_Handle handle;
         handle.id = id;
-        handle.generation = entry.generation;
+        handle.generation = mesh_id_provider.Generation(id);
 
         return handle;
     }
@@ -51,12 +50,11 @@ namespace ResourceManager
         Image_Entry& entry = images[id];
         entry.data = std::move(_data);
         entry.gpu_id = INVALID_GPU_ID;
-        entry.generation++;
         entry.source = _source;
 
         CoreTypes::Asset_Handle handle;
         handle.id = id;
-        handle.generation = entry.generation;
+        handle.generation = image_id_provider.Generation(id);;
 
         return handle;
     }
@@ -291,12 +289,10 @@ namespace ResourceManager
 
     const Resource_Manager::Mesh_Entry* Resource_Manager::Find_mesh_entry(CoreTypes::Asset_Handle _handle) const
     {
-        if (!_handle.Is_valid()) return nullptr;
+        if (!mesh_id_provider.Is_current(_handle.id, _handle.generation)) return nullptr;
         if (_handle.id >= static_cast<CoreTypes::Id>(meshes.size())) return nullptr;
 
-        const Mesh_Entry& entry = meshes[_handle.id];
-
-        return (entry.generation == _handle.generation) ? &entry : nullptr;
+        return &meshes[_handle.id];
     }
 
     Resource_Manager::Mesh_Entry* Resource_Manager::Find_mesh_entry(CoreTypes::Asset_Handle _handle)
@@ -306,12 +302,10 @@ namespace ResourceManager
 
     const Resource_Manager::Image_Entry* Resource_Manager::Find_image_entry(CoreTypes::Asset_Handle _handle) const
     {
-        if (!_handle.Is_valid()) return nullptr;
+        if (!image_id_provider.Is_current(_handle.id, _handle.generation)) return nullptr;
         if (_handle.id >= static_cast<CoreTypes::Id>(images.size())) return nullptr;
 
-        const Image_Entry& entry = images[_handle.id];
-
-        return (entry.generation == _handle.generation) ? &entry : nullptr;
+        return &images[_handle.id];
     }
 
     Resource_Manager::Image_Entry* Resource_Manager::Find_image_entry(CoreTypes::Asset_Handle _handle)
