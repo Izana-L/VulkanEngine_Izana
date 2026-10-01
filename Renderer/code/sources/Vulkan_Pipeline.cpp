@@ -3,7 +3,6 @@
 #include <Vulkan_Utils.hpp>
 #include <Filesystem.hpp>
 
-#include <glm/glm.hpp>
 #include <array>
 #include <cstring>
 #include <iterator>

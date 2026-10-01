@@ -35,17 +35,14 @@ namespace Platform {
         // Reading files
         // =========================================================
 
-        std::string Read_text_file(const std::string& _path) {
+        std::optional<std::string> Read_text_file(const std::string& _path) {
             std::ifstream file(_path, std::ios::in);
-            if (!file.is_open()) {
-                std::cerr << "[Filesystem] Failed to open text file: " << _path << "\n";
-                return "";
+            if (!file.is_open()) 
+            {
+                return std::nullopt;
             }
 
-            std::string content(
-                (std::istreambuf_iterator<char>(file)),
-                std::istreambuf_iterator<char>()
-            );
+            std::string content((std::istreambuf_iterator<char>(file)),std::istreambuf_iterator<char>() );
 
             return content;
         }

@@ -1,6 +1,6 @@
 #include <Mesh_GPU.hpp>
 
-#include <glm/glm.hpp>
+#include <Vector3.hpp>
 
 #include <algorithm>
 #include <cassert>
@@ -20,8 +20,8 @@ namespace Renderer_System
 
         for (const CoreTypes::Vertex_Static_Mesh_CPU& vertex : _mesh_data.vertices)
         {
-            box_min = glm::min(box_min, vertex.position);
-            box_max = glm::max(box_max, vertex.position);
+            box_min = MathLib::Vec3::Min(box_min, vertex.position);
+            box_max = MathLib::Vec3::Max(box_max, vertex.position);
         }
 
         const MathLib::Vector3 center = (box_min + box_max) * 0.5f;
@@ -33,7 +33,7 @@ namespace Renderer_System
         for (const CoreTypes::Vertex_Static_Mesh_CPU& vertex : _mesh_data.vertices)
         {
             const MathLib::Vector3 offset = vertex.position - center;
-            max_distance_squared = std::max(max_distance_squared, glm::dot(offset, offset));
+            max_distance_squared = std::max(max_distance_squared, MathLib::Vec3::Length_squared(offset));
         }
 
         _out_center = center;

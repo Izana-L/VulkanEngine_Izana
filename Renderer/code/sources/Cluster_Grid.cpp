@@ -1,6 +1,8 @@
 #include <Cluster_Grid.hpp>
 
-#include <glm/glm.hpp>
+#include <Vector.hpp>
+#include <Vector3.hpp>
+#include <Matrix4.hpp>
 
 #include <algorithm>
 #include <array>
@@ -16,21 +18,21 @@ namespace Renderer_System::Cluster_Grid
         // A tile corner ray in view space, as two points on it.
         struct View_Ray
         {
-            glm::vec3 a;
-            glm::vec3 b;
+            MathLib::Vector3 a;
+            MathLib::Vector3 b;
         };
 
         // Point of the ray whose view space z is -_distance (the camera
         // looks down -Z). Falls back to the first point pushed to that
         // depth when the ray runs parallel to the image plane, which no
         // tile corner of a valid projection does.
-        glm::vec3 Point_at_distance(const View_Ray& _ray, float _distance)
+        MathLib::Vector3 Point_at_distance(const View_Ray& _ray, float _distance)
         {
             const float target_z = -_distance;
             const float delta_z = _ray.b.z - _ray.a.z;
 
             if (std::abs(delta_z) < 1e-12f)
-                return glm::vec3(_ray.a.x, _ray.a.y, target_z);
+                return  MathLib::Vector3(_ray.a.x, _ray.a.y, target_z);
 
             const float t = (target_z - _ray.a.z) / delta_z;
             return _ray.a + (_ray.b - _ray.a) * t;
@@ -65,7 +67,7 @@ namespace Renderer_System::Cluster_Grid
     {
         assert(_out_aabbs != nullptr && "Build_aabbs: null output");
 
-        const glm::mat4 inverse_projection = glm::inverse(_projection);
+        const MathLib::Matrix4 inverse_projection = MathLib::Mat4::Inverse(_projection);
 
         // NDC point to view space. Two depths strictly inside the depth
         // range give two points of the ray through (x, y): with reverse-Z,
@@ -75,8 +77,8 @@ namespace Renderer_System::Cluster_Grid
         // the point at infinity of the perspective projection.
         const auto unproject = [&inverse_projection](float _x, float _y, float _depth)
             {
-                const glm::vec4 point = inverse_projection * glm::vec4(_x, _y, _depth, 1.0f);
-                return glm::vec3(point) / point.w;
+                const MathLib::Vector4 point = inverse_projection * MathLib::Vector4(_x, _y, _depth, 1.0f);
+                return MathLib::Vector3(point) / point.w;
             };
 
         // Slice boundaries, shared by every tile. The last slice reaches
@@ -105,8 +107,8 @@ namespace Renderer_System::Cluster_Grid
                 const float y0 = -1.0f + tile_height * static_cast<float>(tile_y);
                 const float y1 = y0 + tile_height;
 
-                const std::array<glm::vec2, 4> corners = { glm::vec2(x0, y0), glm::vec2(x1, y0),
-                                                           glm::vec2(x0, y1), glm::vec2(x1, y1) };
+                const std::array<MathLib::Vector2, 4> corners = { MathLib::Vector2(x0, y0), MathLib::Vector2(x1, y0),
+                                                                  MathLib::Vector2(x0, y1), MathLib::Vector2(x1, y1) };
 
                 std::array<View_Ray, 4> rays{};
 
@@ -115,16 +117,16 @@ namespace Renderer_System::Cluster_Grid
 
                 for (uint32_t slice = 0; slice < CLUSTER_SLICES; ++slice)
                 {
-                    glm::vec3 box_min(std::numeric_limits<float>::max());
-                    glm::vec3 box_max(std::numeric_limits<float>::lowest());
+                    MathLib::Vector3 box_min(std::numeric_limits<float>::max());
+                    MathLib::Vector3 box_max(std::numeric_limits<float>::lowest());
 
                     for (const View_Ray& ray : rays)
                     {
                         for (const float distance : { boundaries[slice], boundaries[slice + 1] })
                         {
-                            const glm::vec3 point = Point_at_distance(ray, distance);
-                            box_min = glm::min(box_min, point);
-                            box_max = glm::max(box_max, point);
+                            const MathLib::Vector3 point = Point_at_distance(ray, distance);
+                            box_min = MathLib::Vec3::Min(box_min, point);
+                            box_max = MathLib::Vec3::Max(box_max, point);
                         }
                     }
 

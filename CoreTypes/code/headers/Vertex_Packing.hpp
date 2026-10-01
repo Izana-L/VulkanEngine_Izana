@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Vertex.hpp>
+#include <Vector3.hpp>
 
 #include <algorithm>
 #include <array>
@@ -51,7 +52,7 @@ namespace CoreTypes::Vertex_Packing
         // vector is passed through: it was already invalid as a float.
         inline MathLib::Vector3 Normalize_if_possible(const MathLib::Vector3& _vector)
         {
-            const float length = glm::length(_vector);
+            const float length = MathLib::Vec3::Length(_vector);
             return (std::isfinite(length) && length > 1e-8f) ? _vector / length : _vector;
         }
 

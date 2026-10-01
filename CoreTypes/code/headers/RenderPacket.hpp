@@ -3,6 +3,8 @@
 #include <Vector.hpp>
 #include <Matrix.hpp>
 #include <Sampler_Preset.hpp>
+#include <Vector.hpp>
+#include <Vector3.hpp>
 #include <MathConstants.hpp>
 #include <array>
 #include <bit>
@@ -56,11 +58,11 @@ namespace CoreTypes
         // and the GPU culling evaluate the same formula.
         static float Ellipsoid_extent(const MathLib::Matrix4& _model, float _local_radius, const MathLib::Vector3& _normal)
         {
-            const MathLib::Vector3 transposed_normal(glm::dot(MathLib::Vector3(_model[0]), _normal),
-                                                     glm::dot(MathLib::Vector3(_model[1]), _normal),
-                                                     glm::dot(MathLib::Vector3(_model[2]), _normal));
+            const MathLib::Vector3 transposed_normal(MathLib::Vec3::Dot(MathLib::Vector3(_model[0]), _normal),
+                                                     MathLib::Vec3::Dot(MathLib::Vector3(_model[1]), _normal),
+                                                     MathLib::Vec3::Dot(MathLib::Vector3(_model[2]), _normal));
 
-            return _local_radius * glm::length(transposed_normal);
+            return _local_radius * MathLib::Vec3::Length(transposed_normal);
         }
 
         // False when the bounding volume of a mesh lies entirely on the
@@ -86,7 +88,7 @@ namespace CoreTypes
             {
                 const MathLib::Vector3 normal(plane);
 
-                if (glm::dot(normal, center) + plane.w < -Ellipsoid_extent(_model, _local_sphere.w, normal))
+                if (MathLib::Vec3::Dot(normal, center) + plane.w < -Ellipsoid_extent(_model, _local_sphere.w, normal))
                     return false;
             }
 
@@ -335,7 +337,7 @@ namespace CoreTypes
         const MathLib::Vector3 column_y(_model[1]);
         const MathLib::Vector3 column_z(_model[2]);
 
-        return glm::dot(glm::cross(column_x, column_y), column_z) < 0.0f;
+        return MathLib::Vec3::Dot(MathLib::Vec3::Cross(column_x, column_y), column_z) < 0.0f;
     }
 
     // =========================================================

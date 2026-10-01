@@ -7,6 +7,8 @@
 #include <Light_Component.hpp>
 #include <Primitive_Desc.hpp>
 #include <MathConstants.hpp>
+#include <Vector3.hpp>
+#include <Environment.hpp>
 
 #include <algorithm>
 #include <array>
@@ -14,8 +16,6 @@
 #include <iostream>
 #include <stdexcept>
 #include <cstdint>
-#include <cstdlib>
-#include <cstring>
 
 namespace EngineCore
 {
@@ -97,23 +97,10 @@ namespace EngineCore
             // standard validation.
             constexpr const char* GPU_AV_ENV_VAR = "ENGINE_GPU_AV";
 
-#ifdef _MSC_VER
-            // MSVC flags std::getenv as unsafe (C4996, an error with SDL
-            // checks enabled). _dupenv_s is its checked replacement; it
-            // returns a heap copy that has to be released with free().
-            char* value = nullptr;
-            size_t length = 0;
-            const bool requested = _dupenv_s(&value, &length, GPU_AV_ENV_VAR) == 0
-                && value != nullptr
-                && std::strcmp(value, "1") == 0;
-            std::free(value);
-#else
-            const char* value = std::getenv(GPU_AV_ENV_VAR);
-            const bool requested = value != nullptr && std::strcmp(value, "1") == 0;
-#endif
-            return requested
-                ? Renderer_System::Validation_Mode::Gpu_Assisted
-                : Renderer_System::Validation_Mode::Standard;
+            // An unset variable (std::nullopt) compares unequal to "1".
+            const bool requested = Platform::Environment::Get_variable(GPU_AV_ENV_VAR) == "1";
+
+            return requested ? Renderer_System::Validation_Mode::Gpu_Assisted : Renderer_System::Validation_Mode::Standard;
 #endif
         }
     }
@@ -373,8 +360,7 @@ namespace EngineCore
 
         for (uint32_t i = 0; i < palette.size(); ++i)
         {
-            const MathLib::Vector3 tint = glm::mix(Hue_to_rgb(static_cast<float>(i) / static_cast<float>(palette.size())),
-                                                   MathLib::Vector3(1.0f), 0.55f);
+            const MathLib::Vector3 tint = MathLib::Vec3::Lerp(Hue_to_rgb(static_cast<float>(i) / static_cast<float>(palette.size())), MathLib::Vector3(1.0f), 0.55f);
             palette[i].base_color_factor = MathLib::Vector4(tint, 1.0f);
             Ensure_material_registered(palette[i]);
         }
@@ -440,7 +426,7 @@ namespace EngineCore
             const float z = TEST_GRID_FIRST_Z + TEST_GRID_SPACING - Hash_unit(i, 11) * (grid_width + 2.0f * TEST_GRID_SPACING);
             const float y = TEST_FLOOR_Y + 0.4f + 1.4f * Hash_unit(i, 12);
 
-            const MathLib::Vector3 color = glm::mix(Hue_to_rgb(Hash_unit(i, 13)), MathLib::Vector3(1.0f), 0.2f);
+            const MathLib::Vector3 color = MathLib::Vec3::Lerp(Hue_to_rgb(Hash_unit(i, 13)), MathLib::Vector3(1.0f), 0.2f);
             const float            intensity = 2.0f + 2.0f * Hash_unit(i, 14);
             const float            range = TEST_LIGHT_MIN_RANGE + (TEST_LIGHT_MAX_RANGE - TEST_LIGHT_MIN_RANGE) * Hash_unit(i, 15);
 

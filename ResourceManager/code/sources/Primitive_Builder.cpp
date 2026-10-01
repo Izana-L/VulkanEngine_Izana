@@ -3,7 +3,6 @@
 #include <Vector.hpp>
 #include <Vector3.hpp>
 
-#include <glm/glm.hpp>
 
 #include <cmath>
 #include <cstdint>
@@ -73,7 +72,7 @@ namespace ResourceManager::Primitive_Builder
         // from which the winding appears counter-clockwise.
         Vec3 Face_normal(const Vec3& _p0, const Vec3& _p1, const Vec3& _p2)
         {
-            return MathLib::Vec3::Normalize(glm::cross(_p1 - _p0, _p2 - _p0));
+            return MathLib::Vec3::Normalize(MathLib::Vec3::Cross(_p1 - _p0, _p2 - _p0));
         }
 
         // =========================================================
@@ -139,19 +138,18 @@ namespace ResourceManager::Primitive_Builder
 
                 // Strip the component along the normal: averaging across
                 // triangles leaves the accumulated tangent non-perpendicular.
-                Vec3 tangent = tan_accum[i] - n * glm::dot(n, tan_accum[i]);
+                Vec3 tangent = tan_accum[i] - n * MathLib::Vec3::Dot(n, tan_accum[i]);
 
                 // NOT a bare normalize: a zero-length tangent (a vertex whose
                 // triangles are all degenerate in UV) would normalize to NaN,
                 // and a NaN here reaches the vertex buffer and lights the
                 // surface with garbage. The arbitrary fallback stays finite.
-                const float len = glm::length(tangent);
+                const float len = MathLib::Vec3::Length(tangent);
                 tangent = (len > 1e-8f) ? tangent / len : Vec3(1.0f, 0.0f, 0.0f);
 
                 // The bitangent is not stored: the shader rebuilds it as
                 // cross(N, T) * w. w is that reconstruction's sign.
-                const float sign =
-                    (glm::dot(glm::cross(n, tangent), bitan_accum[i]) < 0.0f) ? -1.0f : 1.0f;
+                const float sign = (MathLib::Vec3::Dot(MathLib::Vec3::Cross(n, tangent), bitan_accum[i]) < 0.0f) ? -1.0f : 1.0f;
 
                 _mesh.vertices[i].tangent = MathLib::Vector4(tangent, sign);
             }
@@ -210,8 +208,8 @@ namespace ResourceManager::Primitive_Builder
                 const Vertex& v1 = _mesh.vertices[i1];
                 const Vertex& v2 = _mesh.vertices[i2];
 
-                const Vec3 cross = glm::cross(v1.position - v0.position, v2.position - v0.position);
-                const float cross_length_sq = glm::dot(cross, cross);
+                const Vec3 cross = MathLib::Vec3::Cross(v1.position - v0.position, v2.position - v0.position);
+                const float cross_length_sq = MathLib::Vec3::Length_squared(cross);
 
                 if (cross_length_sq < min_cross_length_sq)
                 {
@@ -226,7 +224,7 @@ namespace ResourceManager::Primitive_Builder
                 // a smooth normal.
                 const Vec3 vertex_normal_sum = v0.normal + v1.normal + v2.normal;
 
-                if (glm::dot(cross, vertex_normal_sum) <= 0.0f)
+                if (MathLib::Vec3::Dot(cross, vertex_normal_sum) <= 0.0f)
                 {
                     throw std::logic_error("Primitive_Builder: " + name + " triangle " +
                         std::to_string(i / 3) + " is wound clockwise relative to its normals");

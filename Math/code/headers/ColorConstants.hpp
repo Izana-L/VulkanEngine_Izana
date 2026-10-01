@@ -1,6 +1,6 @@
 // ColorConstants.hpp
 #pragma once
-#include <glm/glm.hpp>
+#include <GlmConfig.hpp>
 
 namespace MathLib::Colors {
 

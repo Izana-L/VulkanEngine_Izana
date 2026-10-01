@@ -1,7 +1,7 @@
 #include <Draw_List_Builder.hpp>
 #include <Renderer_Limits.hpp>
 
-#include <glm/glm.hpp>
+#include <Matrix4.hpp>
 
 #include <algorithm>
 #include <cassert>
@@ -183,7 +183,7 @@ namespace Renderer_System
                 // Inverse-transpose computed once per draw here instead of
                 // once per vertex in mesh.vert; correct under non-uniform
                 // scale.
-                object.normal_matrix = glm::transpose(glm::inverse(_model));
+                object.normal_matrix = MathLib::Matrix4(MathLib::Mat4::Normal_matrix(_model));
                 object.material_index = _item.material_index;
                 object.mesh_index = _item.mesh_gpu_id;
                 object.flags = (static_cast<uint32_t>(_item.pass_mask) & Object_Flag::Pass_Mask) | Object_Flag::Active |

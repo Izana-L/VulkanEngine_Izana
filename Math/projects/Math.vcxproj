@@ -91,6 +91,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="..\code\headers\ColorConstants.hpp" />
+    <ClInclude Include="..\code\headers\GlmConfig.hpp" />
     <ClInclude Include="..\code\headers\MathConstants.hpp" />
     <ClInclude Include="..\code\headers\MathUtils.hpp" />
     <ClInclude Include="..\code\headers\Math_lib.hpp" />

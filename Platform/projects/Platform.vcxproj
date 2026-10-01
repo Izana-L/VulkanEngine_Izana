@@ -90,11 +90,13 @@
     </Manifest>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\code\sources\Environment.cpp" />
     <ClCompile Include="..\code\sources\Filesystem.cpp" />
     <ClCompile Include="..\code\sources\Time.cpp" />
     <ClCompile Include="..\code\sources\Window.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\code\headers\Environment.hpp" />
     <ClInclude Include="..\code\headers\Filesystem.hpp" />
     <ClInclude Include="..\code\headers\Time.hpp" />
     <ClInclude Include="..\code\headers\Window.hpp" />

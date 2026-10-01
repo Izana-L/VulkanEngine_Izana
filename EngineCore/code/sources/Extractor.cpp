@@ -7,6 +7,7 @@
 #include <Light_Component.hpp>
 #include <Camera_Component.hpp>
 #include <Resource_Manager.hpp>
+#include <Vector3.hpp>
 #include <Matrix4.hpp>
 #include <MathConstants.hpp>
 
@@ -26,7 +27,7 @@ namespace EngineCore
         // signed distance of p (positive inside).
         MathLib::Vector4 Make_plane(const MathLib::Vector3& _normal, const MathLib::Vector3& _point)
         {
-            return MathLib::Vector4(_normal, -glm::dot(_normal, _point));
+            return MathLib::Vector4(_normal, -MathLib::Vec3::Dot(_normal, _point));
         }
 
         // World space culling planes of a camera, built from its parameters
@@ -55,10 +56,10 @@ namespace EngineCore
                 const float tan_half_height = std::tan(_camera.fov * MathLib::Constants::DEG_TO_RAD * 0.5f);
                 const float tan_half_width = tan_half_height * _aspect;
 
-                frustum.planes[0] = Make_plane(glm::normalize( _right + _forward * tan_half_width), _position);   // left
-                frustum.planes[1] = Make_plane(glm::normalize(-_right + _forward * tan_half_width), _position);   // right
-                frustum.planes[2] = Make_plane(glm::normalize( _up + _forward * tan_half_height), _position);     // bottom
-                frustum.planes[3] = Make_plane(glm::normalize(-_up + _forward * tan_half_height), _position);     // top
+                frustum.planes[0] = Make_plane(MathLib::Vec3::Normalize(_right + _forward * tan_half_width), _position);   // left
+                frustum.planes[1] = Make_plane(MathLib::Vec3::Normalize(-_right + _forward * tan_half_width), _position);   // right
+                frustum.planes[2] = Make_plane(MathLib::Vec3::Normalize(_up + _forward * tan_half_height), _position);     // bottom
+                frustum.planes[3] = Make_plane(MathLib::Vec3::Normalize(-_up + _forward * tan_half_height), _position);     // top
             }
             else
             {
@@ -174,9 +175,9 @@ namespace EngineCore
         // right vector cross(forward, up) and the up vector re-orthogonalized
         // from both, so the planes match the view matrix exactly.
         {
-            const MathLib::Vector3 view_forward = glm::normalize(cam_forward);
-            const MathLib::Vector3 view_right = glm::normalize(glm::cross(view_forward, cam_up));
-            const MathLib::Vector3 view_up = glm::cross(view_right, view_forward);
+            const MathLib::Vector3 view_forward = MathLib::Vec3::Normalize(cam_forward);
+            const MathLib::Vector3 view_right = MathLib::Vec3::Normalize(MathLib::Vec3::Cross(view_forward, cam_up));
+            const MathLib::Vector3 view_up = MathLib::Vec3::Cross(view_right, view_forward);
 
             _out_packet.view.frustum = Make_camera_frustum(*camera_comp, cam_pos, view_right, view_up, view_forward, aspect);
         }
@@ -227,7 +228,7 @@ namespace EngineCore
 
                 // Depth along the view direction, from the WORLD position:
                 // the same space the matrix that draws the item lives in.
-                const float depth = glm::dot(transform.World_position() - cam_pos, cam_forward);
+                const float depth = MathLib::Vec3::Dot(transform.World_position() - cam_pos, cam_forward);
 
                 // Alpha below one routes the item to the transparent pass:
                 // accumulated by the weighted blended OIT, depth tested

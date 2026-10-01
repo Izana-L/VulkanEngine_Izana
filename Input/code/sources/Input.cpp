@@ -1,4 +1,5 @@
 #include <Input.hpp>
+#include <Filesystem.hpp>
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -8,8 +9,8 @@
 #include <array>
 #include <cassert>
 #include <cstring>
-#include <fstream>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
 
@@ -409,15 +410,15 @@ namespace Input_System
 
     void Input::Load_actions(const std::string& _path)
     {
-        std::ifstream file(_path);
-        if (!file.is_open())
+        const std::optional<std::string> text = Platform::Filesystem::Read_text_file(_path);
+        if (!text)
             throw std::runtime_error("Input: cannot open action file '" + _path + "'");
 
         nlohmann::json json;
 
         try
         {
-            file >> json;
+            json = nlohmann::json::parse(*text);
         }
         catch (const nlohmann::json::exception& e)
         {

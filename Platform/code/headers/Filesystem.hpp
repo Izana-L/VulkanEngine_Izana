@@ -4,6 +4,7 @@
 #include <vector>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 
 namespace Platform {
 
@@ -30,10 +31,10 @@ namespace Platform {
         // Reading files
         // =========================================================
 
-        // Reads an entire text file into a string. Returns an empty string
-        // and logs an error if the file doesn't exist or can't be opened.
-        // Use Exists() first if you need to distinguish "empty file" from "failed to read".
-        std::string Read_text_file(const std::string& _path);
+        // Reads an entire text file into a string. Returns std::nullopt if
+        // the file doesn't exist or can't be opened; an empty file returns "".
+        // Nothing is logged: the caller decides how to report the failure.
+        std::optional<std::string> Read_text_file(const std::string& _path);
 
         // Reads an entire binary file into a byte buffer.
         // This is what you'll use to load compiled SPIR-V shaders (.spv),
