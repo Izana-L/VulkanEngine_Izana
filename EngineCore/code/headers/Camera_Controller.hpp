@@ -43,6 +43,16 @@ namespace EngineCore
         ~Camera_Controller() = default;
 
         // =========================================================
+        // Setup
+        // =========================================================
+
+        // Resolves the action names above to ids, once. Call it after
+        // Input::Load_actions() (which invalidates every cached id) and
+        // before the first Update(). A name missing from the input JSON is
+        // reported on std::cerr and its control stays inactive.
+        void Bind_actions(const Input_System::Input& _input);
+
+        // =========================================================
         // Update
         // =========================================================
 
@@ -85,7 +95,6 @@ namespace EngineCore
             size_t toggle_camera = Input_System::Input::INVALID_ACTION;
         };
         Action_Ids ids;
-        bool       ids_resolved = false;
 
         // =========================================================
         // Internal state

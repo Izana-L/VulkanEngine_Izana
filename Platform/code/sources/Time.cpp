@@ -127,11 +127,15 @@ namespace Platform {
         return 1.0f / unscaled_delta_time;
     }
 
-    float Time::Get_average_fps() const {
+    float Time::Get_average_delta() const {
         if (recent_delta_times.empty()) return 0.0f;
 
-        float sum = std::accumulate(recent_delta_times.begin(), recent_delta_times.end(), 0.0f);
-        float average_delta = sum / static_cast<float>(recent_delta_times.size());
+        const float sum = std::accumulate(recent_delta_times.begin(), recent_delta_times.end(), 0.0f);
+        return sum / static_cast<float>(recent_delta_times.size());
+    }
+
+    float Time::Get_average_fps() const {
+        const float average_delta = Get_average_delta();
 
         if (average_delta <= 0.0f) return 0.0f;
         return 1.0f / average_delta;
@@ -154,8 +158,7 @@ namespace Platform {
     bool Time::Is_frame_spike(float _spike_multiplier) const {
         if (recent_delta_times.size() < 2) return false;
 
-        float sum = std::accumulate(recent_delta_times.begin(), recent_delta_times.end(), 0.0f);
-        float average = sum / static_cast<float>(recent_delta_times.size());
+        const float average = Get_average_delta();
 
         if (average <= 0.0f) return false;
         return unscaled_delta_time > average * _spike_multiplier;

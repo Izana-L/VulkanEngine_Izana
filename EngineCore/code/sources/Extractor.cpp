@@ -246,22 +246,15 @@ namespace EngineCore
                     ? CoreTypes::Sort_Key_Mirrored_Bit
                     : uint8_t{ 0 };
 
-                if (transparent)
-                {
-                    item.pass_mask = CoreTypes::Render_Pass_Bit::Transparent;
-                    item.sort_key = CoreTypes::Make_sort_key(_params.transparent_pipeline_id, winding_bits,
-                        static_cast<uint16_t>(gpu_id & 0xFFFF), CoreTypes::Depth_to_sortable_bits(depth));
+                // The passes differ only in the pipeline, the pass bit and the
+                // list the item goes to: the key is built the same way.
+                const uint8_t pipeline_id = transparent ? _params.transparent_pipeline_id : _params.opaque_pipeline_id;
 
-                    _out_packet.transparent_items.push_back(item);
-                }
-                else
-                {
-                    item.pass_mask = CoreTypes::Render_Pass_Bit::Opaque;
-                    item.sort_key = CoreTypes::Make_sort_key(_params.opaque_pipeline_id, winding_bits,
-                        static_cast<uint16_t>(gpu_id & 0xFFFF), CoreTypes::Depth_to_sortable_bits(depth));
+                item.pass_mask = transparent ? CoreTypes::Render_Pass_Bit::Transparent : CoreTypes::Render_Pass_Bit::Opaque;
+                item.sort_key = CoreTypes::Make_sort_key(pipeline_id, winding_bits,
+                    static_cast<uint16_t>(gpu_id & 0xFFFF), CoreTypes::Depth_to_sortable_bits(depth));
 
-                    _out_packet.opaque_items.push_back(item);
-                }
+                (transparent ? _out_packet.transparent_items : _out_packet.opaque_items).push_back(item);
             });
 
         // Point the packet's transform pointer at our buffer.

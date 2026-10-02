@@ -37,9 +37,10 @@ namespace ECS
     //   - NEVER write to local_matrix / world_matrix directly; those belong
     //     to Transform_System.
     //   - The parent link is read through Get_parent() and can only be
-    //     changed by Transform_System::Set_parent(), which also maintains
-    //     the adjacency data the hierarchical update depends on. That is
-    //     why the field itself is private.
+    //     changed by Transform_System::Set_parent(), which also rejects
+    //     cycles and flags the hierarchy for reordering, as the
+    //     hierarchical update depends on it. That is why the field itself
+    //     is private.
     //
     // Two families of direction helpers exist and they are NOT the same:
     //   - Forward()/Right()/Up() are derived from `rotation` alone, i.e.
@@ -192,8 +193,8 @@ namespace ECS
 
     private:
 
-        // Only Transform_System writes this: it must also update its
-        // adjacency lists, or world_matrix would silently go stale.
+        // Only Transform_System writes this: it must also flag the
+        // hierarchy for reordering, or world_matrix would silently go stale.
         Entity parent = INVALID_ENTITY;
 
         friend class EngineCore::Transform_System;

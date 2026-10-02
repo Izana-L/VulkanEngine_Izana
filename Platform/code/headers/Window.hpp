@@ -30,6 +30,12 @@ namespace Platform {
 
         static int window_count;
 
+        // Destroys the GLFW window, if any, and terminates GLFW when it was
+        // the last one alive. Shared by the destructor and move assignment
+        // so the window_count / glfwTerminate bookkeeping lives in one place.
+        // Leaves window_handle null.
+        void Destroy_native();
+
         // Shared body of the move constructor and move assignment: takes
         // ownership of every field of _other, the input callbacks included,
         // and re-points the GLFW user pointer at this object.

@@ -17,6 +17,34 @@ namespace Platform {
         std::cerr << "[GLFW Error " << _error_code << "] " << _description << "\n";
     }
 
+    // ---------- File-local helpers ----------
+
+    // The Window that owns a GLFW window, or nullptr if none is attached.
+    static Window* Get_owner(GLFWwindow* _glfw_window) {
+        return static_cast<Window*>(glfwGetWindowUserPointer(_glfw_window));
+    }
+
+    // Primary monitor and its current video mode. Converts to false when the
+    // system exposes no usable monitor (headless, remote session...), so each
+    // caller only decides how to report it.
+    namespace {
+        struct Primary_monitor {
+            GLFWmonitor*       monitor = nullptr;
+            const GLFWvidmode* mode = nullptr;
+
+            explicit operator bool() const { return monitor != nullptr && mode != nullptr; }
+        };
+    }
+
+    static Primary_monitor Get_primary_monitor() {
+        Primary_monitor primary;
+        primary.monitor = glfwGetPrimaryMonitor();
+        if (primary.monitor) {
+            primary.mode = glfwGetVideoMode(primary.monitor);
+        }
+        return primary;
+    }
+
     // ---------- Constructor ----------
     Window::Window(uint32_t _width, uint32_t _height, const std::string& _title)
         : window_handle(nullptr),
@@ -77,12 +105,19 @@ namespace Platform {
 
     // ---------- Destructor ----------
     Window::~Window() {
-        if (window_handle) {
-            glfwDestroyWindow(window_handle);
-            --window_count;
-            if (window_count == 0) {
-                glfwTerminate();
-            }
+        Destroy_native();
+    }
+
+    // ---------- Destroy_native ----------
+    void Window::Destroy_native() {
+        if (!window_handle) return;
+
+        glfwDestroyWindow(window_handle);
+        window_handle = nullptr;
+
+        --window_count;
+        if (window_count == 0) {
+            glfwTerminate();
         }
     }
 
@@ -145,13 +180,7 @@ namespace Platform {
     // ---------- Move assignment ----------
     Window& Window::operator=(Window&& _other) noexcept {
         if (this != &_other) {
-            if (window_handle) {
-                glfwDestroyWindow(window_handle);
-                --window_count;
-                if (window_count == 0) {
-                    glfwTerminate();
-                }
-            }
+            Destroy_native();
 
             Move_from(std::move(_other));
         }
@@ -258,17 +287,14 @@ namespace Platform {
     void Window::Center() {
         assert(window_handle != nullptr && "Center() called on a moved-from Window");
 
-        GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-        if (!monitor) return;
-
-        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
-        if (!mode) return;
+        const Primary_monitor primary = Get_primary_monitor();
+        if (!primary) return;
 
         int window_width, window_height;
         Get_size(window_width, window_height);
 
-        int x = (mode->width - window_width) / 2;
-        int y = (mode->height - window_height) / 2;
+        int x = (primary.mode->width - window_width) / 2;
+        int y = (primary.mode->height - window_height) / 2;
 
         glfwSetWindowPos(window_handle, x, y);
     }
@@ -366,9 +392,8 @@ namespace Platform {
         if (_fullscreen == is_fullscreen) return;
 
         if (_fullscreen) {
-            GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-            const GLFWvidmode* mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
-            if (!mode) {
+            const Primary_monitor primary = Get_primary_monitor();
+            if (!primary) {
                 std::cerr << "[Window] Set_fullscreen: no primary monitor available\n";
                 return;
             }
@@ -378,10 +403,10 @@ namespace Platform {
             Remember_windowed_geometry();
 
             glfwSetWindowMonitor(
-                window_handle, monitor,
+                window_handle, primary.monitor,
                 0, 0,
-                mode->width, mode->height,
-                mode->refreshRate
+                primary.mode->width, primary.mode->height,
+                primary.mode->refreshRate
             );
 
             is_fullscreen = true;
@@ -408,9 +433,8 @@ namespace Platform {
         if (_enabled == is_windowed_fullscreen) return;
 
         if (_enabled) {
-            GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-            const GLFWvidmode* mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
-            if (!mode) {
+            const Primary_monitor primary = Get_primary_monitor();
+            if (!primary) {
                 std::cerr << "[Window] Set_windowed_fullscreen: no primary monitor available\n";
                 return;
             }
@@ -421,7 +445,7 @@ namespace Platform {
             glfwSetWindowMonitor(
                 window_handle, nullptr,
                 0, 0,
-                mode->width, mode->height,
+                primary.mode->width, primary.mode->height,
                 0
             );
 
@@ -517,7 +541,7 @@ namespace Platform {
     // =========================================================
 
     void Window::Framebuffer_resize_callback(GLFWwindow* _glfw_window, int _width, int _height) {
-        Window* owner = reinterpret_cast<Window*>(glfwGetWindowUserPointer(_glfw_window));
+        Window* owner = Get_owner(_glfw_window);
         if (owner) {
             owner->width = static_cast<uint32_t>(_width);
             owner->height = static_cast<uint32_t>(_height);
@@ -526,56 +550,56 @@ namespace Platform {
     }
 
     void Window::Window_close_callback(GLFWwindow* _glfw_window) {
-        Window* owner = reinterpret_cast<Window*>(glfwGetWindowUserPointer(_glfw_window));
+        Window* owner = Get_owner(_glfw_window);
         if (owner && owner->close_callback) {
             owner->close_callback();
         }
     }
 
     void Window::Window_focus_callback(GLFWwindow* _glfw_window, int _focused) {
-        Window* owner = reinterpret_cast<Window*>(glfwGetWindowUserPointer(_glfw_window));
+        Window* owner = Get_owner(_glfw_window);
         if (owner && owner->focus_callback) {
             owner->focus_callback(_focused == GLFW_TRUE);
         }
     }
 
     void Window::Window_iconify_callback(GLFWwindow* _glfw_window, int _iconified) {
-        Window* owner = reinterpret_cast<Window*>(glfwGetWindowUserPointer(_glfw_window));
+        Window* owner = Get_owner(_glfw_window);
         if (owner && owner->iconify_callback) {
             owner->iconify_callback(_iconified == GLFW_TRUE);
         }
     }
 
     void Window::Window_position_callback(GLFWwindow* _glfw_window, int _x, int _y) {
-        Window* owner = reinterpret_cast<Window*>(glfwGetWindowUserPointer(_glfw_window));
+        Window* owner = Get_owner(_glfw_window);
         if (owner && owner->position_callback) {
             owner->position_callback(_x, _y);
         }
     }
     void Window::Key_callback_internal(GLFWwindow* _w, int _key, int /*_scancode*/, int _action, int /*_mods*/)
     {
-        Window* owner = reinterpret_cast<Window*>(glfwGetWindowUserPointer(_w));
+        Window* owner = Get_owner(_w);
         if (owner && owner->key_callback && _action != GLFW_REPEAT)
             owner->key_callback(_key, _action);
     }
 
     void Window::Mouse_button_callback_internal(GLFWwindow* _w, int _button, int _action, int /*_mods*/)
     {
-        Window* owner = reinterpret_cast<Window*>(glfwGetWindowUserPointer(_w));
+        Window* owner = Get_owner(_w);
         if (owner && owner->mouse_button_callback)
             owner->mouse_button_callback(_button, _action);
     }
 
     void Window::Mouse_move_callback_internal(GLFWwindow* _w, double _xpos, double _ypos)
     {
-        Window* owner = reinterpret_cast<Window*>(glfwGetWindowUserPointer(_w));
+        Window* owner = Get_owner(_w);
         if (owner && owner->mouse_move_callback)
             owner->mouse_move_callback(_xpos, _ypos);
     }
 
     void Window::Scroll_callback_internal(GLFWwindow* _w, double /*_xoffset*/, double _yoffset)
     {
-        Window* owner = reinterpret_cast<Window*>(glfwGetWindowUserPointer(_w));
+        Window* owner = Get_owner(_w);
         if (owner && owner->scroll_callback)
             owner->scroll_callback(_yoffset);
     }

@@ -54,6 +54,11 @@ namespace Platform
 
         float fixed_time_accumulator;
 
+        // Mean of the unscaled delta times in the rolling window, in seconds,
+        // or 0 when the window is empty. Shared by Get_average_fps() and
+        // Is_frame_spike() so both always agree on what "average" means.
+        float Get_average_delta() const;
+
         // Profiling: start points for currently running named timers,
         // and the last recorded duration for each timer name.
         std::unordered_map<std::string, Time_point> active_timers;

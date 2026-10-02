@@ -69,6 +69,12 @@ namespace EngineCore
 
         const Platform::Time& Get_time() const { return time; }
 
+        // Resolves the debug actions listed at Handle_debug_input() to ids,
+        // once. Call it after Input::Load_actions() (which invalidates every
+        // cached id) and before Run(). A name missing from the input JSON is
+        // reported on std::cerr and its switch never fires.
+        void Bind_actions(const Input_System::Input& _input);
+
     private:
 
         // Applies the debug actions pressed this frame to the Renderer's
@@ -83,14 +89,15 @@ namespace EngineCore
         //   DebugStats          - GPU timings and counters every second
         //   DebugIsolateTimings - isolated GPU timing scopes (a full barrier
         //                         before each; the totals are not frame times)
-        // Actions missing from the input JSON simply never fire.
+        // Actions missing from the input JSON never fire (Bind_actions()
+        // reports each one at startup).
         void Handle_debug_input(const Input_System::Input& _input, Renderer_System::Renderer& _renderer);
 
         // The engine's single clock. Also hosts the named profiler timers
         // (Start_timer / Scoped_timer) for instrumenting the running loop.
         Platform::Time time;
 
-        // Action ids of the debug switches, resolved on the first frame.
+        // Action ids of the debug switches, set by Bind_actions().
         struct Debug_Action_Ids
         {
             size_t light_culling = static_cast<size_t>(-1);
@@ -103,7 +110,6 @@ namespace EngineCore
         };
 
         Debug_Action_Ids debug_action_ids;
-        bool             debug_actions_resolved = false;
     };
 
 } // namespace EngineCore

@@ -136,6 +136,14 @@ namespace Input_System
         static constexpr size_t INVALID_ACTION = ~size_t(0);
 
         size_t Get_action_id(const std::string& _action) const;
+
+        // Get_action_id() for a consumer that binds its actions by name once
+        // (_consumer names it in the report). An unknown name still returns
+        // INVALID_ACTION, whose queries are always inactive, but it is
+        // reported on std::cerr: a typo, or an action removed from the input
+        // JSON, would otherwise disable its key without any message.
+        size_t Resolve_action_id(const std::string& _action, const char* _consumer) const;
+
         float  Get_action_value(size_t _action_id) const;
         bool   Is_action_down(size_t _action_id) const;
         bool   Was_action_pressed(size_t _action_id) const;

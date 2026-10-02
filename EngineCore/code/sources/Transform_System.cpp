@@ -3,7 +3,6 @@
 #include <World.hpp>
 #include <Matrix4.hpp>
 
-#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -31,61 +30,6 @@ namespace EngineCore
     }
 
     // =========================================================
-    // Registration
-    // =========================================================
-
-    void Transform_System::Register(ECS::Entity _entity, ECS::World& _world)
-    {
-        const ECS::Transform_Component& transform = Require_transform(_entity, _world, "Register");
-
-        if (children.find(_entity) != children.end()) return;   // already known
-
-        children[_entity] = {};
-
-        const ECS::Entity parent = transform.Get_parent();
-
-        if (ECS::Is_valid_entity(parent) && _world.Has_component<ECS::Transform_Component>(parent))
-            children[parent].push_back(_entity);
-        else
-            roots.push_back(_entity);
-
-        order_dirty = true;
-    }
-
-    void Transform_System::Unregister(ECS::Entity _entity, ECS::World& _world)
-    {
-        auto it = children.find(_entity);
-        if (it == children.end()) return;
-
-        // Its children become roots.
-        for (ECS::Entity child : it->second)
-        {
-            if (ECS::Transform_Component* child_transform = _world.Try_get_component<ECS::Transform_Component>(child))
-            {
-                child_transform->parent = ECS::INVALID_ENTITY;
-                child_transform->dirty = true;
-            }
-
-            roots.push_back(child);
-        }
-
-        children.erase(it);
-
-        if (ECS::Transform_Component* transform = _world.Try_get_component<ECS::Transform_Component>(_entity))
-        {
-            Detach_from_cache(_entity, transform->Get_parent());
-            transform->parent = ECS::INVALID_ENTITY;
-            transform->dirty = true;
-        }
-        else
-        {
-            Detach_from_cache(_entity, ECS::INVALID_ENTITY);
-        }
-
-        order_dirty = true;
-    }
-
-    // =========================================================
     // Hierarchy
     // =========================================================
 
@@ -99,32 +43,20 @@ namespace EngineCore
         {
             Require_transform(_parent, _world, "Set_parent");
 
-            if (_parent == _child)
-                throw std::invalid_argument("Transform_System::Set_parent: an entity cannot be its own parent");
-
             // Walking up from the new parent must never reach the child.
+            // The walk starts at _parent itself, so this also rejects an
+            // entity as its own parent.
             if (Is_same_or_ancestor(_child, _parent, _world))
             {
                 throw std::invalid_argument(
-                    "Transform_System::Set_parent: entity " + std::to_string(_parent) +
-                    " is a descendant of " + std::to_string(_child) + "; the link would create a cycle");
+                    "Transform_System::Set_parent: making entity " + std::to_string(_parent) +
+                    " the parent of entity " + std::to_string(_child) + " would create a cycle");
             }
         }
 
-        const ECS::Entity old_parent = child_transform.Get_parent();
-        if (old_parent == _parent) return;
+        if (child_transform.Get_parent() == _parent) return;
 
-        // Everything is validated: mutate the component (source of truth)
-        // and keep the cache in step for Get_children().
-        if (children.find(_child) == children.end()) children[_child] = {};
-
-        Detach_from_cache(_child, old_parent);
-
-        if (ECS::Is_valid_entity(_parent))
-            children[_parent].push_back(_child);
-        else
-            roots.push_back(_child);
-
+        // Everything is validated: mutate the component (source of truth).
         child_transform.parent = _parent;
         child_transform.dirty = true;
 
@@ -173,8 +105,7 @@ namespace EngineCore
                 // is cut rather than followed into a stale matrix.
                 if (!parent_t)
                 {
-                    transform.parent = ECS::INVALID_ENTITY;
-                    transform.dirty = true;
+                    Cut_parent_link(transform);
                     order_dirty = true;
                 }
             }
@@ -205,22 +136,10 @@ namespace EngineCore
         _transform.local_matrix = MathLib::Mat4::TRS(_transform.position, _transform.rotation, _transform.scale);
     }
 
-    void Transform_System::Detach_from_cache(ECS::Entity _entity, ECS::Entity _parent)
+    void Transform_System::Cut_parent_link(ECS::Transform_Component& _transform)
     {
-        if (ECS::Is_valid_entity(_parent))
-        {
-            auto parent_it = children.find(_parent);
-            if (parent_it != children.end())
-            {
-                auto& siblings = parent_it->second;
-                siblings.erase(std::remove(siblings.begin(), siblings.end(), _entity), siblings.end());
-            }
-        }
-
-        // Also scrubbed from roots unconditionally: after a dangling link
-        // was cut, an entity can be in roots while its component names a
-        // parent, and the reverse.
-        roots.erase(std::remove(roots.begin(), roots.end(), _entity), roots.end());
+        _transform.parent = ECS::INVALID_ENTITY;
+        _transform.dirty = true;
     }
 
     bool Transform_System::Is_same_or_ancestor(ECS::Entity _candidate, ECS::Entity _entity, const ECS::World& _world)
@@ -245,12 +164,12 @@ namespace EngineCore
 
     void Transform_System::Synchronize(ECS::World& _world)
     {
-        // ── 1. Rebuild the adjacency cache from the components ────
-        // Every entity that has a Transform_Component takes part, whether
-        // or not it was registered. A parent link to an entity that is
-        // dead or has no transform is cut, and the entity becomes a root.
+        // ── 1. Rebuild the adjacency lists from the components ────
+        // Every entity that has a Transform_Component takes part. A parent
+        // link to an entity that is dead or has no transform is cut, and the
+        // entity becomes a root.
         std::unordered_map<ECS::Entity, std::vector<ECS::Entity>> new_children;
-        std::vector<ECS::Entity>                                  new_roots;
+        std::vector<ECS::Entity>                                  roots;
 
         size_t transform_count = 0;
 
@@ -271,16 +190,14 @@ namespace EngineCore
                 {
                     // Dangling link (parent destroyed or stripped of its
                     // transform): this entity is a root from now on.
-                    transform.parent = ECS::INVALID_ENTITY;
-                    transform.dirty = true;
+                    Cut_parent_link(transform);
                 }
 
-                new_roots.push_back(entity);
+                roots.push_back(entity);
             }
         });
 
         children = std::move(new_children);
-        roots = std::move(new_roots);
 
         // ── 2. Parent-first order: iterative DFS from every root ──
         std::vector<ECS::Entity> new_order;
@@ -316,8 +233,9 @@ namespace EngineCore
         // ── 3. Anything not reached is part of a cycle ────────────
         // Set_parent() rejects cycles, so this is a defence against
         // corruption, not an expected path. Each such entity has its link
-        // cut and is appended as a root, so the order stays a permutation
-        // of the storage (which is what Reorder_storage requires).
+        // cut and is appended to the order as a root, so the order stays a
+        // permutation of the storage (which is what Reorder_storage
+        // requires).
         if (new_order.size() != transform_count)
         {
             _world.Each<ECS::Transform_Component>([&](ECS::Entity entity, ECS::Transform_Component& transform)
@@ -327,9 +245,7 @@ namespace EngineCore
                 std::cerr << "[Transform_System] Entity " << entity
                     << " is part of a parent cycle; the link is cut and it becomes a root.\n";
 
-                transform.parent = ECS::INVALID_ENTITY;
-                transform.dirty = true;
-                roots.push_back(entity);
+                Cut_parent_link(transform);
                 visited.insert(entity);
                 new_order.push_back(entity);
             });

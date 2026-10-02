@@ -6,6 +6,7 @@
 #include <MathConstants.hpp>
 #include <cmath>
 #include <Vector.hpp>
+#include <Vector3.hpp>
 #include <Matrix.hpp>
 
 namespace MathLib {
@@ -81,9 +82,10 @@ namespace MathLib {
 
             // vectors point in opposite directions: pick an arbitrary perpendicular axis
             if (dot <= -1.0f + Constants::EPSILON_SMALL) {
-                Vector3 axis = glm::cross(Vector3(1.0f, 0.0f, 0.0f), f);
-                if (glm::length2(axis) < Constants::EPSILON_SMALL) {
-                    axis = glm::cross(Vector3(0.0f, 1.0f, 0.0f), f);
+                Vector3 axis = glm::cross(Vec3::UnitX(), f);
+                if (glm::length2(axis) < Constants::EPSILON_SMALL) 
+                {
+                    axis = glm::cross(Vec3::UnitY(), f);
                 }
                 return glm::angleAxis(Constants::PI, glm::normalize(axis));
             }
@@ -96,7 +98,8 @@ namespace MathLib {
         // Builds a quaternion that orients an object to look toward "forward",
         // with "up" defining the roll. Equivalent to a rotation-only LookAt.
         // Useful for making an object face a target (e.g. a turret aiming at a player).
-        inline Quaternion Look_rotation(const Vector3& forward, const Vector3& up = Vector3(0.0f, 1.0f, 0.0f)) {
+        inline Quaternion Look_rotation(const Vector3& forward, const Vector3& up = Vec3::Up()) 
+        {
             return glm::quatLookAt(glm::normalize(forward), up);
         }
 
@@ -233,17 +236,17 @@ namespace MathLib {
         // Assumes -Z is forward in local space (common convention; verify against
         // your engine's coordinate system, some use +Z as forward instead).
         inline Vector3 GetForward(const Quaternion& q) {
-            return Rotate_vector(q, Vector3(0.0f, 0.0f, -1.0f));
+            return Rotate_vector(q, Vec3::Forward());
         }
 
         // Returns the local "right" direction after applying this rotation
         inline Vector3 GetRight(const Quaternion& q) {
-            return Rotate_vector(q, Vector3(1.0f, 0.0f, 0.0f));
+            return Rotate_vector(q, Vec3::Right());
         }
 
         // Returns the local "up" direction after applying this rotation
         inline Vector3 GetUp(const Quaternion& q) {
-            return Rotate_vector(q, Vector3(0.0f, 1.0f, 0.0f));
+            return Rotate_vector(q, Vec3::Up());
         }
 
         // =========================================================

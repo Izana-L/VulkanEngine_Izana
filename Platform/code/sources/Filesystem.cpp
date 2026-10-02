@@ -70,36 +70,35 @@ namespace Platform {
         // Writing files
         // =========================================================
 
-        bool Write_text_file(const std::string& _path, const std::string& _content) {
+        // Shared body of Write_text_file / Write_binary_file: creates the
+        // missing parent directories, truncates/creates _path with the given
+        // extra open mode (std::ios::binary or none) and writes _size bytes.
+        // _kind ("text" / "binary") only feeds the error message.
+        static bool Write_file(const std::string& _path, std::ios::openmode _extra_mode,
+                               const char* _data, std::streamsize _size, const char* _kind) {
             fs::path file_path(_path);
             if (file_path.has_parent_path()) {
                 Create_directory(file_path.parent_path().string());
             }
 
-            std::ofstream file(_path, std::ios::out | std::ios::trunc);
+            std::ofstream file(_path, std::ios::out | std::ios::trunc | _extra_mode);
             if (!file.is_open()) {
-                std::cerr << "[Filesystem] Failed to write text file: " << _path << "\n";
+                std::cerr << "[Filesystem] Failed to write " << _kind << " file: " << _path << "\n";
                 return false;
             }
 
-            file << _content;
+            file.write(_data, _size);
             return file.good();
         }
 
+        bool Write_text_file(const std::string& _path, const std::string& _content) {
+            return Write_file(_path, std::ios::openmode{},
+                _content.data(), static_cast<std::streamsize>(_content.size()), "text");
+        }
+
         bool Write_binary_file(const std::string& _path, const std::vector<uint8_t>& _data) {
-            fs::path file_path(_path);
-            if (file_path.has_parent_path()) {
-                Create_directory(file_path.parent_path().string());
-            }
-
-            std::ofstream file(_path, std::ios::out | std::ios::binary | std::ios::trunc);
-            if (!file.is_open()) {
-                std::cerr << "[Filesystem] Failed to write binary file: " << _path << "\n";
-                return false;
-            }
-
-            file.write(reinterpret_cast<const char*>(_data.data()), static_cast<std::streamsize>(_data.size()));
-            return file.good();
+            return Write_file(_path, std::ios::binary,
+                reinterpret_cast<const char*>(_data.data()), static_cast<std::streamsize>(_data.size()), "binary");
         }
 
         // =========================================================
@@ -143,7 +142,20 @@ namespace Platform {
         // Directory listing
         // =========================================================
 
-        std::vector<std::string> List_files(const std::string& _directory, const std::string& _extension_filter) {
+        // Shared body of the List_* functions. Iterator is
+        // fs::directory_iterator or fs::recursive_directory_iterator, and
+        // _accept(entry) decides which entries are collected.
+        //
+        // Nothing here throws on filesystem errors. A range-for over the
+        // iterator would call the throwing operator++, and the throwing
+        // directory_entry queries, so a file deleted mid-listing or an
+        // unreadable subfolder would escape as std::filesystem::filesystem_error
+        // instead of the empty/partial result the API promises. Instead the
+        // walk uses increment(error_code) and stops at the first error,
+        // returning whatever was collected until then. Folders the process is
+        // not allowed to read are skipped and the walk continues.
+        template <typename Iterator, typename Predicate>
+        static std::vector<std::string> List_entries(const std::string& _directory, Predicate _accept) {
             std::vector<std::string> result;
 
             std::error_code error_code;
@@ -151,55 +163,44 @@ namespace Platform {
                 return result;
             }
 
-            for (const auto& entry : fs::directory_iterator(_directory, error_code)) {
-                if (!entry.is_regular_file()) continue;
+            Iterator it(_directory, fs::directory_options::skip_permission_denied, error_code);
+            const Iterator end{};
 
-                if (!_extension_filter.empty() && entry.path().extension().string() != _extension_filter) {
-                    continue;
+            for (; !error_code && it != end; it.increment(error_code)) {
+                if (_accept(*it)) {
+                    result.push_back(it->path().string());
                 }
-
-                result.push_back(entry.path().string());
             }
 
             return result;
+        }
+
+        // True for regular files whose extension matches _extension_filter
+        // (an empty filter matches every regular file).
+        static bool Is_matching_file(const fs::directory_entry& _entry, const std::string& _extension_filter) {
+            std::error_code error_code;
+            if (!_entry.is_regular_file(error_code)) return false;
+
+            return _extension_filter.empty() || _entry.path().extension().string() == _extension_filter;
+        }
+
+        std::vector<std::string> List_files(const std::string& _directory, const std::string& _extension_filter) {
+            return List_entries<fs::directory_iterator>(_directory, [&](const fs::directory_entry& _entry) {
+                return Is_matching_file(_entry, _extension_filter);
+            });
         }
 
         std::vector<std::string> List_files_recursive(const std::string& _directory, const std::string& _extension_filter) {
-            std::vector<std::string> result;
-
-            std::error_code error_code;
-            if (!fs::is_directory(_directory, error_code)) {
-                return result;
-            }
-
-            for (const auto& entry : fs::recursive_directory_iterator(_directory, error_code)) {
-                if (!entry.is_regular_file()) continue;
-
-                if (!_extension_filter.empty() && entry.path().extension().string() != _extension_filter) {
-                    continue;
-                }
-
-                result.push_back(entry.path().string());
-            }
-
-            return result;
+            return List_entries<fs::recursive_directory_iterator>(_directory, [&](const fs::directory_entry& _entry) {
+                return Is_matching_file(_entry, _extension_filter);
+            });
         }
 
         std::vector<std::string> List_directories(const std::string& _directory) {
-            std::vector<std::string> result;
-
-            std::error_code error_code;
-            if (!fs::is_directory(_directory, error_code)) {
-                return result;
-            }
-
-            for (const auto& entry : fs::directory_iterator(_directory, error_code)) {
-                if (entry.is_directory()) {
-                    result.push_back(entry.path().string());
-                }
-            }
-
-            return result;
+            return List_entries<fs::directory_iterator>(_directory, [](const fs::directory_entry& _entry) {
+                std::error_code error_code;
+                return _entry.is_directory(error_code);
+            });
         }
 
         // =========================================================

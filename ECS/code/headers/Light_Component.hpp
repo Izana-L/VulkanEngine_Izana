@@ -8,7 +8,7 @@ namespace ECS
     // Light_Component: represents a light source attached to an entity.
     //
     // A single struct with a Type enum is used instead of inheritance because
-    // inheritance would break the contiguous array layout that Sparse_Set relies
+    // inheritance would break the contiguous array layout that Component_Storage relies
     // on for cache-efficient iteration — virtual tables add per-element overhead
     // and prevent trivial copying.
     //

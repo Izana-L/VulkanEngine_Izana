@@ -13,7 +13,6 @@
 
 // --- Storage infrastructure ---
 #include <Sparse_Array.hpp>
-#include <Sparse_Set.hpp>
 #include <IComponent_Storage.hpp>
 #include <Component_Storage.hpp>
 

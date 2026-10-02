@@ -34,68 +34,59 @@ namespace EngineCore
             const uint32_t next = static_cast<uint32_t>(_value) + 1u;
             return static_cast<ENUM>(next % static_cast<uint32_t>(ENUM::Count));
         }
+
+        // Flips _value when _action was pressed this frame. True if it did.
+        bool Toggle_on_press(const Input_System::Input& _input, size_t _action, bool& _value)
+        {
+            if (!_input.Was_action_pressed(_action))
+                return false;
+
+            _value = !_value;
+            return true;
+        }
+
+        // Moves _value to its next enumerator when _action was pressed this
+        // frame. True if it did.
+        template <typename ENUM>
+        bool Cycle_on_press(const Input_System::Input& _input, size_t _action, ENUM& _value)
+        {
+            if (!_input.Was_action_pressed(_action))
+                return false;
+
+            _value = Next_value(_value);
+            return true;
+        }
+    }
+
+    void Engine_Loop::Bind_actions(const Input_System::Input& _input)
+    {
+        constexpr const char* CONSUMER = "Engine_Loop";
+
+        debug_action_ids.light_culling = _input.Resolve_action_id("DebugLightCulling", CONSUMER);
+        debug_action_ids.cluster_view = _input.Resolve_action_id("DebugClusterView", CONSUMER);
+        debug_action_ids.opaque_path = _input.Resolve_action_id("DebugOpaquePath", CONSUMER);
+        debug_action_ids.freeze_culling = _input.Resolve_action_id("DebugFreezeCulling", CONSUMER);
+        debug_action_ids.show_bounds = _input.Resolve_action_id("DebugShowBounds", CONSUMER);
+        debug_action_ids.stats = _input.Resolve_action_id("DebugStats", CONSUMER);
+        debug_action_ids.isolate_timings = _input.Resolve_action_id("DebugIsolateTimings", CONSUMER);
     }
 
     void Engine_Loop::Handle_debug_input(const Input_System::Input& _input, Renderer_System::Renderer& _renderer)
     {
-        if (!debug_actions_resolved)
-        {
-            debug_action_ids.light_culling = _input.Get_action_id("DebugLightCulling");
-            debug_action_ids.cluster_view = _input.Get_action_id("DebugClusterView");
-            debug_action_ids.opaque_path = _input.Get_action_id("DebugOpaquePath");
-            debug_action_ids.freeze_culling = _input.Get_action_id("DebugFreezeCulling");
-            debug_action_ids.show_bounds = _input.Get_action_id("DebugShowBounds");
-            debug_action_ids.stats = _input.Get_action_id("DebugStats");
-            debug_action_ids.isolate_timings = _input.Get_action_id("DebugIsolateTimings");
-            debug_actions_resolved = true;
-        }
-
         Renderer_System::Render_Debug_Settings settings = _renderer.Get_debug_settings();
+
+        // |= and not ||: every switch is evaluated, since several can be
+        // pressed in the same frame. Light_Culling_Mode has two values, so
+        // cycling it is the switch between clustered and brute force.
         bool changed = false;
 
-        if (_input.Was_action_pressed(debug_action_ids.light_culling))
-        {
-            settings.light_culling = (settings.light_culling == Renderer_System::Light_Culling_Mode::Clustered)
-                ? Renderer_System::Light_Culling_Mode::Brute_Force
-                : Renderer_System::Light_Culling_Mode::Clustered;
-            changed = true;
-        }
-
-        if (_input.Was_action_pressed(debug_action_ids.cluster_view))
-        {
-            settings.cluster_view = Next_value(settings.cluster_view);
-            changed = true;
-        }
-
-        if (_input.Was_action_pressed(debug_action_ids.opaque_path))
-        {
-            settings.opaque_path = Next_value(settings.opaque_path);
-            changed = true;
-        }
-
-        if (_input.Was_action_pressed(debug_action_ids.freeze_culling))
-        {
-            settings.freeze_culling = !settings.freeze_culling;
-            changed = true;
-        }
-
-        if (_input.Was_action_pressed(debug_action_ids.show_bounds))
-        {
-            settings.show_bounds = !settings.show_bounds;
-            changed = true;
-        }
-
-        if (_input.Was_action_pressed(debug_action_ids.stats))
-        {
-            settings.print_stats = !settings.print_stats;
-            changed = true;
-        }
-
-        if (_input.Was_action_pressed(debug_action_ids.isolate_timings))
-        {
-            settings.isolate_gpu_timings = !settings.isolate_gpu_timings;
-            changed = true;
-        }
+        changed |= Cycle_on_press(_input, debug_action_ids.light_culling, settings.light_culling);
+        changed |= Cycle_on_press(_input, debug_action_ids.cluster_view, settings.cluster_view);
+        changed |= Cycle_on_press(_input, debug_action_ids.opaque_path, settings.opaque_path);
+        changed |= Toggle_on_press(_input, debug_action_ids.freeze_culling, settings.freeze_culling);
+        changed |= Toggle_on_press(_input, debug_action_ids.show_bounds, settings.show_bounds);
+        changed |= Toggle_on_press(_input, debug_action_ids.stats, settings.print_stats);
+        changed |= Toggle_on_press(_input, debug_action_ids.isolate_timings, settings.isolate_gpu_timings);
 
         // The Renderer logs every value that changed.
         if (changed)

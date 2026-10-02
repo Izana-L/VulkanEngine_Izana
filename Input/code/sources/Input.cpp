@@ -496,6 +496,19 @@ namespace Input_System
         return (it == action_index.end()) ? INVALID_ACTION : it->second;
     }
 
+    size_t Input::Resolve_action_id(const std::string& _action, const char* _consumer) const
+    {
+        const size_t id = Get_action_id(_action);
+
+        if (id == INVALID_ACTION)
+        {
+            std::cerr << "[Input] " << _consumer << ": action \"" << _action
+                      << "\" is not defined in the input JSON; it will never fire.\n";
+        }
+
+        return id;
+    }
+
     float Input::Get_action_value(size_t _action_id) const
     {
         // INVALID_ACTION is ~0, so it fails this test and returns 0 -

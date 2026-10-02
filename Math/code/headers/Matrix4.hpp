@@ -2,6 +2,7 @@
 
 #include <Matrix.hpp>
 #include <Vector.hpp>
+#include <Vector3.hpp>
 #include <MathConstants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/matrix_inverse.hpp>
@@ -51,17 +52,17 @@ namespace MathLib
 
         // Builds a rotation matrix around the X axis (pitch)
         inline Matrix4 RotationX(float radians) {
-            return glm::rotate(Matrix4(1.0f), radians, glm::vec3(1.0f, 0.0f, 0.0f));
+            return glm::rotate(Matrix4(1.0f), radians, Vec3::UnitX());
         }
 
         // Builds a rotation matrix around the Y axis (yaw)
         inline Matrix4 RotationY(float radians) {
-            return glm::rotate(Matrix4(1.0f), radians, glm::vec3(0.0f, 1.0f, 0.0f));
+            return glm::rotate(Matrix4(1.0f), radians, Vec3::UnitY());
         }
 
         // Builds a rotation matrix around the Z axis (roll)
         inline Matrix4 RotationZ(float radians) {
-            return glm::rotate(Matrix4(1.0f), radians, glm::vec3(0.0f, 0.0f, 1.0f));
+            return glm::rotate(Matrix4(1.0f), radians, Vec3::UnitZ());
         }
 
         // Builds a rotation matrix around an arbitrary axis (Rodrigues formula).
@@ -118,10 +119,50 @@ namespace MathLib
         //   eye    -> where the camera is in world space
         //   center -> the point the camera is looking at
         //   up     -> which direction is "up" for the camera (usually world Y)
-        inline Matrix4 Look_at(const Vector3& eye,
-            const Vector3& center,
-            const Vector3& up) {
-            return glm::lookAt(eye, center, up);
+        // Orthonormal world space basis of a view: the one the view matrix
+        // rotates by, and the one the culling planes are built from.
+        struct View_basis {
+            Vector3 right;
+            Vector3 up;
+            Vector3 forward;
+        };
+
+        // Builds the basis from a view direction and an approximate up:
+        // forward is normalized, right = cross(forward, up) and the up
+        // vector is re-orthogonalized from both. Same math as glm::lookAtRH.
+        // Degenerate when forward is parallel to up (right becomes NaN).
+        inline View_basis Make_view_basis(const Vector3& forward, const Vector3& up) 
+        {
+            View_basis basis;
+            basis.forward = glm::normalize(forward);
+            basis.right = glm::normalize(glm::cross(basis.forward, up));
+            basis.up = glm::cross(basis.right, basis.forward);
+            return basis;
+        }
+
+        // View matrix (right-handed, looking down -Z) from an eye position
+        // and a basis: transforms world space into camera space.
+        inline Matrix4 View_from_basis(const Vector3& eye, const View_basis& basis)
+        {
+            Matrix4 view(1.0f);
+            view[0][0] = basis.right.x;     view[1][0] = basis.right.y;     view[2][0] = basis.right.z;
+            view[0][1] = basis.up.x;        view[1][1] = basis.up.y;        view[2][1] = basis.up.z;
+            view[0][2] = -basis.forward.x;  view[1][2] = -basis.forward.y;  view[2][2] = -basis.forward.z;
+            view[3][0] = -glm::dot(basis.right, eye);
+            view[3][1] = -glm::dot(basis.up, eye);
+            view[3][2] = glm::dot(basis.forward, eye);
+            return view;
+        }
+
+        // Builds a View matrix using the "look at" convention.
+        // Transforms world-space positions into camera space (eye at origin,
+        // looking down -Z). Used to position and orient the camera.
+        //   eye    -> where the camera is in world space
+        //   center -> the point the camera is looking at
+        //   up     -> which direction is "up" for the camera (usually world Y)
+        inline Matrix4 Look_at(const Vector3& eye,const Vector3& center,const Vector3& up) 
+        {
+            return View_from_basis(eye, Make_view_basis(center - eye, up));
         }
 
         // Builds a perspective projection matrix.

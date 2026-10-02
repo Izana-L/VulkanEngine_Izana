@@ -23,20 +23,19 @@ namespace EngineCore
     //   external sorted list, no per-entity pointer chasing.
     //
     // Source of truth: the `parent` field of each Transform_Component
-    //   (written only by Set_parent(), through friendship). The adjacency
-    //   lists kept here (children, roots) are a cache derived from it, and
-    //   they are rebuilt from the components whenever the world's set of
-    //   entities or components changed (World::Get_structural_version) or
-    //   a hierarchy operation ran. As a consequence:
-    //     - an entity that gets a Transform_Component without being
-    //       registered here is still updated (as a root, or under the
-    //       parent its component names);
+    //   (written only by Set_parent(), through friendship). Nothing has to
+    //   be registered here: the hierarchy is rebuilt from the components by
+    //   the next Update() whenever the world's set of entities or
+    //   components changed (World::Get_structural_version) or Set_parent()
+    //   ran. As a consequence:
+    //     - an entity that gets a Transform_Component is updated (as a
+    //       root, or under the parent its component names);
     //     - a cloned entity keeps its source's parent link and is ordered
     //       correctly;
     //     - an entity destroyed through World::Destroy_entity() is pruned
     //       and its children become roots, without any callback.
-    //   Register() / Unregister() therefore only maintain the cache eagerly
-    //   so Get_children() is current between two Update() calls.
+    //   The children lists behind Get_children() are the snapshot taken by
+    //   that rebuild; no operation edits them by hand.
     //
     // Every invariant that keeps the storage reorder valid (the order is a
     // permutation of the storage) is enforced in every build; the storage
@@ -54,35 +53,21 @@ namespace EngineCore
         Transform_System& operator=(const Transform_System&) = delete;
 
         // =========================================================
-        // Registration (optional, see class comment)
-        // =========================================================
-
-        // Adds an entity with a Transform_Component to the hierarchy cache,
-        // as a root or under the parent its component already names.
-        // Idempotent. Throws std::invalid_argument if the entity is not
-        // alive or has no Transform_Component.
-        void Register(ECS::Entity _entity, ECS::World& _world);
-
-        // Detaches an entity from the hierarchy: its children become roots
-        // and it is removed from the cache. Its Transform_Component is left
-        // in place (it will be treated as a root if it stays). No-op if the
-        // entity is unknown.
-        void Unregister(ECS::Entity _entity, ECS::World& _world);
-
-        // =========================================================
         // Hierarchy
         // =========================================================
 
         // Sets _child's parent to _parent.
         // Pass INVALID_ENTITY as _parent to detach (_child becomes a root).
         // Throws std::invalid_argument if either entity is not alive or has
-        // no Transform_Component, or if the link would create a cycle.
+        // no Transform_Component, or if the link would create a cycle
+        // (which includes making an entity its own parent).
         void Set_parent(ECS::Entity _child,
             ECS::Entity _parent,
             ECS::World& _world);
 
-        // Returns the direct children of _entity as of the last Update() or
-        // hierarchy operation (empty if none or unknown).
+        // Returns the direct children of _entity as of the last Update()
+        // (empty if none or unknown). A Set_parent() call or a structural
+        // change of the world shows up from the next Update().
         const std::vector<ECS::Entity>&
             Get_children(ECS::Entity _entity) const;
 
@@ -107,7 +92,12 @@ namespace EngineCore
         // Recomputes local_matrix from position, rotation, scale (TRS).
         static void Compute_local_matrix(ECS::Transform_Component& _transform);
 
-        // Rebuilds children/roots from the components (pruning dead
+        // Makes _transform a root and marks it dirty, so its world matrix is
+        // recomputed without the parent it lost. The one place that cuts a
+        // link: the caller sets order_dirty when the order may be stale.
+        static void Cut_parent_link(ECS::Transform_Component& _transform);
+
+        // Rebuilds the children lists from the components (pruning dead
         // entities and dangling parent links), computes the parent-first
         // order and applies it to the storage.
         void Synchronize(ECS::World& _world);
@@ -116,20 +106,16 @@ namespace EngineCore
         // following the components' parent links.
         static bool Is_same_or_ancestor(ECS::Entity _candidate, ECS::Entity _entity, const ECS::World& _world);
 
-        // Removes _entity from its parent's children list or from roots.
-        void Detach_from_cache(ECS::Entity _entity, ECS::Entity _parent);
-
         // =========================================================
         // Data
         // =========================================================
 
-        // Adjacency list: entity -> direct children.
+        // Adjacency list: entity -> direct children. A snapshot written
+        // only by Synchronize() and read only by Get_children().
         std::unordered_map<ECS::Entity, std::vector<ECS::Entity>> children;
 
-        // Root entities (parent == INVALID_ENTITY).
-        std::vector<ECS::Entity> roots;
-
-        // Set by every hierarchy operation; cleared by Synchronize().
+        // Set by Set_parent() and by the dangling-link defence of Update();
+        // cleared by Synchronize().
         bool order_dirty = true;
 
         // World::Get_structural_version() seen by the last Synchronize().

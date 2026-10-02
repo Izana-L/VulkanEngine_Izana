@@ -25,6 +25,9 @@ namespace MathLib
         inline Vector3 PlaneXY() { return Vector3(1.0f, 1.0f, 0.0f); }
         inline Vector3 PlaneXZ() { return Vector3(1.0f, 0.0f, 1.0f); }
         inline Vector3 PlaneYZ() { return Vector3(0.0f, 1.0f, 1.0f); }
+        inline Vector3 Right() { return UnitX(); }
+        inline Vector3 Up() { return UnitY(); }
+        inline Vector3 Forward() { return -UnitZ(); }
 
         // =========================================================
         // Basic operations

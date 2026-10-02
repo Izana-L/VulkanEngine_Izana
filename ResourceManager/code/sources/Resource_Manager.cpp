@@ -54,7 +54,7 @@ namespace ResourceManager
 
         CoreTypes::Asset_Handle handle;
         handle.id = id;
-        handle.generation = image_id_provider.Generation(id);;
+        handle.generation = image_id_provider.Generation(id);
 
         return handle;
     }

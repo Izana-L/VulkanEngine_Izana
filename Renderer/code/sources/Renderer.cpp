@@ -68,7 +68,7 @@ namespace Renderer_System
             const Matrix4 sheared = Mat4::Scale(2.0f, 1.0f, 1.0f) * Mat4::RotationZ(Constants::QUARTER_PI);
             const Vector4 unit_sphere(0.0f, 0.0f, 0.0f, 1.0f);
 
-            const float extent_x = CoreTypes::Frustum::Ellipsoid_extent(sheared, unit_sphere.w, Vector3(1.0f, 0.0f, 0.0f));
+            const float extent_x = CoreTypes::Frustum::Ellipsoid_extent(sheared, unit_sphere.w, Vec3::UnitX());
 
             // Only plane 0 is set: zero planes contain everything.
             CoreTypes::Frustum frustum;

@@ -131,6 +131,11 @@ namespace EngineCore
         // Load action bindings from JSON.
         input.Load_actions("../../Input/jsons/default_input_actions.json");
 
+        // Load_actions() rebuilds the action table, so the consumers resolve
+        // their action names after it, and never before.
+        camera_controller.Bind_actions(input);
+        loop.Bind_actions(input);
+
         std::cout << "[Engine] All subsystems initialized.\n";
     }
 
@@ -220,8 +225,6 @@ namespace EngineCore
         world.Add_component<ECS::Transform_Component>(entity).Set_position(_position);
         world.Add_component<ECS::Mesh_Component>(entity, ECS::Mesh_Component(_mesh));
 
-        transform_system.Register(entity, world);
-
         return entity;
     }
 
@@ -239,8 +242,6 @@ namespace EngineCore
 
         world.Add_component<ECS::Camera_Component>(camera_entity,
             ECS::Camera_Component::Make_perspective());
-
-        transform_system.Register(camera_entity, world);
 
         std::cout << "[Engine] Camera entity created (id=" << camera_entity << ").\n";
 
@@ -315,8 +316,6 @@ namespace EngineCore
             ECS::Light_Component::Make_directional(
                 { 1.0f, 0.98f, 0.95f },   // warm white sunlight
                 1.0f));
-
-        transform_system.Register(light_entity, world);
 
         std::cout << "[Engine] Directional light entity created (id="
             << light_entity << ").\n";
@@ -434,8 +433,6 @@ namespace EngineCore
 
             world.Add_component<ECS::Transform_Component>(light_entity).Set_position({ x, y, z });
             world.Add_component<ECS::Light_Component>(light_entity, ECS::Light_Component::Make_point(color, intensity, range));
-
-            transform_system.Register(light_entity, world);
         }
 
         std::cout << "[Engine] Test scene: " << (TEST_GRID_SIDE * TEST_GRID_SIDE) << " objects (" << transparent_objects
@@ -537,7 +534,6 @@ namespace EngineCore
             parent_transform.Set_position({ 0.0f, 3.6f, -3.0f });
             parent_transform.Set_scale({ 2.0f, 1.0f, 1.0f });
         }
-        transform_system.Register(parent, world);
 
         // Child: the mesh, rotated 45 degrees about Z in the parent's
         // space. World = parent world * local: scale (2, 1, 1) applied after

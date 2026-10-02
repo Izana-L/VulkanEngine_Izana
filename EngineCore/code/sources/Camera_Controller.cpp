@@ -12,24 +12,25 @@
 namespace EngineCore
 {
 
+    void Camera_Controller::Bind_actions(const Input_System::Input& _input)
+    {
+        constexpr const char* CONSUMER = "Camera_Controller";
+
+        ids.move_forward = _input.Resolve_action_id("MoveForward", CONSUMER);
+        ids.move_back = _input.Resolve_action_id("MoveBack", CONSUMER);
+        ids.move_right = _input.Resolve_action_id("MoveRight", CONSUMER);
+        ids.move_left = _input.Resolve_action_id("MoveLeft", CONSUMER);
+        ids.move_up = _input.Resolve_action_id("MoveUp", CONSUMER);
+        ids.move_down = _input.Resolve_action_id("MoveDown", CONSUMER);
+        ids.sprint = _input.Resolve_action_id("Sprint", CONSUMER);
+        ids.toggle_camera = _input.Resolve_action_id("ToggleCamera", CONSUMER);
+    }
+
     void Camera_Controller::Update(ECS::Entity _camera_entity,
         Input_System::Input& _input,
         ECS::World& _world,
         float         _dt)
     {
-        if (!ids_resolved)
-        {
-            ids.move_forward = _input.Get_action_id("MoveForward");
-            ids.move_back = _input.Get_action_id("MoveBack");
-            ids.move_right = _input.Get_action_id("MoveRight");
-            ids.move_left = _input.Get_action_id("MoveLeft");
-            ids.move_up = _input.Get_action_id("MoveUp");
-            ids.move_down = _input.Get_action_id("MoveDown");
-            ids.sprint = _input.Get_action_id("Sprint");
-            ids.toggle_camera = _input.Get_action_id("ToggleCamera");
-            ids_resolved = true;
-        }
-
         ECS::Transform_Component* transform = _world.Try_get_component<ECS::Transform_Component>(_camera_entity);
 
         if (!transform) return;
