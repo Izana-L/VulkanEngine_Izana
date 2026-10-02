@@ -1,6 +1,9 @@
 #ifndef BINDLESS_GLSL
 #define BINDLESS_GLSL
 
+// Set and binding numbers shared with C++.
+#include "gpu_shared.h"
+
 // Set 3: global, bound once per frame and never changed. Two unsized
 // arrays, which require runtimeDescriptorArray (Vulkan_Device enables it
 // and only selects devices that support it):
@@ -38,8 +41,8 @@
 // subgroup, and without the qualifier the driver may read the wrong
 // descriptor on part of the pixels. On a uniform value its cost is
 // minimal.
-layout(set = 3, binding = 0) uniform texture2D textures[];
-layout(set = 3, binding = 1) uniform sampler   samplers[];
+layout(set = GPU_SET_BINDLESS, binding = GPU_BINDING_BINDLESS_TEXTURES) uniform texture2D textures[];
+layout(set = GPU_SET_BINDLESS, binding = GPU_BINDING_BINDLESS_SAMPLERS) uniform sampler   samplers[];
 
 // Samples texture `texture_index` with sampler `sampler_index`.
 // nonuniformEXT is applied here, on the three places that need it: both

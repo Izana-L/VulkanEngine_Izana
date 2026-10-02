@@ -93,15 +93,34 @@ namespace Renderer_System
         Draw_Bucket_GPU  draw_buckets[MAX_DRAW_BUCKETS];
     };
 
-    static_assert(sizeof(Frame_UBO) == 336 + 16 * MAX_DRAW_BUCKETS, "Frame_UBO breaks the std140 layout of frame_set.glsl");
+    // The planes and the buckets are sized by the macros the shader uses for
+    // its arrays (gpu_shared.h), so the end of the block follows them in
+    // both languages: 256 bytes of fixed fields, then the planes, then the
+    // buckets.
+    static_assert(sizeof(Frame_UBO) == 256 + 16 * FRUSTUM_PLANE_COUNT + 16 * MAX_DRAW_BUCKETS, "Frame_UBO breaks the std140 layout of frame_set.glsl");
     static_assert(offsetof(Frame_UBO, view_projection) == 128, "Frame_UBO breaks the std140 layout of frame_set.glsl");
     static_assert(offsetof(Frame_UBO, camera_position) == 192, "Frame_UBO breaks the std140 layout of frame_set.glsl");
     static_assert(offsetof(Frame_UBO, light_count) == 204, "Frame_UBO breaks the std140 layout of frame_set.glsl");
+
+    // uvec4 cluster_grid: x, y, z, w
     static_assert(offsetof(Frame_UBO, cluster_tiles_x) == 208, "Frame_UBO breaks the std140 layout of frame_set.glsl");
+    static_assert(offsetof(Frame_UBO, cluster_tiles_y) == 212, "Frame_UBO breaks the std140 layout of frame_set.glsl");
+    static_assert(offsetof(Frame_UBO, cluster_slices) == 216, "Frame_UBO breaks the std140 layout of frame_set.glsl");
+    static_assert(offsetof(Frame_UBO, directional_light_count) == 220, "Frame_UBO breaks the std140 layout of frame_set.glsl");
+
+    // vec4 cluster_params: x, y, z, w
     static_assert(offsetof(Frame_UBO, render_width) == 224, "Frame_UBO breaks the std140 layout of frame_set.glsl");
+    static_assert(offsetof(Frame_UBO, render_height) == 228, "Frame_UBO breaks the std140 layout of frame_set.glsl");
+    static_assert(offsetof(Frame_UBO, cluster_slice_scale) == 232, "Frame_UBO breaks the std140 layout of frame_set.glsl");
+    static_assert(offsetof(Frame_UBO, cluster_slice_bias) == 236, "Frame_UBO breaks the std140 layout of frame_set.glsl");
+
+    // uvec4 debug_params: x, y, z
     static_assert(offsetof(Frame_UBO, light_culling_mode) == 240, "Frame_UBO breaks the std140 layout of frame_set.glsl");
+    static_assert(offsetof(Frame_UBO, cluster_debug_view) == 244, "Frame_UBO breaks the std140 layout of frame_set.glsl");
+    static_assert(offsetof(Frame_UBO, heatmap_max_lights) == 248, "Frame_UBO breaks the std140 layout of frame_set.glsl");
+
     static_assert(offsetof(Frame_UBO, frustum_planes) == 256, "Frame_UBO breaks the std140 layout of frame_set.glsl");
-    static_assert(offsetof(Frame_UBO, draw_buckets) == 336, "Frame_UBO breaks the std140 layout of frame_set.glsl");
+    static_assert(offsetof(Frame_UBO, draw_buckets) == 256 + 16 * FRUSTUM_PLANE_COUNT, "Frame_UBO breaks the std140 layout of frame_set.glsl");
 
     // Mirror of `Procedural_Push_Constants` in procedural.comp. Compute
     // stage only: declared in the compute pipeline layout, never in the
@@ -115,6 +134,7 @@ namespace Renderer_System
     };
     static_assert(sizeof(Procedural_Push_Constants) == 16, "Procedural_Push_Constants breaks the layout of procedural.comp");
     static_assert(offsetof(Procedural_Push_Constants, image_width) == 0, "Procedural_Push_Constants breaks the layout of procedural.comp");
+    static_assert(offsetof(Procedural_Push_Constants, image_height) == 4, "Procedural_Push_Constants breaks the layout of procedural.comp");
     static_assert(offsetof(Procedural_Push_Constants, time) == 8, "Procedural_Push_Constants breaks the layout of procedural.comp");
     static_assert(sizeof(Procedural_Push_Constants) <= COMPUTE_PUSH_CONSTANT_SIZE, "Procedural_Push_Constants exceeds the compute push constant range");
 
@@ -129,6 +149,10 @@ namespace Renderer_System
         uint32_t light_count;             // = Frame_UBO::light_count
     };
     static_assert(sizeof(Cluster_Push_Constants) == 16, "Cluster_Push_Constants breaks the layout of cluster_lights.comp");
+    static_assert(offsetof(Cluster_Push_Constants, cluster_count) == 0, "Cluster_Push_Constants breaks the layout of cluster_lights.comp");
+    static_assert(offsetof(Cluster_Push_Constants, light_index_capacity) == 4, "Cluster_Push_Constants breaks the layout of cluster_lights.comp");
+    static_assert(offsetof(Cluster_Push_Constants, first_local_light) == 8, "Cluster_Push_Constants breaks the layout of cluster_lights.comp");
+    static_assert(offsetof(Cluster_Push_Constants, light_count) == 12, "Cluster_Push_Constants breaks the layout of cluster_lights.comp");
     static_assert(sizeof(Cluster_Push_Constants) <= COMPUTE_PUSH_CONSTANT_SIZE, "Cluster_Push_Constants exceeds the compute push constant range");
 
     // Mirror of `Cull_Push_Constants` in cull_objects.comp. 16 bytes.
@@ -142,19 +166,24 @@ namespace Renderer_System
         uint32_t frustum_culling;    // 0: every active object gets a command (compaction only)
     };
     static_assert(sizeof(Cull_Push_Constants) == 16, "Cull_Push_Constants breaks the layout of cull_objects.comp");
+    static_assert(offsetof(Cull_Push_Constants, object_count) == 0, "Cull_Push_Constants breaks the layout of cull_objects.comp");
+    static_assert(offsetof(Cull_Push_Constants, command_capacity) == 4, "Cull_Push_Constants breaks the layout of cull_objects.comp");
+    static_assert(offsetof(Cull_Push_Constants, pass_bit) == 8, "Cull_Push_Constants breaks the layout of cull_objects.comp");
+    static_assert(offsetof(Cull_Push_Constants, frustum_culling) == 12, "Cull_Push_Constants breaks the layout of cull_objects.comp");
     static_assert(sizeof(Cull_Push_Constants) <= COMPUTE_PUSH_CONSTANT_SIZE, "Cull_Push_Constants exceeds the compute push constant range");
 
-    // Bits of Object_GPU::flags. Mirrored by the OBJECT_FLAG_* constants of
-    // scene_data.glsl.
+    // Bits of Object_GPU::flags. The values are the GPU_OBJECT_FLAG_* macros
+    // of gpu_shared.h, which the OBJECT_FLAG_* constants of scene_data.glsl
+    // are built from too.
     namespace Object_Flag
     {
         // Bits 0-7: the CoreTypes::Render_Pass_Bit mask of the draw item.
-        inline constexpr uint32_t Pass_Mask = 0xFFu;
+        inline constexpr uint32_t Pass_Mask = GPU_OBJECT_FLAG_PASS_MASK;
 
         // The entry describes an object to draw this frame. The culling
         // pass skips entries without it, so an object can be disabled on
         // the GPU without compacting the buffer.
-        inline constexpr uint32_t Active = 1u << 8;
+        inline constexpr uint32_t Active = GPU_OBJECT_FLAG_ACTIVE;
 
         // The upper 3x3 of the model matrix has a negative determinant
         // (a negative scale on an odd number of axes, or a reflection): the
@@ -163,12 +192,12 @@ namespace Renderer_System
         // every entry, and the reason the opaque objects are grouped by
         // (pipeline, winding). Shaders that use the sign of the tangent
         // frame (normal mapping) must flip the bitangent when it is set.
-        inline constexpr uint32_t Mirrored = 1u << 9;
+        inline constexpr uint32_t Mirrored = GPU_OBJECT_FLAG_MIRRORED;
 
         // Bits 10-17: index of the draw bucket of an opaque object on the
         // GPU paths (Draw_Bucket_GPU); 0 elsewhere.
-        inline constexpr uint32_t Bucket_Shift = 10;
-        inline constexpr uint32_t Bucket_Mask = 0xFFu;
+        inline constexpr uint32_t Bucket_Shift = GPU_OBJECT_FLAG_BUCKET_SHIFT;
+        inline constexpr uint32_t Bucket_Mask = GPU_OBJECT_FLAG_BUCKET_MASK;
 
         // The flags bits of bucket _index.
         inline constexpr uint32_t Make_bucket_bits(uint32_t _index)
@@ -231,7 +260,9 @@ namespace Renderer_System
     };
     static_assert(sizeof(Mesh_Info_GPU) == 32, "Mesh_Info_GPU breaks the std430 layout of mesh_table.glsl");
     static_assert(offsetof(Mesh_Info_GPU, first_index) == 16, "Mesh_Info_GPU breaks the std430 layout of mesh_table.glsl");
+    static_assert(offsetof(Mesh_Info_GPU, index_count) == 20, "Mesh_Info_GPU breaks the std430 layout of mesh_table.glsl");
     static_assert(offsetof(Mesh_Info_GPU, vertex_offset) == 24, "Mesh_Info_GPU breaks the std430 layout of mesh_table.glsl");
+    static_assert(offsetof(Mesh_Info_GPU, vertex_count) == 28, "Mesh_Info_GPU breaks the std430 layout of mesh_table.glsl");
 
     // Mirror of `Cluster_AABB` in cluster_data.glsl (std430): the view
     // space box of one cluster (w unused). Built on the CPU

@@ -21,7 +21,13 @@
 // cluster behind the cone still gets the light), correct, and the cone is
 // applied by the fragment shader anyway. A light with a range of zero or
 // less reaches no cluster.
-layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+//
+// The local size is GPU_CLUSTER_GROUP_SIZE (common/gpu_shared.h), the divisor
+// of the CPU dispatch (Renderer_System::Dispatch_group_count). The header is
+// included here, before the layout, because the size is read right below.
+#include "common/gpu_shared.h"
+
+layout(local_size_x = GPU_CLUSTER_GROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
 
 #define CLUSTER_DATA_WRITABLE
 #include "common/frame_set.glsl"
@@ -38,7 +44,7 @@ layout(push_constant) uniform Cluster_Push_Constants
 
 // Set 0, binding 5 (Binding_Per_Frame::Cluster_Counters). EXACT mirror of
 // Renderer_System::Cluster_Counters_GPU. Reset to zero every frame.
-layout(set = 0, binding = 5, std430) buffer Cluster_Counters
+layout(set = GPU_SET_PER_FRAME, binding = GPU_BINDING_CLUSTER_COUNTERS, std430) buffer Cluster_Counters
 {
     uint light_index_count;      // entries requested this frame, may exceed the capacity
     uint dropped_light_count;    // entries that did not fit
@@ -48,7 +54,7 @@ layout(set = 0, binding = 5, std430) buffer Cluster_Counters
 
 // Set 1, binding 1 (Binding_Per_Pass::Cluster_AABBs): view space boxes,
 // built on the CPU when the projection changes.
-layout(set = 1, binding = 1, std430) readonly buffer Cluster_AABB_Buffer
+layout(set = GPU_SET_PER_PASS, binding = GPU_BINDING_CLUSTER_AABBS, std430) readonly buffer Cluster_AABB_Buffer
 {
     Cluster_AABB aabbs[];
 } cluster_aabbs;

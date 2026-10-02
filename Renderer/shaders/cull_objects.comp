@@ -30,7 +30,13 @@
 //
 // The frustum test is optional (Cull_Push_Constants::frustum_culling): with
 // it off the pass only compacts the active objects into their buckets.
-layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+//
+// The local size is GPU_CULL_GROUP_SIZE (common/gpu_shared.h), the divisor of
+// the CPU dispatch (Renderer_System::Dispatch_group_count). The header is
+// included here, before the layout, because the size is read right below.
+#include "common/gpu_shared.h"
+
+layout(local_size_x = GPU_CULL_GROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
 
 #include "common/frame_set.glsl"
 #include "common/scene_data.glsl"
@@ -59,7 +65,7 @@ struct Draw_Command
 // Set 0, binding 6 (Binding_Per_Frame::Draw_Commands). The commands of
 // bucket b occupy [frame.draw_buckets[b].first_command,
 // first_command + capacity).
-layout(set = 0, binding = 6, std430) writeonly buffer Draw_Command_Buffer
+layout(set = GPU_SET_PER_FRAME, binding = GPU_BINDING_DRAW_COMMANDS, std430) writeonly buffer Draw_Command_Buffer
 {
     Draw_Command commands[];
 } draw_commands;
@@ -67,7 +73,7 @@ layout(set = 0, binding = 6, std430) writeonly buffer Draw_Command_Buffer
 // Set 0, binding 7 (Binding_Per_Frame::Draw_Count). EXACT mirror of
 // Renderer_System::Draw_Count_GPU: the count buffers of the indirect
 // draws, one counter per bucket, and the total of all of them.
-layout(set = 0, binding = 7, std430) buffer Draw_Count
+layout(set = GPU_SET_PER_FRAME, binding = GPU_BINDING_DRAW_COUNT, std430) buffer Draw_Count
 {
     uint total_draw_count;
     uint _pad0;

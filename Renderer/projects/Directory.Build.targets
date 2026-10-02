@@ -55,8 +55,10 @@
     <!-- One item per shader stage; each produces <file>.<stage>.spv. -->
     <RendererShaderStage Include="$(RendererShaderDir)*.vert;$(RendererShaderDir)*.frag;$(RendererShaderDir)*.comp" />
 
-    <!-- Files included by the stages (#include "common/..."). -->
-    <RendererShaderInclude Include="$(RendererShaderDir)common\**\*.glsl" />
+    <!-- Files included by the stages (#include "common/..."). The *.h is
+         common/gpu_shared.h, the constants shared with C++: editing it must
+         recompile every stage like editing a *.glsl does. -->
+    <RendererShaderInclude Include="$(RendererShaderDir)common\**\*.glsl;$(RendererShaderDir)common\**\*.h" />
   </ItemGroup>
 
   <Target Name="Compile_Renderer_Shaders"

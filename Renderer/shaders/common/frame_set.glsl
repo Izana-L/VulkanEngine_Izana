@@ -1,6 +1,9 @@
 #ifndef FRAME_SET_GLSL
 #define FRAME_SET_GLSL
 
+// Set and binding numbers, array sizes and enum values shared with C++.
+#include "gpu_shared.h"
+
 // EXACT mirror of Renderer_System::Frame_UBO (Gpu_Layouts.hpp), std140.
 // A field added here and not there (or the other way round) shifts every
 // following offset without any warning. Both are edited in the same
@@ -32,10 +35,10 @@
 //                        the draw command buffer and how many commands it
 //                        holds. The bucket of an object is in its flags
 //                        (scene_data.glsl).
-const int FRUSTUM_PLANE_COUNT = 5;
+const int FRUSTUM_PLANE_COUNT = GPU_FRUSTUM_PLANE_COUNT;
 
-// Mirror of Renderer_System::MAX_DRAW_BUCKETS (Renderer_Limits.hpp).
-const int MAX_DRAW_BUCKETS = 32;
+// Renderer_System::MAX_DRAW_BUCKETS (Renderer_Limits.hpp): the same macro.
+const int MAX_DRAW_BUCKETS = GPU_MAX_DRAW_BUCKETS;
 
 // EXACT mirror of Renderer_System::Draw_Bucket_GPU, std140, 16 bytes.
 struct Draw_Bucket
@@ -46,7 +49,7 @@ struct Draw_Bucket
     uint _pad1;
 };
 
-layout(set = 0, binding = 0, std140) uniform Frame_UBO
+layout(set = GPU_SET_PER_FRAME, binding = GPU_BINDING_FRAME_UBO, std140) uniform Frame_UBO
 {
     mat4  view;
     mat4  projection;
@@ -60,15 +63,17 @@ layout(set = 0, binding = 0, std140) uniform Frame_UBO
     Draw_Bucket draw_buckets[MAX_DRAW_BUCKETS];
 } frame;
 
-// Values of debug_params.x, mirror of Renderer_System::Light_Culling_Mode.
-const uint LIGHT_CULLING_CLUSTERED   = 0u;   // directional lights + the list of the fragment's cluster
-const uint LIGHT_CULLING_BRUTE_FORCE = 1u;   // every light of the buffer (reference)
+// Values of debug_params.x: Renderer_System::Light_Culling_Mode, built from
+// the same macros (gpu_shared.h).
+const uint LIGHT_CULLING_CLUSTERED   = GPU_LIGHT_CULLING_CLUSTERED;     // directional lights + the list of the fragment's cluster
+const uint LIGHT_CULLING_BRUTE_FORCE = GPU_LIGHT_CULLING_BRUTE_FORCE;   // every light of the buffer (reference)
 
-// Values of debug_params.y, mirror of Renderer_System::Cluster_Debug_View.
-const uint CLUSTER_VIEW_NONE          = 0u;
-const uint CLUSTER_VIEW_LIGHT_HEATMAP = 1u;
-const uint CLUSTER_VIEW_DEPTH_SLICES  = 2u;
-const uint CLUSTER_VIEW_CLUSTERS      = 3u;
+// Values of debug_params.y: Renderer_System::Cluster_Debug_View, built from
+// the same macros (gpu_shared.h).
+const uint CLUSTER_VIEW_NONE          = GPU_CLUSTER_VIEW_NONE;
+const uint CLUSTER_VIEW_LIGHT_HEATMAP = GPU_CLUSTER_VIEW_LIGHT_HEATMAP;
+const uint CLUSTER_VIEW_DEPTH_SLICES  = GPU_CLUSTER_VIEW_DEPTH_SLICES;
+const uint CLUSTER_VIEW_CLUSTERS      = GPU_CLUSTER_VIEW_CLUSTERS;
 
 // EXACT mirror of CoreTypes::GPU_Light (RenderPacket.hpp), std430.
 struct Light
@@ -95,7 +100,7 @@ const int LIGHT_TYPE_SPOT        = 2;
 //
 // Order: the frame.cluster_grid.w directional lights first, then the
 // point and spot lights (Renderer::Write_frame_uniforms).
-layout(set = 0, binding = 1, std430) readonly buffer Light_Buffer
+layout(set = GPU_SET_PER_FRAME, binding = GPU_BINDING_LIGHTS, std430) readonly buffer Light_Buffer
 {
     Light lights[];
 } light_buffer;

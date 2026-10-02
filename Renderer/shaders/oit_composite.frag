@@ -1,4 +1,7 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
+
+#include "common/gpu_shared.h"
 
 // Composite of the weighted blended OIT (subpass 2 of the render pass).
 //
@@ -13,8 +16,8 @@
 // Set 1 of the graphics pipeline layout (Binding_Graphics_Pass). The
 // input_attachment_index is the position in the pInputAttachments of the
 // composite subpass (Vulkan_Render_Pass): 0 = accumulation, 1 = revealage.
-layout(input_attachment_index = 0, set = 1, binding = 0) uniform subpassInput oit_accumulation;
-layout(input_attachment_index = 1, set = 1, binding = 1) uniform subpassInput oit_revealage;
+layout(input_attachment_index = 0, set = GPU_SET_PER_PASS, binding = GPU_BINDING_OIT_ACCUMULATION) uniform subpassInput oit_accumulation;
+layout(input_attachment_index = 1, set = GPU_SET_PER_PASS, binding = GPU_BINDING_OIT_REVEALAGE) uniform subpassInput oit_revealage;
 
 layout(location = 0) out vec4 out_color;
 

@@ -38,6 +38,15 @@ namespace Renderer_System
         static_assert(FRUSTUM_PLANE_COUNT == CoreTypes::Frustum::PLANE_COUNT,
             "Frame_UBO::frustum_planes and CoreTypes::Frustum must hold the same planes");
 
+        // CoreTypes does not include gpu_shared.h: the pass bits of
+        // Object_GPU::flags are the macros the shaders read
+        // (RENDER_PASS_* of scene_data.glsl), so the CoreTypes enum must
+        // agree with them.
+        static_assert(CoreTypes::Render_Pass_Bit::Opaque == GPU_RENDER_PASS_OPAQUE,
+            "CoreTypes::Render_Pass_Bit::Opaque and RENDER_PASS_OPAQUE of the shaders must be the same bit");
+        static_assert(CoreTypes::Render_Pass_Bit::Transparent == GPU_RENDER_PASS_TRANSPARENT,
+            "CoreTypes::Render_Pass_Bit::Transparent and RENDER_PASS_TRANSPARENT of the shaders must be the same bit");
+
 #ifndef NDEBUG
         // Debug self-check of the culling test (CoreTypes::Frustum::
         // Intersects_ellipsoid), on a case whose result is known: a mesh
@@ -248,7 +257,7 @@ namespace Renderer_System
         pipeline_layout(device, descriptor_layouts),
         pipeline_registry(device, render_pass, pipeline_cache.Get_handle(), pipeline_layout.Get_handle()),
         compute_pipeline_layout(device, descriptor_layouts, Pipeline_Kind::Compute, VK_SHADER_STAGE_COMPUTE_BIT, COMPUTE_PUSH_CONSTANT_SIZE),
-        procedural_pipeline(device, pipeline_cache.Get_handle(), compute_pipeline_layout.Get_handle(), "..\\..\\Renderer\\shaders\\compiled\\procedural.comp.spv"),
+        procedural_pipeline(device, pipeline_cache.Get_handle(), compute_pipeline_layout.Get_handle(), "..\\..\\Renderer\\shaders\\compiled\\Procedural.comp.spv"),
         cull_pipeline(device, pipeline_cache.Get_handle(), compute_pipeline_layout.Get_handle(), "..\\..\\Renderer\\shaders\\compiled\\cull_objects.comp.spv"),
         light_clusters(device, allocator.Get_handle(), pipeline_cache.Get_handle(), compute_pipeline_layout.Get_handle()),
         opaque_config(Make_opaque_config()),

@@ -2,13 +2,17 @@
 
 #include <cstdint>
 
+// The values the shaders also need (draw buckets, frustum planes, workgroup
+// sizes) are macros of this file: one definition for C++ and GLSL.
+#include "../../shaders/common/gpu_shared.h"
+
 namespace Renderer_System
 {
 
     // Capacities and constants shared by the Renderer, the GPU layouts and
     // the shaders. Plain values only: this header depends on nothing but
-    // <cstdint>, so pure CPU code (Cluster_Grid, tests) can use it without
-    // pulling in Vulkan.
+    // <cstdint> and gpu_shared.h (macros), so pure CPU code (Cluster_Grid,
+    // tests) can use it without pulling in Vulkan.
 
     // Capacity of the per-frame light buffer. The shader reads an
     // unsized array, so raising this touches only the C++ side.
@@ -36,7 +40,11 @@ namespace Renderer_System
     // buckets than this draws its opaque objects on the CPU path instead.
     // The bucket index of an object travels in 8 bits of Object_GPU::flags,
     // so it cannot exceed 256.
-    static constexpr uint32_t MAX_DRAW_BUCKETS = 32;
+    //
+    // The shaders size Frame_UBO::draw_buckets and Draw_Count::bucket_draw_count
+    // with the same macro (GPU_MAX_DRAW_BUCKETS, gpu_shared.h): raising it
+    // here without touching the shaders is not possible any more.
+    static constexpr uint32_t MAX_DRAW_BUCKETS = GPU_MAX_DRAW_BUCKETS;
 
     // Capacity of the material table (set 2). Append-only: a slot, once
     // written, never changes. Slot 0 is CoreTypes::Default_Material.
@@ -94,13 +102,42 @@ namespace Renderer_System
     static constexpr uint32_t COMPUTE_PUSH_CONSTANT_SIZE = 16;
 
     // =========================================================
+    // Compute dispatch
+    // =========================================================
+
+    // Local size (local_size_x, and _y for the procedural pass) of each
+    // compute shader. They come from the macros the shaders use for their
+    // layout(local_size_*), so a dispatch can no longer be computed with a
+    // size the shader does not have.
+    static constexpr uint32_t CULL_GROUP_SIZE = GPU_CULL_GROUP_SIZE;               // cull_objects.comp
+    static constexpr uint32_t CLUSTER_GROUP_SIZE = GPU_CLUSTER_GROUP_SIZE;         // cluster_lights.comp
+    static constexpr uint32_t PROCEDURAL_GROUP_SIZE = GPU_PROCEDURAL_GROUP_SIZE;   // Procedural.comp
+
+    // Workgroups needed to cover _invocation_count invocations of groups of
+    // _group_size: the count rounded up, the dispatch size of a pass with one
+    // invocation per element. The shader discards the invocations past the
+    // last element (the groups are whole).
+    inline constexpr uint32_t Dispatch_group_count(uint32_t _invocation_count, uint32_t _group_size)
+    {
+        return _invocation_count / _group_size + ((_invocation_count % _group_size) != 0u ? 1u : 0u);
+    }
+
+    static_assert(Dispatch_group_count(0, 64) == 0);
+    static_assert(Dispatch_group_count(1, 64) == 1);
+    static_assert(Dispatch_group_count(64, 64) == 1);
+    static_assert(Dispatch_group_count(65, 64) == 2);
+    static_assert(Dispatch_group_count(256, 8) == 32);
+
+    // =========================================================
     // Culling
     // =========================================================
 
     // Planes of the culling frustum carried by Frame_UBO; the same count as
     // CoreTypes::Frustum (left, right, bottom, top, near; no far plane).
-    // The equality is asserted where both are visible, next to the copy of
-    // the planes into Frame_UBO (Renderer.cpp).
-    static constexpr uint32_t FRUSTUM_PLANE_COUNT = 5;
+    // The shaders size Frame_UBO::frustum_planes with the same macro
+    // (GPU_FRUSTUM_PLANE_COUNT, gpu_shared.h). The equality with
+    // CoreTypes::Frustum is asserted where both are visible, next to the copy
+    // of the planes into Frame_UBO (Renderer.cpp).
+    static constexpr uint32_t FRUSTUM_PLANE_COUNT = GPU_FRUSTUM_PLANE_COUNT;
 
 } // namespace Renderer_System

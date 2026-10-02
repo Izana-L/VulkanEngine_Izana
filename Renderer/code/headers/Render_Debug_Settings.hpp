@@ -2,6 +2,9 @@
 
 #include <cstdint>
 
+// Values of the enums the shaders read (Light_Culling_Mode, Cluster_Debug_View).
+#include "../../shaders/common/gpu_shared.h"
+
 namespace Renderer_System
 {
 
@@ -9,21 +12,24 @@ namespace Renderer_System
     // with no dependency on Vulkan: EngineCore reads and writes them
     // through Renderer::Get_debug_settings / Set_debug_settings.
 
-    // How mesh.frag selects the lights of a fragment. Mirrored by the
-    // LIGHT_CULLING_* constants of frame_set.glsl.
+    // How mesh.frag selects the lights of a fragment. The values are the
+    // GPU_LIGHT_CULLING_* macros of gpu_shared.h, which the
+    // LIGHT_CULLING_* constants of frame_set.glsl are built from too.
     //   Clustered   - directional lights, then the list of the fragment's
     //                 cluster.
     //   Brute_Force - every light of the buffer: the reference the
     //                 clustered path must match.
     enum class Light_Culling_Mode : uint32_t
     {
-        Clustered = 0,
-        Brute_Force = 1,
+        Clustered = GPU_LIGHT_CULLING_CLUSTERED,
+        Brute_Force = GPU_LIGHT_CULLING_BRUTE_FORCE,
         Count
     };
 
     // Debug views of the cluster grid, drawn by mesh.frag instead of the
-    // lit color. Mirrored by the CLUSTER_VIEW_* constants of frame_set.glsl.
+    // lit color. The values are the GPU_CLUSTER_VIEW_* macros of
+    // gpu_shared.h, which the CLUSTER_VIEW_* constants of frame_set.glsl are
+    // built from too.
     //   None          - normal shading;
     //   Light_Heatmap - number of lights of the fragment's cluster
     //                   (blue = few, red = Frame_UBO::heatmap_max_lights or
@@ -35,10 +41,10 @@ namespace Renderer_System
     //                   combined with the slices.
     enum class Cluster_Debug_View : uint32_t
     {
-        None = 0,
-        Light_Heatmap = 1,
-        Depth_Slices = 2,
-        Clusters = 3,
+        None = GPU_CLUSTER_VIEW_NONE,
+        Light_Heatmap = GPU_CLUSTER_VIEW_LIGHT_HEATMAP,
+        Depth_Slices = GPU_CLUSTER_VIEW_DEPTH_SLICES,
+        Clusters = GPU_CLUSTER_VIEW_CLUSTERS,
         Count
     };
 

@@ -1,6 +1,9 @@
 #ifndef MESH_TABLE_GLSL
 #define MESH_TABLE_GLSL
 
+// Set and binding numbers shared with C++.
+#include "gpu_shared.h"
+
 // Mesh table: set 2, binding 1 (Binding_Per_Material::Meshes). One entry
 // per mesh gpu id, written when the mesh is uploaded, indexed by
 // Object::mesh_index. Visible to the vertex and compute stages only.
@@ -19,7 +22,7 @@ struct Mesh_Info
     uint vertex_count;          // offset 28
 };
 
-layout(set = 2, binding = 1, std430) readonly buffer Mesh_Table_Buffer
+layout(set = GPU_SET_PER_MATERIAL, binding = GPU_BINDING_MESHES, std430) readonly buffer Mesh_Table_Buffer
 {
     Mesh_Info meshes[];
 } mesh_table;

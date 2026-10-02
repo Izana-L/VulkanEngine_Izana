@@ -1,6 +1,9 @@
 #ifndef CLUSTER_DATA_GLSL
 #define CLUSTER_DATA_GLSL
 
+// Set and binding numbers shared with C++.
+#include "gpu_shared.h"
+
 // Clustered lighting: the per-cluster light lists of the frame and the
 // mapping from a fragment to its cluster. Requires frame_set.glsl, included
 // before this file.
@@ -37,12 +40,12 @@ struct Cluster_AABB
     vec4 max_point;
 };
 
-layout(set = 0, binding = 3, std430) CLUSTER_DATA_ACCESS buffer Cluster_Grid_Buffer
+layout(set = GPU_SET_PER_FRAME, binding = GPU_BINDING_CLUSTER_GRID, std430) CLUSTER_DATA_ACCESS buffer Cluster_Grid_Buffer
 {
     uvec2 ranges[];
 } cluster_grid;
 
-layout(set = 0, binding = 4, std430) CLUSTER_DATA_ACCESS buffer Cluster_Light_Index_Buffer
+layout(set = GPU_SET_PER_FRAME, binding = GPU_BINDING_CLUSTER_LIGHT_INDICES, std430) CLUSTER_DATA_ACCESS buffer Cluster_Light_Index_Buffer
 {
     uint indices[];
 } cluster_light_indices;

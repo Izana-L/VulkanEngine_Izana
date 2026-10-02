@@ -1,16 +1,21 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 
 // Procedural texture pass (roadmap step 1).
 //
-// One invocation per texel of the target image, in 8x8 workgroups. The
-// Renderer dispatches ceil(width / 8) x ceil(height / 8) groups, so the
-// last row and column of groups may extend past the image: the bounds
-// check below discards those invocations.
+// One invocation per texel of the target image, in square workgroups of
+// GPU_PROCEDURAL_GROUP_SIZE texels per side (common/gpu_shared.h). The
+// Renderer dispatches ceil(width / size) x ceil(height / size) groups
+// (Renderer_System::Dispatch_group_count), so the last row and column of
+// groups may extend past the image: the bounds check below discards those
+// invocations.
 //
 // Milestone 1.2: every texel is written with a fixed color. The image is
 // read by the graphics pipelines through its bindless slot (set 3) after
 // Storage_Image::End_write.
-layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+#include "common/gpu_shared.h"
+
+layout(local_size_x = GPU_PROCEDURAL_GROUP_SIZE, local_size_y = GPU_PROCEDURAL_GROUP_SIZE, local_size_z = 1) in;
 
 // EXACT mirror of Renderer_System::Procedural_Push_Constants (C++), 16
 // bytes, compute stage only. Declared in the compute pipeline layout,
@@ -27,7 +32,7 @@ layout(push_constant) uniform Procedural_Push_Constants
 // (VK_FORMAT_R8G8B8A8_UNORM): with it, writing does not require the
 // shaderStorageImageWriteWithoutFormat feature. writeonly: the pass
 // never reads the previous contents, which Begin_write discards.
-layout(set = 1, binding = 0, rgba8) uniform writeonly image2D procedural_output;
+layout(set = GPU_SET_PER_PASS, binding = GPU_BINDING_PROCEDURAL_OUTPUT, rgba8) uniform writeonly image2D procedural_output;
 
 // Fixed output of milestone 1.2. The image is UNORM, so this value is
 // stored and sampled as linear color: the same bytes in an SRGB texture

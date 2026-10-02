@@ -19,11 +19,9 @@ namespace Renderer_System
 
     namespace
     {
-        // local_size_x of cull_objects.comp.
-        constexpr uint32_t CULL_GROUP_SIZE = 64;
-
-        // local_size_x / local_size_y of procedural.comp.
-        constexpr uint32_t PROCEDURAL_GROUP_SIZE = 8;
+        // The workgroup sizes of the compute passes (CULL_GROUP_SIZE,
+        // PROCEDURAL_GROUP_SIZE) are in Renderer_Limits.hpp, built from the
+        // same macros as the local_size of the shaders.
 
         // Stride of every indirect command buffer: tightly packed
         // VkDrawIndexedIndirectCommand, the layout cull_objects.comp writes.
@@ -130,8 +128,8 @@ namespace Renderer_System
 
             // Rounded up: a size that is not a multiple of the group size
             // still covers every texel; the shader discards the excess.
-            const uint32_t group_count_x = (procedural_extent.width + PROCEDURAL_GROUP_SIZE - 1) / PROCEDURAL_GROUP_SIZE;
-            const uint32_t group_count_y = (procedural_extent.height + PROCEDURAL_GROUP_SIZE - 1) / PROCEDURAL_GROUP_SIZE;
+            const uint32_t group_count_x = Dispatch_group_count(procedural_extent.width, PROCEDURAL_GROUP_SIZE);
+            const uint32_t group_count_y = Dispatch_group_count(procedural_extent.height, PROCEDURAL_GROUP_SIZE);
             vkCmdDispatch(command_buffer, group_count_x, group_count_y, 1);
 
             // GENERAL -> SHADER_READ_ONLY_OPTIMAL, compute writes made
@@ -199,7 +197,7 @@ namespace Renderer_System
             vkCmdPushConstants(command_buffer, compute_pipeline_layout.Get_handle(), VK_SHADER_STAGE_COMPUTE_BIT,
                 0, sizeof(Cull_Push_Constants), &cull_push);
 
-            vkCmdDispatch(command_buffer, (opaque_count + CULL_GROUP_SIZE - 1) / CULL_GROUP_SIZE, 1, 1);
+            vkCmdDispatch(command_buffer, Dispatch_group_count(opaque_count, CULL_GROUP_SIZE), 1, 1);
         }
 
         // -- Compute results -> consumers --

@@ -11,8 +11,9 @@ namespace Renderer_System
 
     namespace
     {
-        // local_size_x of cluster_lights.comp.
-        constexpr uint32_t CLUSTER_GROUP_SIZE = 64;
+        // The workgroup size of cluster_lights.comp (CLUSTER_GROUP_SIZE) is
+        // in Renderer_Limits.hpp, built from the same macro as the
+        // local_size of the shader.
 
         // vkCmdUpdateBuffer accepts at most 65536 bytes per call.
         constexpr VkDeviceSize UPDATE_BUFFER_MAX_BYTES = 65536;
@@ -116,7 +117,7 @@ namespace Renderer_System
         vkCmdPushConstants(_command_buffer, _compute_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Cluster_Push_Constants), &push);
 
         // One invocation per cluster, rounded up to whole groups.
-        vkCmdDispatch(_command_buffer, (CLUSTER_COUNT + CLUSTER_GROUP_SIZE - 1) / CLUSTER_GROUP_SIZE, 1, 1);
+        vkCmdDispatch(_command_buffer, Dispatch_group_count(CLUSTER_COUNT, CLUSTER_GROUP_SIZE), 1, 1);
     }
 
 } // namespace Renderer_System
