@@ -71,8 +71,8 @@ namespace Renderer_System
     // without recreating the buffers.
     //
     // One index type for every mesh (VK_INDEX_TYPE_UINT32): a bound index
-    // buffer has a single index type, so the 16-bit indices a mesh may
-    // carry are widened at upload.
+    // buffer has a single index type, so every mesh carries uint32_t
+    // indices (a glTF with 16-bit indices is widened when it is loaded).
     //
     // One vertex format per pool: meshes with another vertex layout (a
     // skinned mesh, a debug vertex) need a pool of their own.

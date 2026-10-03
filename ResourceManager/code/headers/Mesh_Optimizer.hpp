@@ -121,9 +121,6 @@ namespace ResourceManager::Mesh_Optimizer
     // of the same geometry. index_count never changes; vertex_count can
     // only shrink (duplicates merged, unreferenced vertices dropped).
     //
-    // MeshData::index_type is recomputed from the final vertex count so
-    // Mesh_GPU can downcast the index buffer to uint16_t when it fits.
-    //
     // A mesh with no vertices or no indices is returned untouched.
     Optimize_Stats Optimize(CoreTypes::MeshData& _mesh,
         const Optimize_Options& _options = Optimize_Options{});

@@ -18,11 +18,10 @@ namespace ResourceManager::Mesh_Loader
     //   TANGENT     → Vertex_Static_Mesh::tangent    (default: 1,0,0,1 if absent)
     //   COLOR_0     → Vertex_Static_Mesh::color      (default: 1,1,1,1 if absent)
     //
-    // Index type:
-    //   Respects the original index width from the glTF (UINT16 or UINT32).
-    //   Indices are always stored as uint32_t in MeshData::indices regardless,
-    //   but MeshData::index_type reflects the original width so Mesh_GPU can
-    //   convert back to UINT16 at upload time to save GPU memory.
+    // Indices:
+    //   The glTF index width (UNSIGNED_BYTE, UNSIGNED_SHORT or UNSIGNED_INT)
+    //   is widened to uint32_t in MeshData::indices; the original width is
+    //   not kept, because the geometry pool has a single index type.
     //
     // Throws std::runtime_error if the file cannot be opened or parsed,
     // or if a primitive has no POSITION attribute.

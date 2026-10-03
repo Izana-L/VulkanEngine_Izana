@@ -1,18 +1,16 @@
 #pragma once
 
+#include <Asset_Table.hpp>
 #include <Image_Loader.hpp>
 #include <Mesh_Loader.hpp>
 #include <Mesh_Optimizer.hpp>
 #include <Primitive_Builder.hpp>
 #include <Primitive_Desc.hpp>
 #include <Asset_Handle.hpp>
-#include <Id_Provider.hpp>
 #include <ImageData.hpp>
 #include <MeshData.hpp>
 
 #include <cstdint>
-#include <deque>
-#include <limits>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -59,7 +57,7 @@ namespace ResourceManager
         Resource_Manager& operator=(Resource_Manager&&) = default;
 
 
-        static constexpr uint32_t INVALID_GPU_ID = std::numeric_limits<uint32_t>::max();
+        static constexpr uint32_t INVALID_GPU_ID = ResourceManager::INVALID_GPU_ID;
 
         // =========================================================
         // Mesh: file
@@ -98,7 +96,7 @@ namespace ResourceManager
         bool     Is_mesh_handle_valid(CoreTypes::Asset_Handle _handle) const;
 
         // Throws std::invalid_argument for an invalid or stale handle.
-        // The reference stays valid for the lifetime of the manager: mesh
+        // The reference stays valid for the lifetime of the manager: the
         // entries live in a std::deque, which never relocates its elements.
         const CoreTypes::MeshData& Get_mesh_data(CoreTypes::Asset_Handle _handle) const;
 
@@ -137,42 +135,8 @@ namespace ResourceManager
     private:
 
         // =========================================================
-        // Internal types
-        // =========================================================
-        struct Mesh_Entry
-        {
-            CoreTypes::MeshData data;
-            uint32_t            gpu_id = INVALID_GPU_ID;
-            std::string         source;            // path or primitive description
-        };
-
-        struct Image_Entry
-        {
-            CoreTypes::ImageData data;
-            uint32_t             gpu_id = INVALID_GPU_ID;   // bindless texture index
-            std::string          source;
-        };
-
-        // =========================================================
         // Internal helpers
         // =========================================================
-
-        // nullptr for an invalid or stale handle.
-        const Mesh_Entry* Find_mesh_entry(CoreTypes::Asset_Handle _handle) const;
-        Mesh_Entry* Find_mesh_entry(CoreTypes::Asset_Handle _handle);
-        const Image_Entry* Find_image_entry(CoreTypes::Asset_Handle _handle) const;
-        Image_Entry* Find_image_entry(CoreTypes::Asset_Handle _handle);
-
-        // Throwing variants, for accessors that must return a reference.
-        const Mesh_Entry& Get_mesh_entry(CoreTypes::Asset_Handle _handle, const char* _operation) const;
-        Mesh_Entry& Get_mesh_entry(CoreTypes::Asset_Handle _handle, const char* _operation);
-        const Image_Entry& Get_image_entry(CoreTypes::Asset_Handle _handle, const char* _operation) const;
-        Image_Entry& Get_image_entry(CoreTypes::Asset_Handle _handle, const char* _operation);
-
-        // Creates a new mesh entry from ready MeshData, returns its handle.
-        CoreTypes::Asset_Handle Register_mesh(CoreTypes::MeshData&& _data, const std::string& _source);
-
-        CoreTypes::Asset_Handle Register_image(CoreTypes::ImageData&& _data, const std::string& _source);
 
         static std::string Make_image_key(const std::string& _path, CoreTypes::Pixel_Format _format);
 
@@ -180,14 +144,12 @@ namespace ResourceManager
         // Data
         // =========================================================
 
-        // std::deque, not std::vector: Get_mesh_data() hands out references
-        // into this container, and a deque never relocates existing
-        // elements when it grows at the back.
-        CoreTypes::Id_Provider  mesh_id_provider;
-        std::deque<Mesh_Entry>  meshes;
-
-        CoreTypes::Id_Provider  image_id_provider;
-        std::deque<Image_Entry> images;
+        // One table per asset kind: slot storage, handle validation and
+        // gpu id bookkeeping live in Asset_Table. Get_mesh_data() and
+        // Get_image_data() hand out references into these tables, which
+        // stay valid because the tables never relocate their entries.
+        Asset_Table<CoreTypes::MeshData>  meshes{ "mesh" };
+        Asset_Table<CoreTypes::ImageData> images{ "image" };
 
         std::unordered_map<std::string, std::vector<CoreTypes::Asset_Handle>> file_mesh_cache;
         std::unordered_map<uint64_t, CoreTypes::Asset_Handle>                 primitive_cache;

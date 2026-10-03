@@ -39,10 +39,6 @@ namespace ResourceManager::Mesh_Optimizer
         constexpr unsigned int ANALYZER_WARP_SIZE = 0;
         constexpr unsigned int ANALYZER_PRIMGROUP_SIZE = 0;
 
-        // Highest vertex count whose indices still fit in a uint16_t.
-        // 65536 vertices means a maximum index of 65535, which fits.
-        constexpr size_t UINT16_VERTEX_LIMIT = 65536;
-
         // meshoptimizer reads positions as a float3 in the first 12 bytes
         // of each vertex, walked by stride. Vertex_Static_Mesh declares
         // position first, so this is the vertex buffer's base pointer --
@@ -162,15 +158,6 @@ namespace ResourceManager::Mesh_Optimizer
 
             _mesh.vertices.resize(used_vertex_count);
         }
-
-        // ── Index width ───────────────────────────────────────
-        // Mesh_GPU reads index_type to decide whether to downcast the
-        // index buffer to uint16_t at upload time, halving its size.
-        // It has to be recomputed here for two reasons: the remap pass
-        // can push a mesh under the 16-bit limit that did not fit before,
-        // and Primitive_Builder marks everything it generates as UINT32
-        // no matter how small it is.
-        _mesh.index_type = (_mesh.vertices.size() <= UINT16_VERTEX_LIMIT)? CoreTypes::Index_Type::UINT16 : CoreTypes::Index_Type::UINT32;
 
         stats.after = Analyze(_mesh);
 

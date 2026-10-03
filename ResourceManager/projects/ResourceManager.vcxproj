@@ -97,6 +97,7 @@
     <ClCompile Include="..\code\sources\Resource_Manager.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\code\headers\Asset_Table.hpp" />
     <ClInclude Include="..\code\headers\Image_Loader.hpp" />
     <ClInclude Include="..\code\headers\Mesh_Loader.hpp" />
     <ClInclude Include="..\code\headers\Mesh_Optimizer.hpp" />

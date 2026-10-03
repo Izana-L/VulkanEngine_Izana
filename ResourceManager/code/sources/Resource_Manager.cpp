@@ -18,48 +18,6 @@ namespace ResourceManager
     }
 
     // =========================================================
-    // Register_mesh / Register_image: shared entry creation
-    // =========================================================
-
-    CoreTypes::Asset_Handle Resource_Manager::Register_mesh(CoreTypes::MeshData&& _data, const std::string& _source)
-    {
-        const CoreTypes::Id id = mesh_id_provider.Allocate_id();
-
-        if (id >= static_cast<CoreTypes::Id>(meshes.size()))
-            meshes.resize(static_cast<size_t>(id) + 1);
-
-        Mesh_Entry& entry = meshes[id];
-        entry.data = std::move(_data);
-        entry.gpu_id = INVALID_GPU_ID;
-        entry.source = _source;
-
-        CoreTypes::Asset_Handle handle;
-        handle.id = id;
-        handle.generation = mesh_id_provider.Generation(id);
-
-        return handle;
-    }
-
-    CoreTypes::Asset_Handle Resource_Manager::Register_image(CoreTypes::ImageData&& _data, const std::string& _source)
-    {
-        const CoreTypes::Id id = image_id_provider.Allocate_id();
-
-        if (id >= static_cast<CoreTypes::Id>(images.size()))
-            images.resize(static_cast<size_t>(id) + 1);
-
-        Image_Entry& entry = images[id];
-        entry.data = std::move(_data);
-        entry.gpu_id = INVALID_GPU_ID;
-        entry.source = _source;
-
-        CoreTypes::Asset_Handle handle;
-        handle.id = id;
-        handle.generation = image_id_provider.Generation(id);
-
-        return handle;
-    }
-
-    // =========================================================
     // Load_mesh: file, deduplicated
     // =========================================================
 
@@ -81,7 +39,7 @@ namespace ResourceManager
         for (CoreTypes::MeshData& mesh_data : loaded)
         {
             Mesh_Optimizer::Log_stats(Mesh_Optimizer::Optimize(mesh_data), _path);
-            handles.push_back(Register_mesh(std::move(mesh_data), _path));
+            handles.push_back(meshes.Register(std::move(mesh_data), _path));
         }
 
         file_mesh_cache[_path] = handles;
@@ -152,7 +110,7 @@ namespace ResourceManager
 
         Mesh_Optimizer::Log_stats(Mesh_Optimizer::Optimize(mesh_data), source);
 
-        const CoreTypes::Asset_Handle handle = Register_mesh(std::move(mesh_data), source);
+        const CoreTypes::Asset_Handle handle = meshes.Register(std::move(mesh_data), source);
 
         primitive_cache[key] = handle;
 
@@ -167,39 +125,22 @@ namespace ResourceManager
 
     void Resource_Manager::Register_gpu_id(CoreTypes::Asset_Handle _handle, uint32_t _gpu_id)
     {
-        Mesh_Entry& entry = Get_mesh_entry(_handle, "Register_gpu_id");
-
-        if (_gpu_id == INVALID_GPU_ID)
-            throw std::invalid_argument("Resource_Manager::Register_gpu_id: INVALID_GPU_ID is not a valid gpu id");
-
-        if (entry.gpu_id != INVALID_GPU_ID)
-        {
-            throw std::logic_error(
-                "Resource_Manager::Register_gpu_id: mesh " + std::to_string(_handle.id) + " (" + entry.source +
-                ") already has gpu id " + std::to_string(entry.gpu_id) +
-                "; uploading it again would leak the first GPU buffer");
-        }
-
-        entry.gpu_id = _gpu_id;
-
-        std::cout << "[Resource_Manager] gpu_id " << _gpu_id << " registered for mesh id " << _handle.id << "\n";
+        meshes.Register_gpu_id(_handle, _gpu_id, "Register_gpu_id");
     }
 
     uint32_t Resource_Manager::Get_gpu_id(CoreTypes::Asset_Handle _handle) const
     {
-        const Mesh_Entry* entry = Find_mesh_entry(_handle);
-
-        return entry ? entry->gpu_id : INVALID_GPU_ID;
+        return meshes.Get_gpu_id(_handle);
     }
 
     bool Resource_Manager::Is_mesh_handle_valid(CoreTypes::Asset_Handle _handle) const
     {
-        return Find_mesh_entry(_handle) != nullptr;
+        return meshes.Is_valid(_handle);
     }
 
     const CoreTypes::MeshData& Resource_Manager::Get_mesh_data(CoreTypes::Asset_Handle _handle) const
     {
-        return Get_mesh_entry(_handle, "Get_mesh_data").data;
+        return meshes.Get_data(_handle, "Get_mesh_data");
     }
 
     // =========================================================
@@ -219,7 +160,7 @@ namespace ResourceManager
 
         CoreTypes::ImageData image_data = Image_Loader::Load(_path, _format);
 
-        const CoreTypes::Asset_Handle handle = Register_image(std::move(image_data), _path);
+        const CoreTypes::Asset_Handle handle = images.Register(std::move(image_data), _path);
 
         image_cache[key] = handle;
 
@@ -230,38 +171,22 @@ namespace ResourceManager
 
     void Resource_Manager::Register_image_gpu_id(CoreTypes::Asset_Handle _handle, uint32_t _gpu_id)
     {
-        Image_Entry& entry = Get_image_entry(_handle, "Register_image_gpu_id");
-
-        if (_gpu_id == INVALID_GPU_ID)
-            throw std::invalid_argument("Resource_Manager::Register_image_gpu_id: INVALID_GPU_ID is not a valid gpu id");
-
-        if (entry.gpu_id != INVALID_GPU_ID)
-        {
-            throw std::logic_error(
-                "Resource_Manager::Register_image_gpu_id: image " + std::to_string(_handle.id) + " (" + entry.source +
-                ") already has gpu id " + std::to_string(entry.gpu_id));
-        }
-
-        entry.gpu_id = _gpu_id;
-
-        std::cout << "[Resource_Manager] gpu_id " << _gpu_id << " registered for image id " << _handle.id << "\n";
+        images.Register_gpu_id(_handle, _gpu_id, "Register_image_gpu_id");
     }
 
     uint32_t Resource_Manager::Get_image_gpu_id(CoreTypes::Asset_Handle _handle) const
     {
-        const Image_Entry* entry = Find_image_entry(_handle);
-
-        return entry ? entry->gpu_id : INVALID_GPU_ID;
+        return images.Get_gpu_id(_handle);
     }
 
     bool Resource_Manager::Is_image_handle_valid(CoreTypes::Asset_Handle _handle) const
     {
-        return Find_image_entry(_handle) != nullptr;
+        return images.Is_valid(_handle);
     }
 
     const CoreTypes::ImageData& Resource_Manager::Get_image_data(CoreTypes::Asset_Handle _handle) const
     {
-        return Get_image_entry(_handle, "Get_image_data").data;
+        return images.Get_data(_handle, "Get_image_data");
     }
 
     CoreTypes::Asset_Handle Resource_Manager::Register_external_image(const std::string& _name, uint32_t _gpu_id)
@@ -273,7 +198,7 @@ namespace ResourceManager
 
         // Empty ImageData: the pixels exist only on the GPU. The source
         // carries a prefix so logs and errors never mistake it for a path.
-        const CoreTypes::Asset_Handle handle = Register_image(CoreTypes::ImageData{}, "external:" + _name);
+        const CoreTypes::Asset_Handle handle = images.Register(CoreTypes::ImageData{}, "external:" + _name);
 
         Register_image_gpu_id(handle, _gpu_id);
 
@@ -281,74 +206,6 @@ namespace ResourceManager
             << handle.id << " (gpu_id " << _gpu_id << ")\n";
 
         return handle;
-    }
-
-    // =========================================================
-    // Internal helpers
-    // =========================================================
-
-    const Resource_Manager::Mesh_Entry* Resource_Manager::Find_mesh_entry(CoreTypes::Asset_Handle _handle) const
-    {
-        if (!mesh_id_provider.Is_current(_handle.id, _handle.generation)) return nullptr;
-        if (_handle.id >= static_cast<CoreTypes::Id>(meshes.size())) return nullptr;
-
-        return &meshes[_handle.id];
-    }
-
-    Resource_Manager::Mesh_Entry* Resource_Manager::Find_mesh_entry(CoreTypes::Asset_Handle _handle)
-    {
-        return const_cast<Mesh_Entry*>(static_cast<const Resource_Manager*>(this)->Find_mesh_entry(_handle));
-    }
-
-    const Resource_Manager::Image_Entry* Resource_Manager::Find_image_entry(CoreTypes::Asset_Handle _handle) const
-    {
-        if (!image_id_provider.Is_current(_handle.id, _handle.generation)) return nullptr;
-        if (_handle.id >= static_cast<CoreTypes::Id>(images.size())) return nullptr;
-
-        return &images[_handle.id];
-    }
-
-    Resource_Manager::Image_Entry* Resource_Manager::Find_image_entry(CoreTypes::Asset_Handle _handle)
-    {
-        return const_cast<Image_Entry*>(static_cast<const Resource_Manager*>(this)->Find_image_entry(_handle));
-    }
-
-    const Resource_Manager::Mesh_Entry& Resource_Manager::Get_mesh_entry(CoreTypes::Asset_Handle _handle, const char* _operation) const
-    {
-        const Mesh_Entry* entry = Find_mesh_entry(_handle);
-
-        if (!entry)
-        {
-            throw std::invalid_argument(
-                std::string("Resource_Manager::") + _operation + ": mesh handle {id=" + std::to_string(_handle.id) +
-                ", generation=" + std::to_string(_handle.generation) + "} is invalid or stale");
-        }
-
-        return *entry;
-    }
-
-    Resource_Manager::Mesh_Entry& Resource_Manager::Get_mesh_entry(CoreTypes::Asset_Handle _handle, const char* _operation)
-    {
-        return const_cast<Mesh_Entry&>(static_cast<const Resource_Manager*>(this)->Get_mesh_entry(_handle, _operation));
-    }
-
-    const Resource_Manager::Image_Entry& Resource_Manager::Get_image_entry(CoreTypes::Asset_Handle _handle, const char* _operation) const
-    {
-        const Image_Entry* entry = Find_image_entry(_handle);
-
-        if (!entry)
-        {
-            throw std::invalid_argument(
-                std::string("Resource_Manager::") + _operation + ": image handle {id=" + std::to_string(_handle.id) +
-                ", generation=" + std::to_string(_handle.generation) + "} is invalid or stale");
-        }
-
-        return *entry;
-    }
-
-    Resource_Manager::Image_Entry& Resource_Manager::Get_image_entry(CoreTypes::Asset_Handle _handle, const char* _operation)
-    {
-        return const_cast<Image_Entry&>(static_cast<const Resource_Manager*>(this)->Get_image_entry(_handle, _operation));
     }
 
 } // namespace ResourceManager

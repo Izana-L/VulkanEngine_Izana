@@ -1,6 +1,6 @@
 #include <Mesh_Loader.hpp>
 
-#include <tiny_gltf.h>
+#include <Tinygltf_Include.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -19,8 +19,9 @@ namespace ResourceManager::Mesh_Loader
 
     namespace
     {
-        // Dummy image loader registered when TINYGLTF_NO_STB_IMAGE is defined.
-        // tinygltf requires a custom LoadImageData callback in that case.
+        // Image loader registered with tinygltf. Tinygltf_Include.hpp builds
+        // the library without a default one, and loading fails with "No
+        // LoadImageData callback specified" unless a callback is set.
         // Textures are loaded through Image_Loader, not through glTF images,
         // so this callback only has to satisfy the API.
         bool Dummy_load_image(tinygltf::Image* /*_image*/,
@@ -212,8 +213,7 @@ namespace ResourceManager::Mesh_Loader
         // validating that each one addresses an existing vertex.
         std::vector<uint32_t> Read_indices(const tinygltf::Model& _model,
             const tinygltf::Accessor& _accessor,
-            uint32_t                  _vertex_count,
-            CoreTypes::Index_Type& _out_index_type)
+            uint32_t                  _vertex_count)
         {
             const Accessor_Layout layout = Resolve_layout(_model, _accessor, "index buffer");
 
@@ -231,10 +231,7 @@ namespace ResourceManager::Mesh_Loader
             {
             case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
             case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
-                _out_index_type = CoreTypes::Index_Type::UINT16;
-                break;
             case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT:
-                _out_index_type = CoreTypes::Index_Type::UINT32;
                 break;
             default:
                 throw std::runtime_error("Mesh_Loader: unsupported index component type: " +
@@ -370,7 +367,7 @@ namespace ResourceManager::Mesh_Loader
                 throw std::runtime_error("Mesh_Loader: index accessor out of range");
 
             mesh_data.indices = Read_indices(_model, _model.accessors[static_cast<size_t>(_primitive.indices)],
-                vertex_count, mesh_data.index_type);
+                vertex_count);
 
             _out.push_back(std::move(mesh_data));
         }
@@ -388,8 +385,8 @@ namespace ResourceManager::Mesh_Loader
         std::string        error;
         std::string        warning;
 
-        // Register dummy image loader: required when TINYGLTF_NO_STB_IMAGE
-        // is defined. Textures are handled by Image_Loader.
+        // tinygltf has no default image loader (see Tinygltf_Include.hpp);
+        // textures are handled by Image_Loader.
         loader.SetImageLoader(Dummy_load_image, nullptr);
 
         const bool is_glb = _path.size() >= 4 &&

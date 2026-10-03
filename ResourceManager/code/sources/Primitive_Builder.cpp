@@ -232,13 +232,12 @@ namespace ResourceManager::Primitive_Builder
             }
         }
 
-        // Finalizes a mesh: default color + tangents + UINT32 indices, then
-        // validates the geometry contract.
+        // Finalizes a mesh: default color + tangents, then validates the
+        // geometry contract.
         void Finalize(Mesh& _mesh, const char* _name)
         {
             Set_default_color(_mesh);
             Compute_tangents(_mesh);
-            _mesh.index_type = CoreTypes::Index_Type::UINT32;
 
             Validate_geometry(_mesh, _name);
         }

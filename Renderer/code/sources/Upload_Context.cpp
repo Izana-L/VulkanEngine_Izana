@@ -176,10 +176,10 @@ namespace Renderer_System
             vertex_copies.push_back({ vertex_cursor, Geometry_Pool::Vertex_byte_offset(mesh.geometry), vertex_size });
             vertex_cursor += vertex_size;
 
-            // Indices: MeshData keeps them as uint32_t whatever its
-            // index_type says, and the pool has a single index type,
-            // VK_INDEX_TYPE_UINT32, so they are copied unchanged. They stay
-            // local to the mesh: vertexOffset rebases them.
+            // Indices: MeshData keeps them as uint32_t and the pool has a
+            // single index type, VK_INDEX_TYPE_UINT32, so they are copied
+            // unchanged. They stay local to the mesh: vertexOffset rebases
+            // them.
             const VkDeviceSize index_size = mesh_data.indices.size() * sizeof(Geometry_Pool::Index);
             std::memcpy(staging_bytes + index_cursor, mesh_data.indices.data(), static_cast<size_t>(index_size));
 

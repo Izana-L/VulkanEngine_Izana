@@ -31,7 +31,6 @@ namespace Renderer_System
         CoreTypes::MeshData Build_unit_sphere(uint32_t _segments, uint32_t _rings)
         {
             CoreTypes::MeshData mesh;
-            mesh.index_type = CoreTypes::Index_Type::UINT32;
 
             for (uint32_t ring = 0; ring <= _rings; ++ring)
             {
