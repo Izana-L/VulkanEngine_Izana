@@ -5,11 +5,13 @@
 #include <Renderer.hpp>
 #include <Resource_Manager.hpp>
 #include <World.hpp>
+#include <Engine_Config.hpp>
 #include <Transform_System.hpp>
 #include <Camera_Controller.hpp>
 #include <Extractor.hpp>
 #include <Engine_Loop.hpp>
 #include <Entity.hpp>
+#include <Gpu_Assets.hpp>
 #include <Asset_Handle.hpp>
 #include <Material_Component.hpp>
 #include <cstdint>
@@ -38,7 +40,7 @@ namespace EngineCore
     {
     public:
 
-        Engine();
+        explicit Engine(const Engine_Config& _config);
         ~Engine() = default;
 
         Engine(const Engine&) = delete;
@@ -55,7 +57,7 @@ namespace EngineCore
         // =========================================================
         // Subsystems: declaration order = construction order
         // =========================================================
-
+        const Engine_Config config;
         // Layer 0: Foundation
         Platform::Window                    window;
 
@@ -71,6 +73,8 @@ namespace EngineCore
         ECS::Transform_System                    transform_system;
         Camera_Controller                   camera_controller;
         Extractor                           extractor;
+        // Layer 2b: Bridge between the services and the GPU
+        Gpu_Assets                          assets;
 
         // Layer 4: Orchestration
         Engine_Loop                         loop;
@@ -87,21 +91,7 @@ namespace EngineCore
         // Internal helpers
         // =========================================================
 
-        // Bridges ResourceManager (Layer 1, Vulkan-agnostic) and the
-        // Renderer (Layer 2): uploads the asset to the GPU if it has no
-        // gpu id yet and registers the id. A cache hit in the resource
-        // manager therefore never uploads twice: the second caller finds
-        // the id already registered.
-        uint32_t Ensure_mesh_uploaded(CoreTypes::Asset_Handle _mesh);
-        uint32_t Ensure_image_uploaded(CoreTypes::Asset_Handle _image);
-        // Registers _material in the Renderer's material table if it has no
-        // slot yet, stores the slot in _material.gpu_material_id and returns
-        // it. Texture handles are resolved to bindless indices here, once:
-        // an unassigned albedo uses Default_Texture::White, and an assigned
-        // one without a GPU index (never uploaded, or a stale handle) uses
-        // Default_Texture::Error, so the mistake shows up magenta. Equal
-        // materials share one slot (Renderer::Register_material).
-        uint32_t Ensure_material_registered(ECS::Material_Component& _material);
+        
         // Creates an entity with a transform and a mesh at _position, with
         // the mesh uploaded if needed.
         ECS::Entity Spawn_mesh_entity(CoreTypes::Asset_Handle _mesh, const MathLib::Vector3& _position);

@@ -5,6 +5,7 @@
 #include <Mesh_Component.hpp>
 #include <Material_Component.hpp>
 #include <Light_Component.hpp>
+#include <Filesystem.hpp>
 #include <Primitive_Desc.hpp>
 #include <MathConstants.hpp>
 #include <Vector3.hpp>
@@ -108,17 +109,18 @@ namespace EngineCore
     // Constructor: builds subsystems in dependency order
     // =========================================================
 
-    Engine::Engine()
+    Engine::Engine(const Engine_Config& _config)
+        : config(_config)
         // Layer 0: Foundation
-        : window(1280, 720, "Vulkan Engine")
+        , window(config.window.width, config.window.height, config.window.title)
 
         // Layer 1: Services
         , input(window)
         , resources()
 
         // Layer 2: GPU
-        , renderer(window, Select_validation_mode())   // Off in Release; Standard, or Gpu_Assisted with ENGINE_GPU_AV=1, in Debug; degrades if unavailable
-
+        , renderer(window, config.render.validation.value_or(Select_validation_mode()))
+        , assets(resources, renderer)
         // Layer 3: Simulation (no constructor args needed)
         , world()
         , transform_system()
@@ -129,7 +131,7 @@ namespace EngineCore
         , loop()
     {
         // Load action bindings from JSON.
-        input.Load_actions("../../Input/jsons/default_input_actions.json");
+        input.Load_actions(config.input.bindings_path);
 
         // Load_actions() rebuilds the action table, so the consumers resolve
         // their action names after it, and never before.
@@ -166,59 +168,14 @@ namespace EngineCore
     // Upload helpers
     // =========================================================
 
-    uint32_t Engine::Ensure_mesh_uploaded(CoreTypes::Asset_Handle _mesh)
-    {
-        const uint32_t existing = resources.Get_gpu_id(_mesh);
-        if (existing != ResourceManager::Resource_Manager::INVALID_GPU_ID)
-            return existing;
+   
 
-        const uint32_t gpu_id = renderer.Upload_mesh(resources.Get_mesh_data(_mesh));
-        resources.Register_gpu_id(_mesh, gpu_id);
-
-        return gpu_id;
-    }
-
-    uint32_t Engine::Ensure_image_uploaded(CoreTypes::Asset_Handle _image)
-    {
-        const uint32_t existing = resources.Get_image_gpu_id(_image);
-        if (existing != ResourceManager::Resource_Manager::INVALID_GPU_ID)
-            return existing;
-
-        const uint32_t bindless_index = renderer.Upload_texture(resources.Get_image_data(_image));
-        resources.Register_image_gpu_id(_image, bindless_index);
-
-        return bindless_index;
-    }
-
-    uint32_t Engine::Ensure_material_registered(ECS::Material_Component& _material)
-    {
-        if (_material.gpu_material_id != ECS::Material_Component::INVALID_GPU_MATERIAL_ID)
-            return _material.gpu_material_id;
-
-        Renderer_System::Material_Desc desc;
-        desc.base_color = _material.base_color_factor;
-        desc.sampler = _material.sampler;
-
-        // Albedo not assigned: White (the Material_Desc default). Assigned
-        // but with no GPU index (never uploaded, or a stale handle): Error,
-        // so the mistake shows up magenta instead of silently white.
-        if (_material.albedo.Is_valid())
-        {
-            const uint32_t texture_index = resources.Get_image_gpu_id(_material.albedo);
-
-            desc.albedo_texture_index = texture_index != ResourceManager::Resource_Manager::INVALID_GPU_ID
-                                        ? texture_index : Renderer_System::Default_Texture::Error;
-        }
-
-        _material.gpu_material_id = renderer.Register_material(desc);
-
-        return _material.gpu_material_id;
-    }
+   
 
 
     ECS::Entity Engine::Spawn_mesh_entity(CoreTypes::Asset_Handle _mesh, const MathLib::Vector3& _position)
     {
-        Ensure_mesh_uploaded(_mesh);
+  
 
         const ECS::Entity entity = world.Create_entity();
 
@@ -250,7 +207,7 @@ namespace EngineCore
         // constructor: it takes exactly the two parameters a sphere reads,
         // so no value can end up in a field the generator ignores.
         const CoreTypes::Asset_Handle sphere_handle =
-            resources.Create_primitive(ResourceManager::Primitive_Desc::Make_sphere(16, 8));
+            assets.Create_primitive(ResourceManager::Primitive_Desc::Make_sphere(16, 8));
 
         const ECS::Entity sphere_entity = Spawn_mesh_entity(sphere_handle, { 1.5f, 0.0f, 0.0f });
 
@@ -262,10 +219,10 @@ namespace EngineCore
 
         try
         {
-            const CoreTypes::Asset_Handle checker =
-                resources.Load_image("../../Game/assets/textures/uv-checker.png", CoreTypes::Pixel_Format::RGBA8_SRGB);
+            const std::string checker_path =  Platform::Filesystem::Combine_path(config.paths.assets_root, "textures/uv-checker.png");
+            const CoreTypes::Asset_Handle checker = resources.Load_image(checker_path, CoreTypes::Pixel_Format::RGBA8_SRGB);
 
-            Ensure_image_uploaded(checker);
+
             sphere_material.albedo = checker;
         }
         catch (const std::exception& e)
@@ -274,7 +231,7 @@ namespace EngineCore
         }
         // Registered after its texture is uploaded: the albedo handle is
         // resolved to its bindless index at this point, once.
-        Ensure_material_registered(sphere_material);
+        assets.Create_material(sphere_material);
 
         world.Add_component<ECS::Material_Component>(sphere_entity, sphere_material);
 
@@ -283,7 +240,7 @@ namespace EngineCore
         // ── Cube primitive ─────────────────────────────────────
         // Second primitive family (flat faces), so both winding groups of
         // Primitive_Builder are on screen at once.
-        const CoreTypes::Asset_Handle cube_handle =  resources.Create_primitive(ResourceManager::Primitive_Desc::Make_cube());
+        const CoreTypes::Asset_Handle cube_handle =  assets.Create_primitive(ResourceManager::Primitive_Desc::Make_cube());
 
         const ECS::Entity cube_entity = Spawn_mesh_entity(cube_handle, { -1.5f, 0.0f, 0.0f });
 
@@ -293,9 +250,9 @@ namespace EngineCore
         // it follows the same path as the UV checker from
         // Material_Component onwards, with no CPU pixels to upload.
         ECS::Material_Component cube_material;
-        cube_material.albedo = resources.Register_external_image("procedural", renderer.Get_procedural_texture_index());
+        cube_material.albedo = assets.Get_procedural_texture();
 
-        Ensure_material_registered(cube_material);
+        assets.Create_material(cube_material);
 
         world.Add_component<ECS::Material_Component>(cube_entity, cube_material);
 
@@ -330,9 +287,9 @@ namespace EngineCore
 
     void Engine::Setup_test_scene()
     {
-        const CoreTypes::Asset_Handle cube_handle = resources.Create_primitive(ResourceManager::Primitive_Desc::Make_cube());
-        const CoreTypes::Asset_Handle sphere_handle = resources.Create_primitive(ResourceManager::Primitive_Desc::Make_sphere(16, 8));
-        const CoreTypes::Asset_Handle plane_handle = resources.Create_primitive(ResourceManager::Primitive_Desc::Make_plane(1));
+        const CoreTypes::Asset_Handle cube_handle = assets.Create_primitive(ResourceManager::Primitive_Desc::Make_cube());
+        const CoreTypes::Asset_Handle sphere_handle = assets.Create_primitive(ResourceManager::Primitive_Desc::Make_sphere(16, 8));
+        const CoreTypes::Asset_Handle plane_handle = assets.Create_primitive(ResourceManager::Primitive_Desc::Make_plane(1));
 
         const float grid_width = static_cast<float>(TEST_GRID_SIDE - 1) * TEST_GRID_SPACING;
         const float grid_center_z = TEST_GRID_FIRST_Z - 0.5f * grid_width;
@@ -347,7 +304,7 @@ namespace EngineCore
 
             ECS::Material_Component floor_material;
             floor_material.base_color_factor = { 0.55f, 0.55f, 0.55f, 1.0f };
-            Ensure_material_registered(floor_material);
+            assets.Create_material(floor_material);
 
             world.Add_component<ECS::Material_Component>(floor_entity, floor_material);
         }
@@ -361,13 +318,13 @@ namespace EngineCore
         {
             const MathLib::Vector3 tint = MathLib::Vec3::Lerp(Hue_to_rgb(static_cast<float>(i) / static_cast<float>(palette.size())), MathLib::Vector3(1.0f), 0.55f);
             palette[i].base_color_factor = MathLib::Vector4(tint, 1.0f);
-            Ensure_material_registered(palette[i]);
+            assets.Create_material(palette[i]);
         }
 
         // Alpha below one routes the items to the transparent pass.
         ECS::Material_Component glass_material;
         glass_material.base_color_factor = { 0.55f, 0.8f, 1.0f, 0.45f };
-        Ensure_material_registered(glass_material);
+        assets.Create_material(glass_material);
 
         // ── Object grid ────────────────────────────────────────
         // Spheres and cubes alternate. Cubes are stretched vertically by a
@@ -448,8 +405,8 @@ namespace EngineCore
 
     void Engine::Setup_transparency_test()
     {
-        const CoreTypes::Asset_Handle cube_handle = resources.Create_primitive(ResourceManager::Primitive_Desc::Make_cube());
-        const CoreTypes::Asset_Handle sphere_handle = resources.Create_primitive(ResourceManager::Primitive_Desc::Make_sphere(16, 8));
+        const CoreTypes::Asset_Handle cube_handle = assets.Create_primitive(ResourceManager::Primitive_Desc::Make_cube());
+        const CoreTypes::Asset_Handle sphere_handle = assets.Create_primitive(ResourceManager::Primitive_Desc::Make_sphere(16, 8));
 
         // Colors far apart: with equal layers the order does not change the
         // result, and the single glass material of the grid hides any
@@ -459,7 +416,7 @@ namespace EngineCore
             {
                 ECS::Material_Component material;
                 material.base_color_factor = MathLib::Vector4(_color, TEST_OIT_ALPHA);
-                Ensure_material_registered(material);
+                assets.Create_material(material);
                 return material;
             };
 
@@ -524,7 +481,7 @@ namespace EngineCore
 
     void Engine::Setup_shear_test()
     {
-        const CoreTypes::Asset_Handle cube_handle = resources.Create_primitive(ResourceManager::Primitive_Desc::Make_cube());
+        const CoreTypes::Asset_Handle cube_handle = assets.Create_primitive(ResourceManager::Primitive_Desc::Make_cube());
 
         // Parent: a transform only, scaled non-uniformly. Above the
         // transparency test, in front of the grid.
@@ -544,7 +501,7 @@ namespace EngineCore
 
         ECS::Material_Component material;
         material.base_color_factor = { 0.95f, 0.55f, 0.15f, 1.0f };
-        Ensure_material_registered(material);
+        assets.Create_material(material);
 
         world.Add_component<ECS::Material_Component>(child, material);
 

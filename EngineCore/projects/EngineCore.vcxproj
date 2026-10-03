@@ -13,10 +13,13 @@
   <ItemGroup>
     <ClInclude Include="..\code\headers\Camera_Controller.hpp" />
     <ClInclude Include="..\code\headers\Engine.hpp" />
+    <ClInclude Include="..\code\headers\Engine_Config.hpp" />
     <ClInclude Include="..\code\headers\Engine_Loop.hpp" />
     <ClInclude Include="..\code\headers\Extractor.hpp" />
+    <ClInclude Include="..\code\headers\Gpu_Assets.hpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="..\code\headers\Gpu_Assets.cpp" />
     <ClCompile Include="..\code\sources\Camera_Controller.cpp" />
     <ClCompile Include="..\code\sources\Engine.cpp" />
     <ClCompile Include="..\code\sources\Engine_Loop.cpp" />

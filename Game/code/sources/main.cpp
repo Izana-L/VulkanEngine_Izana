@@ -7,7 +7,11 @@ int main()
 {
     try
     {
-        EngineCore::Engine engine;
+        EngineCore::Engine_Config config;
+        config.input.bindings_path = "../../Input/jsons/default_input_actions.json";
+        config.paths.assets_root = "../../Game/assets";
+
+        EngineCore::Engine engine(config);
         engine.Run();
     }
     catch (const std::exception& e)
