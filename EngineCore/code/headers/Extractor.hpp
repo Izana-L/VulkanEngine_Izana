@@ -76,7 +76,7 @@ namespace EngineCore
         bool Extract(const ECS::World& _world,
             const ResourceManager::Resource_Manager& _resources,
             const Extract_Params& _params,
-            CoreTypes::RenderPacket& _out_packet);
+            Renderer_System::RenderPacket& _out_packet);
 
     private:
 

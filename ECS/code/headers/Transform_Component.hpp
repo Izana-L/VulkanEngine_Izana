@@ -9,11 +9,11 @@
 
 #include <cstdint>
 
-namespace EngineCore { class Transform_System; }
+
 
 namespace ECS
 {
-
+    class Transform_System;
     // Transform_Component: stores the position, rotation and scale of an entity
     // in 3D space, plus two cached matrices (local and world) that are
     // recomputed by Transform_System once per frame, never on demand.
@@ -197,7 +197,7 @@ namespace ECS
         // hierarchy for reordering, or world_matrix would silently go stale.
         Entity parent = INVALID_ENTITY;
 
-        friend class EngineCore::Transform_System;
+        friend class Transform_System;
     };
 
 } // namespace ECS

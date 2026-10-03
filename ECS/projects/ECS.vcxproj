@@ -91,6 +91,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\code\sources\ECS_lib.cpp" />
+    <ClCompile Include="..\code\sources\Transform_System.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\code\headers\Camera_Component.hpp" />
@@ -104,6 +105,7 @@
     <ClInclude Include="..\code\headers\Sparse_Array.hpp" />
     <ClInclude Include="..\code\headers\Sparse_Set.hpp" />
     <ClInclude Include="..\code\headers\Transform_Component.hpp" />
+    <ClInclude Include="..\code\headers\Transform_System.hpp" />
     <ClInclude Include="..\code\headers\World.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

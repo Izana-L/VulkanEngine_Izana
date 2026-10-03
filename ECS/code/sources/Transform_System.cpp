@@ -8,15 +8,15 @@
 #include <string>
 #include <unordered_set>
 
-namespace EngineCore
+namespace ECS
 {
 
     namespace
     {
         // Validates the entity for a hierarchy operation.
-        ECS::Transform_Component& Require_transform(ECS::Entity _entity, ECS::World& _world, const char* _operation)
+        Transform_Component& Require_transform(Entity _entity, World& _world, const char* _operation)
         {
-            ECS::Transform_Component* transform = _world.Try_get_component<ECS::Transform_Component>(_entity);
+            Transform_Component* transform = _world.Try_get_component<Transform_Component>(_entity);
 
             if (!transform)
             {
@@ -33,13 +33,13 @@ namespace EngineCore
     // Hierarchy
     // =========================================================
 
-    void Transform_System::Set_parent(ECS::Entity _child,
-        ECS::Entity _parent,
-        ECS::World& _world)
+    void Transform_System::Set_parent(Entity _child,
+        Entity _parent,
+        World& _world)
     {
-        ECS::Transform_Component& child_transform = Require_transform(_child, _world, "Set_parent");
+       Transform_Component& child_transform = Require_transform(_child, _world, "Set_parent");
 
-        if (ECS::Is_valid_entity(_parent))
+        if (Is_valid_entity(_parent))
         {
             Require_transform(_parent, _world, "Set_parent");
 
@@ -65,13 +65,13 @@ namespace EngineCore
         order_dirty = true;
     }
 
-    const std::vector<ECS::Entity>&
-        Transform_System::Get_children(ECS::Entity _entity) const
+    const std::vector<Entity>&
+        Transform_System::Get_children(Entity _entity) const
     {
         auto it = children.find(_entity);
         if (it == children.end())
         {
-            static const std::vector<ECS::Entity> empty;
+            static const std::vector<Entity> empty;
             return empty;
         }
         return it->second;
@@ -81,7 +81,7 @@ namespace EngineCore
     // Per-frame update: single cache-friendly pass
     // =========================================================
 
-    void Transform_System::Update(ECS::World& _world)
+    void Transform_System::Update(World& _world)
     {
         // Any structural change in the world (entities or components
         // created, destroyed, cloned) or any hierarchy operation since the
@@ -92,13 +92,13 @@ namespace EngineCore
         ++update_stamp;
         const uint64_t stamp = update_stamp;
 
-        _world.Each<ECS::Transform_Component>([&](ECS::Entity /*entity*/, ECS::Transform_Component& transform)
+        _world.Each<Transform_Component>([&](Entity /*entity*/, Transform_Component& transform)
         {
-            const ECS::Transform_Component* parent_t = nullptr;
+            const Transform_Component* parent_t = nullptr;
 
             if (transform.Has_parent())
             {
-                parent_t = _world.Try_get_component<ECS::Transform_Component>(transform.parent);
+                parent_t = _world.Try_get_component<Transform_Component>(transform.parent);
 
                 // Cannot happen after Synchronize() (a lost parent is a
                 // structural change), kept as a defence: a dangling link
@@ -131,18 +131,18 @@ namespace EngineCore
     // Internal helpers
     // =========================================================
 
-    void Transform_System::Compute_local_matrix(ECS::Transform_Component& _transform)
+    void Transform_System::Compute_local_matrix(Transform_Component& _transform)
     {
         _transform.local_matrix = MathLib::Mat4::TRS(_transform.position, _transform.rotation, _transform.scale);
     }
 
-    void Transform_System::Cut_parent_link(ECS::Transform_Component& _transform)
+    void Transform_System::Cut_parent_link(Transform_Component& _transform)
     {
         _transform.parent = ECS::INVALID_ENTITY;
         _transform.dirty = true;
     }
 
-    bool Transform_System::Is_same_or_ancestor(ECS::Entity _candidate, ECS::Entity _entity, const ECS::World& _world)
+    bool Transform_System::Is_same_or_ancestor(Entity _candidate, Entity _entity, const World& _world)
     {
         // Bounded by the number of live entities: a chain longer than that
         // can only be a cycle, which this function exists to prevent.
@@ -162,7 +162,7 @@ namespace EngineCore
         return false;
     }
 
-    void Transform_System::Synchronize(ECS::World& _world)
+    void Transform_System::Synchronize(World& _world)
     {
         // ── 1. Rebuild the adjacency lists from the components ────
         // Every entity that has a Transform_Component takes part. A parent
@@ -200,21 +200,21 @@ namespace EngineCore
         children = std::move(new_children);
 
         // ── 2. Parent-first order: iterative DFS from every root ──
-        std::vector<ECS::Entity> new_order;
+        std::vector<Entity> new_order;
         new_order.reserve(transform_count);
 
-        std::unordered_set<ECS::Entity> visited;
+        std::unordered_set<Entity> visited;
         visited.reserve(transform_count);
 
-        std::vector<ECS::Entity> stack;
+        std::vector<Entity> stack;
 
-        for (ECS::Entity root : roots)
+        for (Entity root : roots)
         {
             stack.push_back(root);
 
             while (!stack.empty())
             {
-                const ECS::Entity entity = stack.back();
+                const Entity entity = stack.back();
                 stack.pop_back();
 
                 if (!visited.insert(entity).second) continue;
@@ -238,7 +238,7 @@ namespace EngineCore
         // requires).
         if (new_order.size() != transform_count)
         {
-            _world.Each<ECS::Transform_Component>([&](ECS::Entity entity, ECS::Transform_Component& transform)
+            _world.Each<Transform_Component>([&](Entity entity, Transform_Component& transform)
             {
                 if (visited.count(entity)) return;
 
@@ -252,10 +252,10 @@ namespace EngineCore
         }
 
         // ── 4. Physically reorder the component storage ───────────
-        _world.Reorder_storage<ECS::Transform_Component>(new_order);
+        _world.Reorder_storage<Transform_Component>(new_order);
 
         order_dirty = false;
         seen_world_version = _world.Get_structural_version();
     }
 
-} // namespace EngineCore
+} 

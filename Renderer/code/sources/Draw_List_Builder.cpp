@@ -23,7 +23,7 @@ namespace Renderer_System
         capture_frozen_frustum = true;
     }
 
-    void Draw_List_Builder::Update_culling_frustum(const CoreTypes::Frustum& _view_frustum, bool _freeze)
+    void Draw_List_Builder::Update_culling_frustum(const Frustum& _view_frustum, bool _freeze)
     {
         if (capture_frozen_frustum)
         {
@@ -103,7 +103,7 @@ namespace Renderer_System
         return true;
     }
 
-    void Draw_List_Builder::Build(const CoreTypes::RenderPacket& _packet, Object_GPU* _objects,
+    void Draw_List_Builder::Build(const RenderPacket& _packet, Object_GPU* _objects,
                                   const Mesh_Registry& _meshes, const Pipeline_Registry& _pipelines,
                                   uint32_t _material_count, const Build_Settings& _settings)
     {
@@ -141,9 +141,9 @@ namespace Renderer_System
         // released mesh may already have lost its geometry, and a pipeline
         // of another subpass is invalid in this one. The first invalid item
         // of the session is reported.
-        const auto validate = [&](const CoreTypes::Draw_Item& _item, uint32_t _subpass, uint8_t& _out_pipeline_id) -> bool
+        const auto validate = [&](const Draw_Item& _item, uint32_t _subpass, uint8_t& _out_pipeline_id) -> bool
             {
-                _out_pipeline_id = CoreTypes::Get_pipeline_id(_item.sort_key);
+                _out_pipeline_id = Get_pipeline_id(_item.sort_key);
                 const VkPipeline pipeline = _pipelines.Get_by_id(_out_pipeline_id);
 
                 const bool valid =
@@ -173,7 +173,7 @@ namespace Renderer_System
         // receives as gl_InstanceIndex. No push constants: the shaders read
         // everything per draw from this entry, the material table and the
         // mesh table. Returns the index of the entry.
-        const auto write_object = [&](const CoreTypes::Draw_Item& _item, const MathLib::Matrix4& _model,
+        const auto write_object = [&](const Draw_Item& _item, const MathLib::Matrix4& _model,
                                       bool _mirrored, uint32_t _bucket_bits) -> uint32_t
             {
                 const uint32_t object_index = object_count++;
@@ -197,7 +197,7 @@ namespace Renderer_System
         // the same planes (culling_frustum is what the UBO carries): the
         // mesh bounding sphere placed by the model matrix, an ellipsoid,
         // tested exactly against every plane, shear included.
-        const auto outside_frustum = [&](const CoreTypes::Draw_Item& _item, const MathLib::Matrix4& _model) -> bool
+        const auto outside_frustum = [&](const Draw_Item& _item, const MathLib::Matrix4& _model) -> bool
             {
                 const Mesh_GPU& mesh = _meshes.Get(_item.mesh_gpu_id);
 
@@ -209,9 +209,9 @@ namespace Renderer_System
         // decided from this list, so an invalid item cannot influence them.
         // An item that does not take part in the pass is skipped, so a
         // pass_mask actually selects passes instead of being decoration.
-        for (const CoreTypes::Draw_Item& item : _packet.opaque_items)
+        for (const Draw_Item& item : _packet.opaque_items)
         {
-            if ((item.pass_mask & CoreTypes::Render_Pass_Bit::Opaque) == 0)
+            if ((item.pass_mask & Render_Pass_Bit::Opaque) == 0)
                 continue;
 
             uint8_t pipeline_id = 0;
@@ -222,7 +222,7 @@ namespace Renderer_System
             Valid_Opaque_Item valid;
             valid.item = &item;
             valid.pipeline_id = pipeline_id;
-            valid.mirrored = CoreTypes::Inverts_winding(_packet.transforms[item.transform_idx]);
+            valid.mirrored = Inverts_winding(_packet.transforms[item.transform_idx]);
             valid_opaque.push_back(valid);
         }
 
@@ -260,7 +260,7 @@ namespace Renderer_System
         // -- Opaque items: entries [0, opaque) --
         for (const Valid_Opaque_Item& valid : valid_opaque)
         {
-            const CoreTypes::Draw_Item& item = *valid.item;
+            const Draw_Item& item = *valid.item;
             const MathLib::Matrix4&     model = _packet.transforms[item.transform_idx];
 
             if (cull_opaque_on_cpu && outside_frustum(item, model))
@@ -282,9 +282,9 @@ namespace Renderer_System
 
         // -- Transparent items: entries continue from the opaque ones --
         // The culling pass relies on it: it processes [0, opaque) only.
-        for (const CoreTypes::Draw_Item& item : _packet.transparent_items)
+        for (const Draw_Item& item : _packet.transparent_items)
         {
-            if ((item.pass_mask & CoreTypes::Render_Pass_Bit::Transparent) == 0)
+            if ((item.pass_mask & Render_Pass_Bit::Transparent) == 0)
                 continue;
 
             uint8_t pipeline_id = 0;
@@ -305,7 +305,7 @@ namespace Renderer_System
                 break;
             }
 
-            const bool     mirrored = CoreTypes::Inverts_winding(model);
+            const bool     mirrored = Inverts_winding(model);
             const uint32_t object_index = write_object(item, model, mirrored, 0u);
 
             transparent_draws.push_back({ object_index, item.mesh_gpu_id, pipeline_id, mirrored });

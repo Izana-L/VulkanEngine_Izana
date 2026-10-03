@@ -170,6 +170,7 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
     <ClInclude Include="..\code\headers\Present_Sync.hpp" />
     <ClInclude Include="..\code\headers\Renderer.hpp" />
     <ClInclude Include="..\code\headers\Renderer_Limits.hpp" />
+    <ClInclude Include="..\code\headers\RenderPacket.hpp" />
     <ClInclude Include="..\code\headers\Render_Debug_Settings.hpp" />
     <ClInclude Include="..\code\headers\Sampler_Cache.hpp" />
     <ClInclude Include="..\code\headers\Shader_Stages.hpp" />
@@ -177,6 +178,7 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
     <ClInclude Include="..\code\headers\Texture_GPU.hpp" />
     <ClInclude Include="..\code\headers\Upload_Context.hpp" />
     <ClInclude Include="..\code\headers\Validation_Mode.hpp" />
+    <ClInclude Include="..\code\headers\Vertex_Packing.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Allocator.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Buffer_Utils.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Command_Pool.hpp" />

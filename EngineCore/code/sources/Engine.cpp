@@ -207,7 +207,7 @@ namespace EngineCore
             const uint32_t texture_index = resources.Get_image_gpu_id(_material.albedo);
 
             desc.albedo_texture_index = texture_index != ResourceManager::Resource_Manager::INVALID_GPU_ID
-                                        ? texture_index : CoreTypes::Default_Texture::Error;
+                                        ? texture_index : Renderer_System::Default_Texture::Error;
         }
 
         _material.gpu_material_id = renderer.Register_material(desc);

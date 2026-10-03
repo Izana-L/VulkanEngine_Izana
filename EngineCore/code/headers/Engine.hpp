@@ -68,7 +68,7 @@ namespace EngineCore
 
         // Layer 3: Simulation
         ECS::World                          world;
-        Transform_System                    transform_system;
+        ECS::Transform_System                    transform_system;
         Camera_Controller                   camera_controller;
         Extractor                           extractor;
 

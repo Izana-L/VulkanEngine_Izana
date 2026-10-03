@@ -32,7 +32,7 @@ namespace Renderer_System
     // Record_command_buffer
     // =========================================================
 
-    void Renderer::Impl::Record_command_buffer(Frame_Data& _frame, const CoreTypes::RenderPacket& _packet,
+    void Renderer::Impl::Record_command_buffer(Frame_Data& _frame, const RenderPacket& _packet,
                                                uint32_t _image_index, Frame_Effects& _out_effects)
     {
         const VkCommandBuffer command_buffer = _frame.Get_command_buffer();
@@ -191,7 +191,7 @@ namespace Renderer_System
             Cull_Push_Constants cull_push{};
             cull_push.object_count = opaque_count;
             cull_push.command_capacity = MAX_OBJECTS;
-            cull_push.pass_bit = CoreTypes::Render_Pass_Bit::Opaque;
+            cull_push.pass_bit = Render_Pass_Bit::Opaque;
             cull_push.frustum_culling = draw_list.Is_opaque_culled_on_gpu() ? 1u : 0u;
 
             vkCmdPushConstants(command_buffer, compute_pipeline_layout.Get_handle(), VK_SHADER_STAGE_COMPUTE_BIT,

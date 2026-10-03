@@ -11,7 +11,7 @@
 #include <stdexcept>
 #include <string>
 
-namespace CoreTypes::Vertex_Packing
+namespace Renderer_System
 {
 
     // Vertex_Packing: converts the full-precision CPU vertices
@@ -153,9 +153,9 @@ namespace CoreTypes::Vertex_Packing
         return packed;
     }
 
-    inline Vertex_Static_Mesh Pack(const Vertex_Static_Mesh_CPU& _vertex)
+    inline CoreTypes::Vertex_Static_Mesh Pack(const CoreTypes::Vertex_Static_Mesh_CPU& _vertex)
     {
-        Vertex_Static_Mesh packed;
+        CoreTypes::Vertex_Static_Mesh packed;
         packed.position = _vertex.position;
         packed.normal = Pack_normal(_vertex.normal);
         packed.tangent = Pack_tangent(_vertex.tangent);
@@ -164,9 +164,9 @@ namespace CoreTypes::Vertex_Packing
         return packed;
     }
 
-    inline Vertex_Skinned_Mesh Pack(const Vertex_Skinned_Mesh_CPU& _vertex)
+    inline CoreTypes::Vertex_Skinned_Mesh Pack(const CoreTypes::Vertex_Skinned_Mesh_CPU& _vertex)
     {
-        Vertex_Skinned_Mesh packed;
+        CoreTypes::Vertex_Skinned_Mesh packed;
         packed.position = _vertex.position;
         packed.normal = Pack_normal(_vertex.normal);
         packed.tangent = Pack_tangent(_vertex.tangent);
@@ -177,4 +177,4 @@ namespace CoreTypes::Vertex_Packing
         return packed;
     }
 
-} // namespace CoreTypes::Vertex_Packing
+} 

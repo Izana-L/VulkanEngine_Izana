@@ -265,7 +265,7 @@ namespace Renderer_System
 
     void Renderer::Impl::Upload_default_textures()
     {
-        namespace Default = CoreTypes::Default_Texture;
+        namespace Default = Default_Texture;
 
         // One opaque texel. Mip generation is skipped for 1x1 images
         // (Compute_mip_levels(1, 1) == 1).

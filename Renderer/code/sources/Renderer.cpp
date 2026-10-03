@@ -35,20 +35,20 @@ namespace Renderer_System
     {
         // Frame_UBO::frustum_planes is filled plane by plane from the
         // culling frustum.
-        static_assert(FRUSTUM_PLANE_COUNT == CoreTypes::Frustum::PLANE_COUNT,
-            "Frame_UBO::frustum_planes and CoreTypes::Frustum must hold the same planes");
+        static_assert(FRUSTUM_PLANE_COUNT == Frustum::PLANE_COUNT,
+            "Frame_UBO::frustum_planes and Frustum must hold the same planes");
 
         // CoreTypes does not include gpu_shared.h: the pass bits of
         // Object_GPU::flags are the macros the shaders read
         // (RENDER_PASS_* of scene_data.glsl), so the CoreTypes enum must
         // agree with them.
-        static_assert(CoreTypes::Render_Pass_Bit::Opaque == GPU_RENDER_PASS_OPAQUE,
-            "CoreTypes::Render_Pass_Bit::Opaque and RENDER_PASS_OPAQUE of the shaders must be the same bit");
-        static_assert(CoreTypes::Render_Pass_Bit::Transparent == GPU_RENDER_PASS_TRANSPARENT,
-            "CoreTypes::Render_Pass_Bit::Transparent and RENDER_PASS_TRANSPARENT of the shaders must be the same bit");
+        static_assert(Render_Pass_Bit::Opaque == GPU_RENDER_PASS_OPAQUE,
+            "Render_Pass_Bit::Opaque and RENDER_PASS_OPAQUE of the shaders must be the same bit");
+        static_assert(Render_Pass_Bit::Transparent == GPU_RENDER_PASS_TRANSPARENT,
+            "Render_Pass_Bit::Transparent and RENDER_PASS_TRANSPARENT of the shaders must be the same bit");
 
 #ifndef NDEBUG
-        // Debug self-check of the culling test (CoreTypes::Frustum::
+        // Debug self-check of the culling test (Frustum::
         // Intersects_ellipsoid), on a case whose result is known: a mesh
         // bounding sphere of radius 1 at the origin under a parent scaled
         // (2, 1, 1) and a child rotated 45 degrees about Z. The product has
@@ -68,10 +68,10 @@ namespace Renderer_System
             const Matrix4 sheared = Mat4::Scale(2.0f, 1.0f, 1.0f) * Mat4::RotationZ(Constants::QUARTER_PI);
             const Vector4 unit_sphere(0.0f, 0.0f, 0.0f, 1.0f);
 
-            const float extent_x = CoreTypes::Frustum::Ellipsoid_extent(sheared, unit_sphere.w, Vec3::UnitX());
+            const float extent_x = Frustum::Ellipsoid_extent(sheared, unit_sphere.w, Vec3::UnitX());
 
             // Only plane 0 is set: zero planes contain everything.
-            CoreTypes::Frustum frustum;
+            Frustum frustum;
             frustum.planes[0] = Vector4(1.0f, 0.0f, 0.0f, 1.9f);
 
             const bool partly_inside_kept = frustum.Intersects_ellipsoid(Mat4::Translation(-3.8f, 0.0f, 0.0f) * sheared, unit_sphere);
@@ -494,7 +494,7 @@ namespace Renderer_System
     // Render
     // =========================================================
 
-    void Renderer::Impl::Render(const CoreTypes::RenderPacket& _packet)
+    void Renderer::Impl::Render(const RenderPacket& _packet)
     {
         // Nothing may wait on a device that will never answer.
         Require_not_lost("Render");
@@ -510,7 +510,7 @@ namespace Renderer_System
         }
     }
 
-    void Renderer::Impl::Render_frame(const CoreTypes::RenderPacket& _packet)
+    void Renderer::Impl::Render_frame(const RenderPacket& _packet)
     {
         VkDevice dev = device.Get_logical_device_handle();
 
@@ -672,7 +672,7 @@ namespace Renderer_System
     // Prepare_frame
     // =========================================================
 
-    void Renderer::Impl::Prepare_frame(Frame_Data& _frame, const CoreTypes::RenderPacket& _packet)
+    void Renderer::Impl::Prepare_frame(Frame_Data& _frame, const RenderPacket& _packet)
     {
         draw_list.Update_culling_frustum(_packet.view.frustum, debug_settings.freeze_culling);
 
@@ -841,7 +841,7 @@ namespace Renderer_System
     // Write_frame_uniforms
     // =========================================================
 
-    void Renderer::Impl::Write_frame_uniforms(Frame_Data& _frame, const CoreTypes::RenderPacket& _packet)
+    void Renderer::Impl::Write_frame_uniforms(Frame_Data& _frame, const RenderPacket& _packet)
     {
         Frame_UBO ubo{};
         ubo.view = _packet.view.view;
@@ -869,7 +869,7 @@ namespace Renderer_System
         }
 
         // The packet's array already is the std430 layout of the light
-        // buffer (CoreTypes::GPU_Light) and the Extractor left the
+        // buffer (GPU_Light) and the Extractor left the
         // directional lights first: mesh.frag loops over the first
         // directional_light_count entries, and the cluster pass only
         // distributes the rest. Cutting the array at MAX_LIGHTS therefore
@@ -880,7 +880,7 @@ namespace Renderer_System
         if (light_count > 0)
         {
             std::memcpy(_frame.light_buffer.mapped_ptr, _packet.lights.data(),
-                sizeof(CoreTypes::GPU_Light) * light_count);
+                sizeof(GPU_Light) * light_count);
         }
 
         ubo.light_count = static_cast<int32_t>(light_count);
@@ -910,7 +910,7 @@ namespace Renderer_System
 
         // -- Culling --
         // The frustum of this frame, or the frozen one.
-        const CoreTypes::Frustum& culling_frustum = draw_list.Get_culling_frustum();
+        const Frustum& culling_frustum = draw_list.Get_culling_frustum();
 
         for (uint32_t i = 0; i < FRUSTUM_PLANE_COUNT; ++i)
             ubo.frustum_planes[i] = culling_frustum.planes[i];
@@ -1225,7 +1225,7 @@ namespace Renderer_System
         _out_height = extent.height;
     }
 
-    void Renderer::Render(const CoreTypes::RenderPacket& _packet)
+    void Renderer::Render(const RenderPacket& _packet)
     {
         impl->Render(_packet);
     }

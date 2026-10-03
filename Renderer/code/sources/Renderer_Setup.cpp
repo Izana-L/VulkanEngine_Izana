@@ -203,7 +203,7 @@ namespace Renderer_System
             // the descriptor is written once at startup and the contents
             // change by memcpy. Frame_UBO::light_count says how many entries
             // are valid.
-            light_info.range = sizeof(CoreTypes::GPU_Light) * MAX_LIGHTS;
+            light_info.range = sizeof(GPU_Light) * MAX_LIGHTS;
 
             // Same rule as the lights: the whole capacity. Only the entries
             // written this frame are read, because every draw indexes its own
@@ -431,12 +431,12 @@ namespace Renderer_System
         // something was registered before this call.
         const uint32_t default_slot = Register_material(Material_Desc{});
 
-        if (default_slot != CoreTypes::Default_Material)
+        if (default_slot != Default_Material)
             throw std::logic_error("Renderer: the default material did not land in slot "
-                + std::to_string(CoreTypes::Default_Material) + "; something was registered before it");
+                + std::to_string(Default_Material) + "; something was registered before it");
 
         std::cout << "[Renderer] Material table: " << MAX_MATERIALS << " slots, default material in slot "
-            << CoreTypes::Default_Material << ". Mesh table: " << MAX_MESHES << " entries.\n";
+            << Default_Material << ". Mesh table: " << MAX_MESHES << " entries.\n";
     }
 
     // =========================================================

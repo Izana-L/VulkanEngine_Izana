@@ -116,12 +116,12 @@ namespace Renderer_System
         // one while _freeze is set. The first frame after a capture
         // request provides the frozen planes; later frames keep testing
         // against them while the view moves on.
-        void Update_culling_frustum(const CoreTypes::Frustum& _view_frustum, bool _freeze);
+        void Update_culling_frustum(const Frustum& _view_frustum, bool _freeze);
 
         // Frustum used for culling this frame, on the CPU (transparent
         // items, and opaque ones when the frame falls back to a CPU path)
         // and, through the frame uniforms, on the GPU.
-        const CoreTypes::Frustum& Get_culling_frustum() const { return culling_frustum; }
+        const Frustum& Get_culling_frustum() const { return culling_frustum; }
 
         // =====================================================
         // Lists
@@ -157,8 +157,8 @@ namespace Renderer_System
         // culling frustum get no entry when the CPU culls them (CPU
         // culling, milestone 4.3): always the transparent items, and the
         // opaque ones when no GPU path draws them. Same test as
-        // cull_objects.comp: CoreTypes::Frustum::Intersects_ellipsoid.
-        void Build(const CoreTypes::RenderPacket& _packet, Object_GPU* _objects,
+        // cull_objects.comp: ::Frustum::Intersects_ellipsoid.
+        void Build(const RenderPacket& _packet, Object_GPU* _objects,
                    const Mesh_Registry& _meshes, const Pipeline_Registry& _pipelines,
                    uint32_t _material_count, const Build_Settings& _settings);
 
@@ -200,7 +200,7 @@ namespace Renderer_System
         // A validated opaque item, waiting for the path decision.
         struct Valid_Opaque_Item
         {
-            const CoreTypes::Draw_Item* item = nullptr;
+            const Draw_Item* item = nullptr;
             uint8_t                     pipeline_id = 0;
             bool                        mirrored = false;
             uint32_t                    bucket = 0;   // index in opaque_buckets, on the GPU paths
@@ -226,8 +226,8 @@ namespace Renderer_System
 
         // Frustum used for culling this frame: the packet's, or the frozen
         // one.
-        CoreTypes::Frustum         culling_frustum;
-        CoreTypes::Frustum         frozen_frustum;
+        Frustum         culling_frustum;
+        Frustum         frozen_frustum;
         bool                       capture_frozen_frustum = false;
 
         // Each warning is reported once.

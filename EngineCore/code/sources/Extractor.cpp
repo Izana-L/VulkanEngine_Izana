@@ -37,15 +37,15 @@ namespace EngineCore
         //
         // _right, _up, _forward: orthonormal world space basis of the view,
         // the same one Look_at builds. Order of the planes: left, right,
-        // bottom, top, near (CoreTypes::Frustum).
-        CoreTypes::Frustum Make_camera_frustum(const ECS::Camera_Component& _camera,
+        // bottom, top, near (Renderer_System::Frustum).
+        Renderer_System::Frustum Make_camera_frustum(const ECS::Camera_Component& _camera,
             const MathLib::Vector3& _position,
             const MathLib::Vector3& _right,
             const MathLib::Vector3& _up,
             const MathLib::Vector3& _forward,
             float _aspect)
         {
-            CoreTypes::Frustum frustum;
+            Renderer_System::Frustum frustum;
 
             if (_camera.projection == ECS::Camera_Component::Projection::Perspective)
             {
@@ -83,7 +83,7 @@ namespace EngineCore
     bool Extractor::Extract(const ECS::World& _world,
         const ResourceManager::Resource_Manager& _resources,
         const Extract_Params& _params,
-        CoreTypes::RenderPacket& _out_packet)
+        Renderer_System::RenderPacket& _out_packet)
     {
         // =========================================================
         // Reset packet
@@ -206,9 +206,9 @@ namespace EngineCore
                 // exactly like an untextured, untinted draw. The textures
                 // were resolved to bindless indices at registration, not
                 // here every frame.
-                CoreTypes::Draw_Item item{};
+                Renderer_System::Draw_Item item{};
                 item.mesh_gpu_id = gpu_id;
-                item.material_index = CoreTypes::Default_Material;
+                item.material_index = Renderer_System::Default_Material;
 
                 // Alpha of the material tint: what routes the item to the
                 // opaque or the transparent pass below.
@@ -242,17 +242,17 @@ namespace EngineCore
                 // below their pipeline, so the front face changes as rarely
                 // as possible. Only an ordering hint; the Renderer decides
                 // the winding from the transform itself.
-                const uint8_t winding_bits = CoreTypes::Inverts_winding(transform.world_matrix)
-                    ? CoreTypes::Sort_Key_Mirrored_Bit
+                const uint8_t winding_bits = Renderer_System::Inverts_winding(transform.world_matrix)
+                    ? Renderer_System::Sort_Key_Mirrored_Bit
                     : uint8_t{ 0 };
 
                 // The passes differ only in the pipeline, the pass bit and the
                 // list the item goes to: the key is built the same way.
                 const uint8_t pipeline_id = transparent ? _params.transparent_pipeline_id : _params.opaque_pipeline_id;
 
-                item.pass_mask = transparent ? CoreTypes::Render_Pass_Bit::Transparent : CoreTypes::Render_Pass_Bit::Opaque;
-                item.sort_key = CoreTypes::Make_sort_key(pipeline_id, winding_bits,
-                    static_cast<uint16_t>(gpu_id & 0xFFFF), CoreTypes::Depth_to_sortable_bits(depth));
+                item.pass_mask = transparent ? Renderer_System::Render_Pass_Bit::Transparent : Renderer_System::Render_Pass_Bit::Opaque;
+                item.sort_key = Renderer_System::Make_sort_key(pipeline_id, winding_bits,
+                    static_cast<uint16_t>(gpu_id & 0xFFFF), Renderer_System::Depth_to_sortable_bits(depth));
 
                 (transparent ? _out_packet.transparent_items : _out_packet.opaque_items).push_back(item);
             });
@@ -261,7 +261,7 @@ namespace EngineCore
         _out_packet.transforms = transform_buffer.data();
         _out_packet.transform_count = static_cast<uint32_t>(transform_buffer.size());
 
-        const auto by_key = [](const CoreTypes::Draw_Item& a, const CoreTypes::Draw_Item& b)
+        const auto by_key = [](const Renderer_System::Draw_Item& a, const Renderer_System::Draw_Item& b)
             {
                 return a.sort_key < b.sort_key;
             };
@@ -282,7 +282,7 @@ namespace EngineCore
                 const ECS::Light_Component& light_comp,
                 const ECS::Transform_Component& transform)
             {
-                CoreTypes::GPU_Light gpu_light{};
+                Renderer_System::GPU_Light gpu_light{};
                 gpu_light.color = light_comp.color;
                 gpu_light.intensity = light_comp.intensity;
                 gpu_light.range = light_comp.range;
@@ -324,7 +324,7 @@ namespace EngineCore
         // lights and never a sun.
         const auto first_local = std::stable_partition(
             _out_packet.lights.begin(), _out_packet.lights.end(),
-            [](const CoreTypes::GPU_Light& _light) { return _light.type == 0; });
+            [](const Renderer_System::GPU_Light& _light) { return _light.type == 0; });
 
         _out_packet.directional_light_count =
             static_cast<uint32_t>(first_local - _out_packet.lights.begin());

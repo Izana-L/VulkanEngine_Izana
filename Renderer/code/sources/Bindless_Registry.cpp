@@ -57,7 +57,7 @@ namespace Renderer_System
         // the first slots, so the minimum must leave room beyond them.
         constexpr uint32_t MIN_BINDLESS_TEXTURES = 64;
 
-        static_assert(MIN_BINDLESS_TEXTURES > CoreTypes::Default_Texture::Count,"MIN_BINDLESS_TEXTURES must leave room for real textures after the default ones");
+        static_assert(MIN_BINDLESS_TEXTURES > Default_Texture::Count,"MIN_BINDLESS_TEXTURES must leave room for real textures after the default ones");
 
         struct Array_Sizes
         {
@@ -275,7 +275,7 @@ namespace Renderer_System
         // else, so it is always present by the time a slot can be released;
         // without it, the slot keeps its previous descriptor, which
         // PARTIALLY_BOUND tolerates as long as no shader reads the slot.
-        constexpr uint32_t fallback_index = CoreTypes::Default_Texture::Error;
+        constexpr uint32_t fallback_index = Default_Texture::Error;
 
         if (Is_texture_registered(fallback_index))
             Write_texture_slot(_index, slot_views[fallback_index]);
@@ -317,10 +317,10 @@ namespace Renderer_System
     // ---------- Validate_mutable_slot ----------
     void Bindless_Registry::Validate_mutable_slot(uint32_t _index, const char* _caller) const
     {
-        if (_index < CoreTypes::Default_Texture::Count)
+        if (_index < Default_Texture::Count)
         {
             throw std::invalid_argument(std::string("Bindless_Registry::") + _caller + ": slot " + std::to_string(_index) +
-                                        " holds a default texture (CoreTypes::Default_Texture), which every draw item relies on");
+                                        " holds a default texture (Default_Texture), which every draw item relies on");
         }
 
         if (!Is_texture_registered(_index))

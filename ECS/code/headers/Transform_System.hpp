@@ -7,11 +7,11 @@
 #include <unordered_map>
 #include <vector>
 
-namespace ECS { class World; }
 
-namespace EngineCore
+
+namespace ECS
 {
-
+    class World;
     // Transform_System: recomputes local and world matrices for all entities
     // that have a Transform_Component, in hierarchical order (parents before
     // children), once per frame.
@@ -61,15 +61,12 @@ namespace EngineCore
         // Throws std::invalid_argument if either entity is not alive or has
         // no Transform_Component, or if the link would create a cycle
         // (which includes making an entity its own parent).
-        void Set_parent(ECS::Entity _child,
-            ECS::Entity _parent,
-            ECS::World& _world);
+        void Set_parent(Entity _child, Entity _parent, World& _world);
 
         // Returns the direct children of _entity as of the last Update()
         // (empty if none or unknown). A Set_parent() call or a structural
         // change of the world shows up from the next Update().
-        const std::vector<ECS::Entity>&
-            Get_children(ECS::Entity _entity) const;
+        const std::vector<Entity>& Get_children(Entity _entity) const;
 
         // =========================================================
         // Per-frame update
@@ -81,7 +78,7 @@ namespace EngineCore
         // in parent-before-child order, parent.world_matrix is always
         // valid before the child reads it.
         // Call once per frame after gameplay and before Extract.
-        void Update(ECS::World& _world);
+        void Update(World& _world);
 
     private:
 
@@ -90,21 +87,21 @@ namespace EngineCore
         // =========================================================
 
         // Recomputes local_matrix from position, rotation, scale (TRS).
-        static void Compute_local_matrix(ECS::Transform_Component& _transform);
+        static void Compute_local_matrix(Transform_Component& _transform);
 
         // Makes _transform a root and marks it dirty, so its world matrix is
         // recomputed without the parent it lost. The one place that cuts a
         // link: the caller sets order_dirty when the order may be stale.
-        static void Cut_parent_link(ECS::Transform_Component& _transform);
+        static void Cut_parent_link(Transform_Component& _transform);
 
         // Rebuilds the children lists from the components (pruning dead
         // entities and dangling parent links), computes the parent-first
         // order and applies it to the storage.
-        void Synchronize(ECS::World& _world);
+        void Synchronize(World& _world);
 
         // True if _candidate is _entity itself or one of its ancestors,
         // following the components' parent links.
-        static bool Is_same_or_ancestor(ECS::Entity _candidate, ECS::Entity _entity, const ECS::World& _world);
+        static bool Is_same_or_ancestor(Entity _candidate, Entity _entity, const World& _world);
 
         // =========================================================
         // Data
@@ -112,7 +109,7 @@ namespace EngineCore
 
         // Adjacency list: entity -> direct children. A snapshot written
         // only by Synchronize() and read only by Get_children().
-        std::unordered_map<ECS::Entity, std::vector<ECS::Entity>> children;
+        std::unordered_map<Entity, std::vector<Entity>> children;
 
         // Set by Set_parent() and by the dangling-link defence of Update();
         // cleared by Synchronize().
@@ -126,4 +123,4 @@ namespace EngineCore
         uint64_t update_stamp = 0;
     };
 
-} // namespace EngineCore
+} 

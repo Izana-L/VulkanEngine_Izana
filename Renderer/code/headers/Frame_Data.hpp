@@ -110,7 +110,7 @@ namespace Renderer_System
         // lifetime of this Frame_Data.
         Vulkan_Buffer_Utils::Buffer_Allocation uniform_buffer;
 
-        // MAX_LIGHTS entries of CoreTypes::GPU_Light, storage buffer.
+        // MAX_LIGHTS entries of GPU_Light, storage buffer.
         Vulkan_Buffer_Utils::Buffer_Allocation light_buffer;
 
         // MAX_OBJECTS entries of Object_GPU, storage buffer, persistently
@@ -194,7 +194,7 @@ namespace Renderer_System
             uniform_buffer = Create_buffer(allocator, sizeof(Frame_UBO),
                 VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, Buffer_Access::Cpu_To_Gpu, true);
 
-            light_buffer = Create_buffer(allocator, sizeof(CoreTypes::GPU_Light) * MAX_LIGHTS,
+            light_buffer = Create_buffer(allocator, sizeof(GPU_Light) * MAX_LIGHTS,
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, Buffer_Access::Cpu_To_Gpu, true);
 
             object_buffer = Create_buffer(allocator, sizeof(Object_GPU) * MAX_OBJECTS,

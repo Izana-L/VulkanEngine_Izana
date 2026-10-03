@@ -98,12 +98,12 @@ namespace EngineCore
         Renderer_System::Renderer& _renderer,
         ResourceManager::Resource_Manager& _resources,
         ECS::World& _world,
-        Transform_System& _transform_system,
+        ECS::Transform_System& _transform_system,
         Camera_Controller& _camera_controller,
         Extractor& _extractor,
         ECS::Entity                        _camera_entity)
     {
-        CoreTypes::RenderPacket packet;
+        Renderer_System::RenderPacket packet;
 
         Extract_Params extract_params;
         extract_params.opaque_pipeline_id = _renderer.Get_opaque_pipeline_id();

@@ -303,7 +303,7 @@ namespace Renderer_System
         // the GPU and to the presentation is undone before the exception
         // leaves, so the next call can succeed, unless Is_lost() is true:
         // then it throws at once, every time.
-        void Render(const CoreTypes::RenderPacket& _packet);
+        void Render(const RenderPacket& _packet);
 
         // =========================================================
         // Device loss

@@ -20,7 +20,7 @@ namespace Renderer_System
     struct Material_Desc
     {
         MathLib::Vector4          base_color = { 1.0f, 1.0f, 1.0f, 1.0f };
-        uint32_t                  albedo_texture_index = CoreTypes::Default_Texture::White;
+        uint32_t                  albedo_texture_index = Default_Texture::White;
         CoreTypes::Sampler_Preset sampler = CoreTypes::Sampler_Preset::Linear_Repeat;
 
         bool operator==(const Material_Desc& _other) const

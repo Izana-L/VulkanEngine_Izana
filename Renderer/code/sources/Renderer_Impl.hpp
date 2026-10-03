@@ -358,7 +358,7 @@ namespace Renderer_System
         // material stores as its albedo texture index. Starts at the Error
         // default texture, so a read before Init_procedural_pass() shows
         // magenta instead of an unregistered slot.
-        uint32_t                procedural_texture_index = CoreTypes::Default_Texture::Error;
+        uint32_t                procedural_texture_index = Default_Texture::Error;
 
         // =====================================================
         // Assets
@@ -525,27 +525,27 @@ namespace Renderer_System
         // recreation inside Render is the one at its start, for a pending
         // request the loop did not apply (a safety net for callers that
         // bypass the loop); it never blocks.
-        void Render(const CoreTypes::RenderPacket& _packet);
+        void Render(const RenderPacket& _packet);
 
         // The body of Render; Render adds the marking of a lost device.
-        void Render_frame(const CoreTypes::RenderPacket& _packet);
+        void Render_frame(const RenderPacket& _packet);
 
         // The CPU work of the frame that does not depend on the swapchain
         // image: the culling frustum, the draw lists and the object buffer,
         // the CPU-written indirect commands when the path needs them, and
         // the uniforms. Runs after the wait for the slot.
-        void Prepare_frame(Frame_Data& _frame, const CoreTypes::RenderPacket& _packet);
+        void Prepare_frame(Frame_Data& _frame, const RenderPacket& _packet);
 
         // Copies the packet's view and lights into the frame's mapped
         // buffers, together with the draw buckets of the frame.
-        void Write_frame_uniforms(Frame_Data& _frame, const CoreTypes::RenderPacket& _packet);
+        void Write_frame_uniforms(Frame_Data& _frame, const RenderPacket& _packet);
 
         // Records all render commands for one frame into the command
         // buffer of the given frame slot. Prepare_frame has run. What the
         // recording leaves pending until the submit is described in
         // _out_effects; nothing that means "already on the GPU" changes
         // here.
-        void Record_command_buffer(Frame_Data& _frame, const CoreTypes::RenderPacket& _packet,
+        void Record_command_buffer(Frame_Data& _frame, const RenderPacket& _packet,
                                    uint32_t _image_index, Frame_Effects& _out_effects);
 
         // Submits the recorded command buffer of _frame: waits for the

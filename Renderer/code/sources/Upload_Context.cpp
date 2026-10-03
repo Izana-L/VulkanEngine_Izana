@@ -170,7 +170,7 @@ namespace Renderer_System
             Geometry_Pool::Vertex* const packed = reinterpret_cast<Geometry_Pool::Vertex*>(staging_bytes + vertex_cursor);
 
             for (size_t v = 0; v < mesh_data.vertices.size(); ++v)
-                packed[v] = CoreTypes::Vertex_Packing::Pack(mesh_data.vertices[v]);
+                packed[v] = Pack(mesh_data.vertices[v]);
 
             const VkDeviceSize vertex_size = mesh_data.vertices.size() * sizeof(Geometry_Pool::Vertex);
             vertex_copies.push_back({ vertex_cursor, Geometry_Pool::Vertex_byte_offset(mesh.geometry), vertex_size });

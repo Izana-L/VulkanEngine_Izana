@@ -13,7 +13,7 @@
 #include <type_traits>
 #include <vector>
 
-namespace CoreTypes
+namespace Renderer_System
 {
 
     // =========================================================

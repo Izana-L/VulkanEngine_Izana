@@ -9,11 +9,11 @@ namespace Platform { class Window; }
 namespace Input_System { class Input; }
 namespace Renderer_System { class Renderer; }
 namespace ResourceManager { class Resource_Manager; }
-namespace ECS { class World; }
+namespace ECS { class World; class Transform_System; }
 
 namespace EngineCore
 {
-    class Transform_System;
+    
     class Camera_Controller;
     class Extractor;
 
@@ -62,7 +62,7 @@ namespace EngineCore
             Renderer_System::Renderer& _renderer,
             ResourceManager::Resource_Manager& _resources,
             ECS::World& _world,
-            Transform_System& _transform_system,
+            ECS::Transform_System& _transform_system,
             Camera_Controller& _camera_controller,
             Extractor& _extractor,
             ECS::Entity                        _camera_entity);
