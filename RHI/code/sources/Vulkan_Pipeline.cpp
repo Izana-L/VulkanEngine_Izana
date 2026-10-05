@@ -1,5 +1,4 @@
 #include <Vulkan_Pipeline.hpp>
-#include <Vulkan_Vertex_Layout.hpp>
 #include <Vulkan_Utils.hpp>
 #include <Filesystem.hpp>
 
@@ -34,11 +33,14 @@ namespace Renderer_System
     }
 
     // ---------- Constructor ----------
-    Vulkan_Pipeline::Vulkan_Pipeline(const Vulkan_Device& _device, const Vulkan_Render_Pass& _render_pass, VkPipelineCache _pipeline_cache,
-        VkPipelineLayout _pipeline_layout, Pipeline_Config  _config) : device_handle(_device.Get_logical_device_handle()),pipeline(VK_NULL_HANDLE)
+    Vulkan_Pipeline::Vulkan_Pipeline(const Vulkan_Device& _device, VkRenderPass _render_pass, uint32_t _subpass_count,
+        VkPipelineCache _pipeline_cache, VkPipelineLayout _pipeline_layout, Pipeline_Config _config)
+        : device_handle(_device.Get_logical_device_handle()),pipeline(VK_NULL_HANDLE)
     {
         assert(device_handle != VK_NULL_HANDLE &&
             "Vulkan_Device must be fully constructed before creating a pipeline");
+        assert(_render_pass != VK_NULL_HANDLE &&
+            "Vulkan_Pipeline: the render pass must be created first");
         assert(_pipeline_layout != VK_NULL_HANDLE &&
             "Vulkan_Pipeline: shared pipeline layout must be created first");
         assert(!_config.vertex_shader_path.empty() &&
@@ -52,8 +54,8 @@ namespace Renderer_System
         if (_config.color_attachment_count == 0 || _config.color_attachment_count > Pipeline_Config::MAX_COLOR_ATTACHMENTS)
             throw std::invalid_argument("Pipeline_Config: color_attachment_count must be between 1 and MAX_COLOR_ATTACHMENTS");
 
-        if (_config.subpass >= Render_Subpass::Count)
-            throw std::invalid_argument("Pipeline_Config: subpass is not a subpass of Vulkan_Render_Pass");
+        if (_config.subpass >= _subpass_count)
+            throw std::invalid_argument("Pipeline_Config: subpass is not a subpass of the render pass");
 
         // ---------- Shader modules ----------
         // Owned by RAII guards: if the second module (or anything after it)
@@ -79,20 +81,20 @@ namespace Renderer_System
         };
 
         // ---------- Vertex input ----------
-        // Vertex_Input::None declares no binding and no attribute: the
-        // vertex shader builds its positions from gl_VertexIndex, and the
-        // vertex buffer bound for the meshes is simply not read.
-        auto binding_description = Vulkan_Vertex_Layout::Get_binding_description<CoreTypes::Vertex_Static_Mesh>();
-        auto attribute_descriptions = Vulkan_Vertex_Layout::Get_attribute_descriptions<CoreTypes::Vertex_Static_Mesh>();
-
-        const bool has_vertex_input = _config.vertex_input == Vertex_Input::Static_Mesh;
+        // Described by the config: whoever owns the vertex types maps them
+        // to bindings and attributes. An empty description declares no
+        // binding and no attribute: the vertex shader builds its positions
+        // from gl_VertexIndex, and the vertex buffer bound for the meshes
+        // is simply not read. _config is a copy that outlives the call to
+        // vkCreateGraphicsPipelines, so the pointers stay valid.
+        const Vertex_Input_State& vertex_input = _config.vertex_input;
 
         VkPipelineVertexInputStateCreateInfo vertex_input_info{};
         vertex_input_info.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-        vertex_input_info.vertexBindingDescriptionCount = has_vertex_input ? 1u : 0u;
-        vertex_input_info.pVertexBindingDescriptions = has_vertex_input ? &binding_description : nullptr;
-        vertex_input_info.vertexAttributeDescriptionCount = has_vertex_input ? static_cast<uint32_t>(attribute_descriptions.size()) : 0u;
-        vertex_input_info.pVertexAttributeDescriptions = has_vertex_input ? attribute_descriptions.data() : nullptr;
+        vertex_input_info.vertexBindingDescriptionCount = static_cast<uint32_t>(vertex_input.bindings.size());
+        vertex_input_info.pVertexBindingDescriptions = vertex_input.bindings.empty() ? nullptr : vertex_input.bindings.data();
+        vertex_input_info.vertexAttributeDescriptionCount = static_cast<uint32_t>(vertex_input.attributes.size());
+        vertex_input_info.pVertexAttributeDescriptions = vertex_input.attributes.empty() ? nullptr : vertex_input.attributes.data();
 
         // ---------- Input assembly ----------
         VkPipelineInputAssemblyStateCreateInfo input_assembly{};
@@ -208,7 +210,7 @@ namespace Renderer_System
         pipeline_info.pColorBlendState = &color_blending;
         pipeline_info.pDynamicState = &dynamic_state_info;
         pipeline_info.layout = _pipeline_layout;
-        pipeline_info.renderPass = _render_pass.Get_handle();
+        pipeline_info.renderPass = _render_pass;
         pipeline_info.subpass = _config.subpass;
 
         // The shader modules are destroyed by their guards when this

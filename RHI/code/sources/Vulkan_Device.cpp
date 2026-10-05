@@ -1,7 +1,5 @@
 #include <Vulkan_Device.hpp>
 #include <Vulkan_Utils.hpp>
-#include <Vulkan_Vertex_Layout.hpp>
-#include <Descriptor_Sets.hpp>
 #include <algorithm>
 #include <stdexcept>
 #include <iostream>
@@ -60,7 +58,7 @@ namespace Renderer_System {
             return VK_FORMAT_UNDEFINED;
         }
 
-        std::vector<std::string> Find_missing_requirements(const Device_Support& _support)
+        std::vector<std::string> Find_missing_requirements(const Device_Support& _support, const Device_Requirements& _requirements)
         {
             std::vector<std::string> missing;
 
@@ -123,24 +121,24 @@ namespace Renderer_System {
                 missing.push_back("independentBlend");
 
             if (!_support.vertex_formats)
-                missing.push_back("the vertex buffer formats of Vulkan_Vertex_Layout");
+                missing.push_back("the vertex buffer formats the renderer's vertex layouts use");
 
-            if (_support.max_per_stage_storage_buffers < Required_Storage_Buffers ||
-                _support.max_set_storage_buffers < Required_Storage_Buffers)
+            if (_support.max_per_stage_storage_buffers < _requirements.min_storage_buffers ||
+                _support.max_set_storage_buffers < _requirements.min_storage_buffers)
             {
-                missing.push_back(std::to_string(Required_Storage_Buffers) + " storage buffers per stage and per pipeline layout (reports " +
+                missing.push_back(std::to_string(_requirements.min_storage_buffers) + " storage buffers per stage and per pipeline layout (reports " +
                                   std::to_string(_support.max_per_stage_storage_buffers) + " and " +
                                   std::to_string(_support.max_set_storage_buffers) + ")");
             }
 
-            // Every pipeline layout declares Descriptor_Set::Count sets
-            // (0-3). The specification guarantees at least 4. The value is
-            // the one the instance reports: with GPU-assisted validation,
-            // the layer reports one slot less than the device has, but
-            // Vulkan_Instance only enables GPU-AV when no device would drop
-            // below Descriptor_Set::Count because of it.
-            if (_support.max_bound_descriptor_sets < Descriptor_Set::Count)
-                missing.push_back(std::to_string(Descriptor_Set::Count) + " bindable descriptor sets (reports " +
+            // Every pipeline layout binds min_bound_descriptor_sets sets.
+            // The specification guarantees at least 4. The value is the one
+            // the instance reports: with GPU-assisted validation, the layer
+            // reports one slot less than the device has, but Vulkan_Instance
+            // only enables GPU-AV when no device would drop below
+            // min_bound_descriptor_sets because of it.
+            if (_support.max_bound_descriptor_sets < _requirements.min_bound_descriptor_sets)
+                missing.push_back(std::to_string(_requirements.min_bound_descriptor_sets) + " bindable descriptor sets (reports " +
                                   std::to_string(_support.max_bound_descriptor_sets) + ")");
 
             return missing;
@@ -167,6 +165,11 @@ namespace Renderer_System {
         VkInstance instance_handle = _instance.Get_handle();
         VkSurfaceKHR surface_handle = _surface.Get_handle();
 
+        // What the Renderer asked of the GPU. The instance keeps it, so the
+        // checks of device selection and those of GPU-assisted validation
+        // read the same values.
+        const Device_Requirements& requirements = _instance.Get_requirements();
+
         std::vector<VkPhysicalDevice> available_devices = Enumerate_physical_devices(instance_handle);
             
         if (available_devices.empty())
@@ -182,14 +185,14 @@ namespace Renderer_System {
 
         for (VkPhysicalDevice candidate : available_devices) {
             const Device_Support support = Query_device_support(candidate, surface_handle, _instance);
-            const uint32_t score = Rate_device_suitability(candidate, support);
+            const uint32_t score = Rate_device_suitability(candidate, support, requirements);
             if (score > best_score) {
                 best_score = score;
                 best_device = candidate;
                 best_support = support;
             }
 
-            const std::vector<std::string> missing = Find_missing_requirements(support);
+            const std::vector<std::string> missing = Find_missing_requirements(support, requirements);
             if (!missing.empty()) {
                 VkPhysicalDeviceProperties properties{};
                 vkGetPhysicalDeviceProperties(candidate, &properties);
@@ -278,10 +281,10 @@ namespace Renderer_System {
         // the slot the layer reserves for itself (it sits right above the
         // reported ones), so any value accepted by device selection leaves
         // GPU-AV its own slot; Vulkan_Instance guarantees no device drops
-        // below Descriptor_Set::Count because of it.
+        // below min_bound_descriptor_sets because of it.
         std::cout << "[Vulkan_Device] Bindable descriptor sets: " << best_support.max_bound_descriptor_sets
             << (_instance.Is_gpu_assisted_validation_enabled() ? " (after the slot reserved by GPU-assisted validation)" : "")
-            << " (the engine uses " << Descriptor_Set::Count << ").\n";
+            << " (the engine uses " << requirements.min_bound_descriptor_sets << ").\n";
 
         // ── Extensions ────────────────────────────────────────────
         std::vector<const char*> device_extensions = required_device_extensions;
@@ -650,7 +653,7 @@ namespace Renderer_System {
         support.timeline_semaphore = vulkan12_features.timelineSemaphore == VK_TRUE;
         support.depth_format = Select_float_depth_format(_device);
         support.vertex_formats = true;
-        for (VkFormat format : Vulkan_Vertex_Layout::OPTIONAL_VERTEX_FORMATS)
+        for (VkFormat format : _instance.Get_requirements().vertex_formats)
         {
             VkFormatProperties format_properties{};
             vkGetPhysicalDeviceFormatProperties(_device, format, &format_properties);
@@ -703,12 +706,12 @@ namespace Renderer_System {
     }
 
     // ---------- Is_device_suitable ----------
-    bool Vulkan_Device::Is_device_suitable(const Device_Support& _support) const
+    bool Vulkan_Device::Is_device_suitable(const Device_Support& _support, const Device_Requirements& _requirements) const
     {
         // The requirements and their reasons live in
         // Find_missing_requirements, which also words the error raised
         // when no device qualifies.
-        return Find_missing_requirements(_support).empty();
+        return Find_missing_requirements(_support, _requirements).empty();
     }
 
     // ---------- Find_queue_families ----------
@@ -757,11 +760,11 @@ namespace Renderer_System {
 
     // ---------- Rate_device_suitability ----------
     uint32_t Vulkan_Device::Rate_device_suitability(
-        VkPhysicalDevice _device, const Device_Support& _support) const
+        VkPhysicalDevice _device, const Device_Support& _support, const Device_Requirements& _requirements) const
     {
         assert(_device != VK_NULL_HANDLE);
 
-        if (!Is_device_suitable(_support)) return 0;
+        if (!Is_device_suitable(_support, _requirements)) return 0;
 
         VkPhysicalDeviceProperties properties{};
         vkGetPhysicalDeviceProperties(_device, &properties);

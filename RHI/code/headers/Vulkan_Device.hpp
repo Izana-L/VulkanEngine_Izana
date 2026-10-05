@@ -4,12 +4,13 @@
 
 #include <Vulkan_Instance.hpp>
 #include <Vulkan_Surface.hpp>
-
+#include <Device_Requirements.hpp>
 #include <vector>
 #include <optional>
 #include <string>
 
-namespace Renderer_System {
+namespace Renderer_System 
+{
 
     // Queue_Family_Indices: holds the indices of the queue families this
     // device will use. A GPU exposes several queue "families", each
@@ -291,9 +292,9 @@ namespace Renderer_System {
         // Queries everything Is_device_suitable() and the constructor need.
         Device_Support Query_device_support(VkPhysicalDevice _device, VkSurfaceKHR _surface, const Vulkan_Instance& _instance) const;
 
-        bool             Is_device_suitable(const Device_Support& _support) const;
+        bool             Is_device_suitable(const Device_Support& _support, const Device_Requirements& _requirements) const;
         Queue_Family_Indices Find_queue_families(VkPhysicalDevice _device, VkSurfaceKHR _surface) const;
-        uint32_t         Rate_device_suitability(VkPhysicalDevice _device, const Device_Support& _support) const;
+        uint32_t         Rate_device_suitability(VkPhysicalDevice _device, const Device_Support& _support, const Device_Requirements& _requirements) const;
         void             Log_selected_device(VkPhysicalDevice _device);
     };
 

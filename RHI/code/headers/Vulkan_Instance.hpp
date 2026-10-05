@@ -2,7 +2,7 @@
 
 #include <vulkan/vulkan.h>
 #include <Vulkan_Utils.hpp>
-#include <Validation_Mode.hpp>
+#include <Device_Requirements.hpp>
 #include <atomic>
 #include <memory>
 #include <vector>
@@ -70,6 +70,11 @@ namespace Renderer_System
             std::atomic<bool> gpu_av_problem_reported{ false };
         };
 
+        // What the Renderer asked of the GPU. Kept so that Vulkan_Device,
+        // which receives this instance, reads the same values (see
+        // Get_requirements) and the two can never disagree.
+        Device_Requirements requirements;
+
         VkInstance instance;
         VkDebugUtilsMessengerEXT debug_messenger;
         bool validation_enabled;
@@ -90,15 +95,16 @@ namespace Renderer_System
 
     public:
         // Creates the VkInstance.
-        // _validation_mode should be Standard in Debug builds and Off in
-        // Release (validation layers add CPU overhead and require the
-        // Vulkan SDK to be installed on the machine running the app);
-        // EngineCore selects it that way (Engine.cpp).
+        // _requirements.validation should be Standard in Debug builds and Off
+        // in Release (validation layers add CPU overhead and require the
+        // Vulkan SDK to be installed on the machine running the app); the
+        // Renderer converts the Validation_Mode that EngineCore selects.
         // Gpu_Assisted is reserved for targeted debugging sessions: it
-        // slows every draw noticeably (see Validation_Mode).
+        // slows every draw noticeably (see Validation_Mode.hpp).
+        // The instance keeps a copy of _requirements, see Get_requirements.
         // _application_name / _engine_name are passed to the driver and
         // may be used by some drivers to apply known per-engine optimizations.
-        explicit Vulkan_Instance(Validation_Mode _validation_mode,const std::string& _application_name = "Vulkan Engine", const std::string& _engine_name = "No Engine Name Yet");
+        explicit Vulkan_Instance(const Device_Requirements& _requirements, const std::string& _application_name = "Vulkan Engine", const std::string& _engine_name = "No Engine Name Yet");
 
         ~Vulkan_Instance();
 
@@ -114,6 +120,10 @@ namespace Renderer_System
         // Raw handle, needed by almost every other Vulkan_* class
         // (Vulkan_device, Vulkan_surface...) to create themselves.
         VkInstance Get_handle() const;
+
+        // What the Renderer asked of the GPU. Vulkan_Device reads it when it
+        // selects a physical device.
+        const Device_Requirements& Get_requirements() const;
 
         // Whether validation layers ended up active on this instance.
         // Can be false even when Standard or Gpu_Assisted was requested, if

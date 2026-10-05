@@ -27,9 +27,25 @@ namespace Renderer_System
             CoreTypes::Hash_combine_value(seed, _config.vertex_shader_path);
             CoreTypes::Hash_combine_value(seed, _config.fragment_shader_path);
             CoreTypes::Hash_combine_value(seed, _config.subpass);
-            CoreTypes::Hash_combine_value(seed, static_cast<uint32_t>(_config.vertex_input));
             CoreTypes::Hash_combine_value(seed, static_cast<int>(_config.polygon_mode));
             CoreTypes::Hash_combine_value(seed, _config.color_attachment_count);
+
+            // The same fields Vertex_Input_State::operator== compares. Two
+            // configs with different vertex layouts are different pipelines.
+            for (const VkVertexInputBindingDescription& binding : _config.vertex_input.bindings)
+            {
+                CoreTypes::Hash_combine_value(seed, binding.binding);
+                CoreTypes::Hash_combine_value(seed, binding.stride);
+                CoreTypes::Hash_combine_value(seed, static_cast<int>(binding.inputRate));
+            }
+
+            for (const VkVertexInputAttributeDescription& attribute : _config.vertex_input.attributes)
+            {
+                CoreTypes::Hash_combine_value(seed, attribute.location);
+                CoreTypes::Hash_combine_value(seed, attribute.binding);
+                CoreTypes::Hash_combine_value(seed, static_cast<int>(attribute.format));
+                CoreTypes::Hash_combine_value(seed, attribute.offset);
+            }
 
             // The same attachments operator== compares: the first
             // color_attachment_count.
@@ -82,7 +98,7 @@ namespace Renderer_System
                 VkPipelineLayout _layout,
                 const Pipeline_Config& _config,
                 uint8_t _id)
-                : pipeline(_device, _render_pass, _cache, _layout, _config),
+                : pipeline(_device, _render_pass.Get_handle(), Render_Subpass::Count, _cache, _layout, _config),
                 id(_id) {}
         };
 

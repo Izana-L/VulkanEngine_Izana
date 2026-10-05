@@ -1,5 +1,5 @@
 #include <Vulkan_Instance.hpp>
-#include <Descriptor_Sets.hpp>
+
 
 // GLFW reports the instance extensions the platform needs for a surface.
 // Together with Vulkan_Surface.cpp this is the only place of the Renderer
@@ -162,7 +162,7 @@ namespace Renderer_System
         // limits that cannot be read, degrade the mode to standard
         // validation, with the reason logged. _out_layerless_limits keeps
         // the real limits for Confirm_gpu_av_applied.
-        bool Gpu_av_has_descriptor_set_room(uint32_t _api_version, std::vector<Device_Set_Limit>& _out_layerless_limits)
+        bool Gpu_av_has_descriptor_set_room(uint32_t _api_version, uint32_t _min_bound_descriptor_sets, std::vector<Device_Set_Limit>& _out_layerless_limits)
         {
             if (_api_version < VK_API_VERSION_1_1)
             {
@@ -180,10 +180,10 @@ namespace Renderer_System
 
             for (const Device_Set_Limit& limit : _out_layerless_limits)
             {
-                if (limit.max_bound_descriptor_sets == Descriptor_Set::Count)
+                if (limit.max_bound_descriptor_sets == _min_bound_descriptor_sets)
                 {
                     std::cerr << "[Vulkan_instance] GPU-assisted validation requested, but a GPU has exactly "
-                        << Descriptor_Set::Count << " descriptor set slots (maxBoundDescriptorSets), all of them bound by "
+                        << _min_bound_descriptor_sets << " descriptor set slots (maxBoundDescriptorSets), all of them bound by "
                         "the engine: the slot GPU-AV reserves would make that GPU unsuitable - falling back to standard "
                         "validation.\n";
                     return false;
@@ -293,22 +293,12 @@ namespace Renderer_System
     }
 
     // ---------- Constructor ----------
-    Vulkan_Instance::Vulkan_Instance(
-        Validation_Mode _validation_mode,
-        const std::string& _application_name,
-        const std::string& _engine_name)
-
-        // Initialize handles to VK_NULL_HANDLE first - if anything below
-        // throws partway through, the destructor will see these as "never
-        // created" and correctly skip trying to destroy them.
-        : instance(VK_NULL_HANDLE),
-        debug_messenger(VK_NULL_HANDLE),
-        validation_enabled(_validation_mode != Validation_Mode::Off),
-        surface_maintenance1_enabled(false),
-        gpu_assisted_enabled(_validation_mode == Validation_Mode::Gpu_Assisted),
-        api_version(0),
-        enabled_extensions(),
-        debug_state(std::make_unique<Debug_Report_State>()) {
+    Vulkan_Instance::Vulkan_Instance( const Device_Requirements& _requirements,const std::string& _application_name, const std::string& _engine_name)
+                                    : requirements(_requirements), instance(VK_NULL_HANDLE), debug_messenger(VK_NULL_HANDLE),
+                                      validation_enabled(_requirements.validation != Validation_Level::Off),surface_maintenance1_enabled(false),
+                                      gpu_assisted_enabled(_requirements.validation == Validation_Level::Gpu_Assisted),
+                                      api_version(0),enabled_extensions(),debug_state(std::make_unique<Debug_Report_State>()) 
+    {
 
         std::vector<const char*> required_layers = Get_required_validation_layers();
 
@@ -336,7 +326,7 @@ namespace Renderer_System
         std::vector<Device_Set_Limit> layerless_limits;
 
         if (gpu_assisted_enabled)
-            gpu_assisted_enabled = Gpu_av_has_descriptor_set_room(api_version, layerless_limits);
+            gpu_assisted_enabled = Gpu_av_has_descriptor_set_room(api_version, requirements.min_bound_descriptor_sets, layerless_limits);
 
         // VkApplicationInfo: descriptive metadata about this application.
         // Some drivers use the engine/app name+version to apply known,
@@ -517,14 +507,16 @@ namespace Renderer_System
 
     // ---------- Move constructor ----------
     Vulkan_Instance::Vulkan_Instance(Vulkan_Instance&& _other) noexcept
-        : instance(_other.instance),
-        debug_messenger(_other.debug_messenger),
-        validation_enabled(_other.validation_enabled),
-        surface_maintenance1_enabled(_other.surface_maintenance1_enabled),
-        gpu_assisted_enabled(_other.gpu_assisted_enabled),
-        api_version(_other.api_version),
-        enabled_extensions(std::move(_other.enabled_extensions)),
-        debug_state(std::move(_other.debug_state)) {
+                                    : requirements(std::move(_other.requirements)),
+                                    instance(_other.instance),
+                                    debug_messenger(_other.debug_messenger),
+                                    validation_enabled(_other.validation_enabled),
+                                    surface_maintenance1_enabled(_other.surface_maintenance1_enabled),
+                                    gpu_assisted_enabled(_other.gpu_assisted_enabled),
+                                    api_version(_other.api_version),
+                                    enabled_extensions(std::move(_other.enabled_extensions)),
+                                    debug_state(std::move(_other.debug_state)) 
+    {
 
         // Leave the moved-from object in a valid empty state so its
         // destructor doesn't try to destroy handles "this" now owns.
@@ -533,12 +525,15 @@ namespace Renderer_System
     }
 
     // ---------- Move assignment ----------
-    Vulkan_Instance& Vulkan_Instance::operator=(Vulkan_Instance&& _other) noexcept {
-        if (this != &_other) {
+    Vulkan_Instance& Vulkan_Instance::operator=(Vulkan_Instance&& _other) noexcept 
+    {
+        if (this != &_other) 
+        {
             // Release whatever this object currently owns before taking
             // ownership of _other's resources, to avoid leaking them.
             Destroy();
 
+            requirements = std::move(_other.requirements);
             instance = _other.instance;
             debug_messenger = _other.debug_messenger;
             validation_enabled = _other.validation_enabled;
@@ -563,7 +558,11 @@ namespace Renderer_System
         assert(instance != VK_NULL_HANDLE && "Get_handle() called on a moved-from Vulkan_Instance");
         return instance;
     }
-
+    // ---------- Get_requirements ----------
+    const Device_Requirements& Vulkan_Instance::Get_requirements() const
+    {
+        return requirements;
+    }
     // ---------- Is_validation_enabled ----------
     bool Vulkan_Instance::Is_validation_enabled() const 
     {

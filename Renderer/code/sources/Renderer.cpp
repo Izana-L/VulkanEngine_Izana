@@ -1,7 +1,9 @@
 #include "Renderer_Impl.hpp"
 
 #include <Cluster_Grid.hpp>
+#include <Descriptor_Sets.hpp>
 #include <Vulkan_Utils.hpp>
+#include <Vulkan_Vertex_Layout.hpp>
 
 #include <MathConstants.hpp>
 #include <Matrix4.hpp>
@@ -131,12 +133,31 @@ namespace Renderer_System
         // Pipeline configurations
         // =========================================================
 
+        // Vertex input of every pipeline that draws meshes: the one vertex
+        // buffer of the Geometry_Pool (CoreTypes::Vertex_Static_Mesh, five
+        // attributes). Vertex_Input_State is plain Vulkan data, because the
+        // RHI does not know any vertex type, so the mapping lives here with
+        // the vertex layouts. A config that does not call this has NO vertex
+        // input, which is what the full-screen composite pass wants.
+        Vertex_Input_State Make_static_mesh_vertex_input()
+        {
+            Vertex_Input_State state;
+
+            state.bindings.push_back(Vulkan_Vertex_Layout::Get_binding_description<CoreTypes::Vertex_Static_Mesh>());
+
+            const auto attributes = Vulkan_Vertex_Layout::Get_attribute_descriptions<CoreTypes::Vertex_Static_Mesh>();
+            state.attributes.assign(attributes.begin(), attributes.end());
+
+            return state;
+        }
+
         Pipeline_Config Make_opaque_config()
         {
             Pipeline_Config config;
             config.vertex_shader_path = "..\\..\\Renderer\\shaders\\compiled\\mesh.vert.spv";
             config.fragment_shader_path = "..\\..\\Renderer\\shaders\\compiled\\mesh.frag.spv";
             config.subpass = Render_Subpass::Opaque;
+            config.vertex_input = Make_static_mesh_vertex_input();
             config.color_attachment_count = 1;
             config.color_blend[0] = Color_Blend_State{};   // no blending
             return config;
@@ -153,6 +174,7 @@ namespace Renderer_System
             // Drawn after the OIT composite, over the final color, and tested
             // against the opaque depth.
             config.subpass = Render_Subpass::Composite;
+            config.vertex_input = Make_static_mesh_vertex_input();
             config.color_attachment_count = 1;
 
             if (_wireframe)
@@ -182,6 +204,7 @@ namespace Renderer_System
             config.vertex_shader_path = "..\\..\\Renderer\\shaders\\compiled\\mesh.vert.spv";
             config.fragment_shader_path = "..\\..\\Renderer\\shaders\\compiled\\mesh_oit.frag.spv";
             config.subpass = Render_Subpass::Transparent;
+            config.vertex_input = Make_static_mesh_vertex_input();
             config.color_attachment_count = 2;
 
             // Accumulation: every fragment adds (color * alpha * w, alpha * w).
@@ -220,10 +243,31 @@ namespace Renderer_System
             config.vertex_shader_path = "..\\..\\Renderer\\shaders\\compiled\\oit_composite.vert.spv";
             config.fragment_shader_path = "..\\..\\Renderer\\shaders\\compiled\\oit_composite.frag.spv";
             config.subpass = Render_Subpass::Composite;
-            config.vertex_input = Vertex_Input::None;
+            // config.vertex_input stays empty: no binding, no attribute.
             config.color_attachment_count = 1;
             config.color_blend[0] = Color_Blend_State::Over();
             return config;
+        }
+
+        // What this renderer demands of the instance and the GPU. The RHI
+        // layer receives it as data instead of including the headers these
+        // numbers come from.
+        Device_Requirements Make_device_requirements(Validation_Mode _validation_mode)
+        {
+            Device_Requirements requirements;
+
+            switch (_validation_mode)
+            {
+            case Validation_Mode::Off:          requirements.validation = Validation_Level::Off;          break;
+            case Validation_Mode::Standard:     requirements.validation = Validation_Level::Standard;     break;
+            case Validation_Mode::Gpu_Assisted: requirements.validation = Validation_Level::Gpu_Assisted; break;
+            }
+
+            requirements.min_bound_descriptor_sets = Descriptor_Set::Count;
+            requirements.min_storage_buffers = Required_Storage_Buffers;
+            requirements.vertex_formats.assign(Vulkan_Vertex_Layout::OPTIONAL_VERTEX_FORMATS.begin(),
+                                               Vulkan_Vertex_Layout::OPTIONAL_VERTEX_FORMATS.end());
+            return requirements;
         }
     }
 
@@ -233,7 +277,7 @@ namespace Renderer_System
 
     Renderer::Impl::Impl(const Platform::Window& _window, Validation_Mode _validation_mode)
         : window(_window),
-        instance(_validation_mode, "Game", "Engine"),
+        instance(Make_device_requirements(_validation_mode), "Game", "Engine"),
         surface(instance, _window),
         device(instance, surface),
         allocator(instance, device),

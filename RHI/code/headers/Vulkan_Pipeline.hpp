@@ -3,11 +3,11 @@
 #include <vulkan/vulkan.h>
 
 #include <Vulkan_Device.hpp>
-#include <Vulkan_Render_Pass.hpp>
 
 #include <array>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace Renderer_System
 {
@@ -76,23 +76,52 @@ namespace Renderer_System
         }
     };
 
-    // Where the vertices of a pipeline come from.
-    //   Static_Mesh - one vertex buffer of CoreTypes::Vertex_Static_Mesh
-    //                 (the Geometry_Pool layout), five attributes.
-    //   None        - no vertex input at all: the vertex shader generates
-    //                 its positions from gl_VertexIndex (full-screen
-    //                 passes).
-    enum class Vertex_Input : uint32_t
+    // Where the vertices of a pipeline come from, as Vulkan describes them:
+    // the vertex buffer bindings and the attributes read from them. The
+    // layer that owns the vertex types builds it (it knows the strides and
+    // offsets), so this class does not know any of them.
+    //
+    // Empty, which is the default, declares no binding and no attribute:
+    // the vertex shader generates its positions from gl_VertexIndex
+    // (full-screen passes) and the vertex buffer bound for the meshes is
+    // simply not read.
+    struct Vertex_Input_State
     {
-        Static_Mesh = 0,
-        None = 1
+        std::vector<VkVertexInputBindingDescription>   bindings;
+        std::vector<VkVertexInputAttributeDescription> attributes;
+
+        // Field for field, like Color_Blend_State: the Vulkan structs have
+        // no operator==, and Pipeline_Config::operator== needs this one.
+        bool operator==(const Vertex_Input_State& _other) const
+        {
+            if (bindings.size() != _other.bindings.size() || attributes.size() != _other.attributes.size())
+                return false;
+
+            for (size_t i = 0; i < bindings.size(); ++i)
+            {
+                if (bindings[i].binding != _other.bindings[i].binding
+                    || bindings[i].stride != _other.bindings[i].stride
+                    || bindings[i].inputRate != _other.bindings[i].inputRate)
+                    return false;
+            }
+
+            for (size_t i = 0; i < attributes.size(); ++i)
+            {
+                if (attributes[i].location != _other.attributes[i].location
+                    || attributes[i].binding != _other.attributes[i].binding
+                    || attributes[i].format != _other.attributes[i].format
+                    || attributes[i].offset != _other.attributes[i].offset)
+                    return false;
+            }
+
+            return true;
+        }
     };
 
     struct Pipeline_Config
     {
-        // Color attachments a subpass of the render pass may have
-        // (Vulkan_Render_Pass: one in the opaque and composite subpasses,
-        // two in the transparent one).
+        // Color attachments a subpass may have, as far as a pipeline of
+        // this class is concerned: the size of color_blend.
         static constexpr uint32_t MAX_COLOR_ATTACHMENTS = 2;
 
         // ── Shaders (required) ────────────────────────────────────────
@@ -115,7 +144,7 @@ namespace Renderer_System
             if (vertex_shader_path != _other.vertex_shader_path
                 || fragment_shader_path != _other.fragment_shader_path
                 || subpass != _other.subpass
-                || vertex_input != _other.vertex_input
+                || !(vertex_input == _other.vertex_input)
                 || polygon_mode != _other.polygon_mode
                 || color_attachment_count != _other.color_attachment_count)
                 return false;
@@ -130,13 +159,16 @@ namespace Renderer_System
         }
 
         // ── Render pass ───────────────────────────────────────────────
-        // Subpass of Vulkan_Render_Pass the pipeline is used in
-        // (Render_Subpass). Its color attachment count must equal the
-        // subpass's.
+        // Subpass of the render pass given to the Vulkan_Pipeline
+        // constructor that the pipeline is used in. The constructor
+        // rejects an index beyond the subpass count it is given. Its color
+        // attachment count must equal the subpass's.
         uint32_t        subpass = 0;
 
         // ── Vertex input ──────────────────────────────────────────────
-        Vertex_Input    vertex_input = Vertex_Input::Static_Mesh;
+        // Empty by default: no vertex input. A pipeline that reads a
+        // vertex buffer must say how (see Vertex_Input_State).
+        Vertex_Input_State vertex_input;
 
         // ── Rasterization ─────────────────────────────────────────────
         // polygon_mode stays baked in: making it dynamic needs
@@ -174,10 +206,13 @@ namespace Renderer_System
     public:
 
         // Creates the pipeline from a Pipeline_Config built against
-        // the given render pass. Shader modules are created internally
-        // and destroyed immediately after pipeline creation.
-        Vulkan_Pipeline(const Vulkan_Device& _device,const Vulkan_Render_Pass& _render_pass, VkPipelineCache _pipeline_cache,
-                              VkPipelineLayout _pipeline_layout, Pipeline_Config  _config);
+        // the given render pass, which declares _subpass_count subpasses:
+        // the layer that owns the render pass knows how many it has, and
+        // this class only needs to reject a subpass index beyond them.
+        // Shader modules are created internally and destroyed immediately
+        // after pipeline creation.
+        Vulkan_Pipeline(const Vulkan_Device& _device, VkRenderPass _render_pass, uint32_t _subpass_count,
+                        VkPipelineCache _pipeline_cache, VkPipelineLayout _pipeline_layout, Pipeline_Config _config);
 
         ~Vulkan_Pipeline();
 
