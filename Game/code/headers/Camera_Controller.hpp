@@ -1,16 +1,18 @@
 #pragma once
 
+#include <System.hpp>
 #include <Entity.hpp>
 #include <Input.hpp>
+#include <Vector3.hpp>
+
 
 namespace ECS { class World; }
-
-
-namespace EngineCore
+namespace Game
 {
 
-
     // Camera_Controller: FPS-style free-flight camera controller.
+    //
+    // A System: registered in Phase::Gameplay, it runs once per frame.
     //
     // Operates on the Transform_Component of a camera entity (an entity
     // with Transform_Component + Camera_Component). Reads named actions
@@ -35,7 +37,7 @@ namespace EngineCore
     // Actions consumed (must exist in the input JSON):
     //   MoveForward, MoveBack, MoveLeft, MoveRight, MoveUp, MoveDown,
     //   Sprint, ToggleCamera
-    class Camera_Controller
+    class Camera_Controller : public EngineCore::System
     {
     public:
 
@@ -52,18 +54,20 @@ namespace EngineCore
         // reported on std::cerr and its control stays inactive.
         void Bind_actions(const Input_System::Input& _input);
 
+        // Creates the camera entity (Transform_Component + Camera_Component,
+         // perspective) at _position and makes it the entity this controller
+         // drives. Call it before building the rest of the scene: the camera
+         // is the first entity of the world.
+        void Create_camera(ECS::World& _world, const MathLib::Vector3& _position);
+
         // =========================================================
         // Update
         // =========================================================
 
-        // Updates the camera entity's Transform from input.
-        // _camera_entity must have a Transform_Component; otherwise the
-        // call does nothing.
+        // Updates the camera entity's Transform from input. Does nothing
+        // while no camera entity is set, or if it has no Transform_Component.
         // _dt is the frame delta time in seconds.
-        void Update(ECS::Entity _camera_entity,
-            Input_System::Input& _input,
-            ECS::World& _world,
-            float         _dt);
+        void Update(EngineCore::Engine_Context& _context, float _dt) override;
 
         // =========================================================
         // Tuning parameters (public: adjust freely)
@@ -99,6 +103,9 @@ namespace EngineCore
         // =========================================================
         // Internal state
         // =========================================================
+
+        // The entity driven by this controller (see Set_camera_entity).
+        ECS::Entity camera_entity = ECS::INVALID_ENTITY;
 
         // Accumulated yaw (around world Y) and pitch (around local X),
         // in radians. Source of truth for the camera's orientation.

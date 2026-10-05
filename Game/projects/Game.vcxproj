@@ -60,7 +60,7 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(SolutionDir)..\..\EngineCore\code\headers;$(SolutionDir)..\..\ECS\code\headers;$(SolutionDir)..\..\Renderer\code\headers;$(SolutionDir)..\..\Physics\code\headers;$(SolutionDir)..\..\Audio\code\headers;$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\ResourceManager\code\headers;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Input\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(SolutionDir)..\..\ThirdParty\glm;$(VULKAN_SDK)\Include;$(SolutionDir)..\..\ThreadDispatcher\code\headers;$(SolutionDir)..\..\CoreTypes\code\headers;$(SolutionDir)..\..\ThirdParty\stb_image\include;$(SolutionDir)..\..\ThirdParty\tinygltf\include;$(SolutionDir)..\..\ThirdParty\vma\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)..\..\EngineCore\code\headers;$(SolutionDir)..\..\ECS\code\headers;$(SolutionDir)..\..\Renderer\code\headers;$(SolutionDir)..\..\Physics\code\headers;$(SolutionDir)..\..\Audio\code\headers;$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\ResourceManager\code\headers;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Input\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(SolutionDir)..\..\ThirdParty\glm;$(VULKAN_SDK)\Include;$(SolutionDir)..\..\ThreadDispatcher\code\headers;$(SolutionDir)..\..\CoreTypes\code\headers;$(SolutionDir)..\..\ThirdParty\stb_image\include;$(SolutionDir)..\..\ThirdParty\tinygltf\include;$(SolutionDir)..\..\ThirdParty\vma\include;$(SolutionDir)..\code\headers;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -81,7 +81,7 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(SolutionDir)..\..\EngineCore\code\headers;$(SolutionDir)..\..\ECS\code\headers;$(SolutionDir)..\..\Renderer\code\headers;$(SolutionDir)..\..\Physics\code\headers;$(SolutionDir)..\..\Audio\code\headers;$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\ResourceManager\code\headers;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Input\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(SolutionDir)..\..\ThirdParty\glm;$(VULKAN_SDK)\Include;$(SolutionDir)..\..\ThreadDispatcher\code\headers;$(SolutionDir)..\..\CoreTypes\code\headers;$(SolutionDir)..\..\ThirdParty\stb_image\include;$(SolutionDir)..\..\ThirdParty\tinygltf\include;$(SolutionDir)..\..\ThirdParty\vma\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)..\..\EngineCore\code\headers;$(SolutionDir)..\..\ECS\code\headers;$(SolutionDir)..\..\Renderer\code\headers;$(SolutionDir)..\..\Physics\code\headers;$(SolutionDir)..\..\Audio\code\headers;$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\ResourceManager\code\headers;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Input\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(SolutionDir)..\..\ThirdParty\glm;$(VULKAN_SDK)\Include;$(SolutionDir)..\..\ThreadDispatcher\code\headers;$(SolutionDir)..\..\CoreTypes\code\headers;$(SolutionDir)..\..\ThirdParty\stb_image\include;$(SolutionDir)..\..\ThirdParty\tinygltf\include;$(SolutionDir)..\..\ThirdParty\vma\include;$(SolutionDir)..\code\headers;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -94,7 +94,19 @@
     </Manifest>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\code\sources\Camera_Controller.cpp" />
+    <ClCompile Include="..\code\sources\Demo_Application.cpp" />
+    <ClCompile Include="..\code\sources\Demo_Scene.cpp" />
+    <ClCompile Include="..\code\sources\Game_Config.cpp" />
     <ClCompile Include="..\code\sources\main.cpp" />
+    <ClCompile Include="..\code\sources\Render_Debug_Controller.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\code\headers\Camera_Controller.hpp" />
+    <ClInclude Include="..\code\headers\Demo_Application.hpp" />
+    <ClInclude Include="..\code\headers\Demo_Scene.hpp" />
+    <ClInclude Include="..\code\headers\Game_Config.hpp" />
+    <ClInclude Include="..\code\headers\Render_Debug_Controller.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

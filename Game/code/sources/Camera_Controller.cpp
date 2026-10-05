@@ -1,15 +1,17 @@
 #include <Camera_Controller.hpp>
-
+#include <Camera_Component.hpp>
+#include <Engine_Context.hpp>
 #include <World.hpp>
 #include <Transform_Component.hpp>
 #include <Input.hpp>
 #include <Quaternion.hpp>
 #include <Vector3.hpp>
 
+#include <iostream>
 #include <algorithm>
 #include <cmath>
 
-namespace EngineCore
+namespace Game
 {
 
     void Camera_Controller::Bind_actions(const Input_System::Input& _input)
@@ -25,13 +27,20 @@ namespace EngineCore
         ids.sprint = _input.Resolve_action_id("Sprint", CONSUMER);
         ids.toggle_camera = _input.Resolve_action_id("ToggleCamera", CONSUMER);
     }
-
-    void Camera_Controller::Update(ECS::Entity _camera_entity,
-        Input_System::Input& _input,
-        ECS::World& _world,
-        float         _dt)
+    void Camera_Controller::Create_camera(ECS::World& _world, const MathLib::Vector3& _position)
     {
-        ECS::Transform_Component* transform = _world.Try_get_component<ECS::Transform_Component>(_camera_entity);
+        camera_entity = _world.Create_entity();
+
+        _world.Add_component<ECS::Transform_Component>(camera_entity).Set_position(_position);
+        _world.Add_component<ECS::Camera_Component>(camera_entity, ECS::Camera_Component::Make_perspective());
+
+        std::cout << "[Camera_Controller] Camera entity created (id=" << camera_entity << ").\n";
+    }
+    void Camera_Controller::Update(EngineCore::Engine_Context& _context, float _dt)
+    {
+        Input_System::Input& input = _context.Input();
+
+        ECS::Transform_Component* transform = _context.World().Try_get_component<ECS::Transform_Component>(camera_entity);
 
         if (!transform) return;
 
@@ -43,13 +52,13 @@ namespace EngineCore
         // cursor. Rotation is only applied while captured. Set_cursor_mode
         // discards the mouse delta of the frame it runs in, so the click
         // that toggles never becomes a rotation.
-        if (_input.Was_action_pressed(ids.toggle_camera))
+        if (input.Was_action_pressed(ids.toggle_camera))
         {
             const Input_System::Cursor_Mode new_mode =
-                (_input.Get_cursor_mode() == Input_System::Cursor_Mode::Camera)
+                (input.Get_cursor_mode() == Input_System::Cursor_Mode::Camera)
                 ? Input_System::Cursor_Mode::Window
                 : Input_System::Cursor_Mode::Camera;
-            _input.Set_cursor_mode(new_mode);
+            input.Set_cursor_mode(new_mode);
         }
 
         // =========================================================
@@ -84,10 +93,10 @@ namespace EngineCore
         // Rotation from mouse (only in Camera cursor mode)
         // =========================================================
 
-        if (_input.Get_cursor_mode() == Input_System::Cursor_Mode::Camera)
+        if (input.Get_cursor_mode() == Input_System::Cursor_Mode::Camera)
         {
-            const float dx = _input.Get_mouse_delta_x();
-            const float dy = _input.Get_mouse_delta_y();
+            const float dx = input.Get_mouse_delta_x();
+            const float dy = input.Get_mouse_delta_y();
 
             // Horizontal mouse -> yaw (negative so right-drag looks right).
             yaw -= dx * mouse_sensitivity;
@@ -125,12 +134,12 @@ namespace EngineCore
 
         MathLib::Vector3 movement(0.0f, 0.0f, 0.0f);
 
-        movement += forward * _input.Get_action_value(ids.move_forward);
-        movement -= forward * _input.Get_action_value(ids.move_back);
-        movement += right * _input.Get_action_value(ids.move_right);
-        movement -= right * _input.Get_action_value(ids.move_left);
-        movement += world_up * _input.Get_action_value(ids.move_up);
-        movement -= world_up * _input.Get_action_value(ids.move_down);
+        movement += forward * input.Get_action_value(ids.move_forward);
+        movement -= forward * input.Get_action_value(ids.move_back);
+        movement += right * input.Get_action_value(ids.move_right);
+        movement -= right * input.Get_action_value(ids.move_left);
+        movement += world_up * input.Get_action_value(ids.move_up);
+        movement -= world_up * input.Get_action_value(ids.move_down);
 
         // Normalize so diagonal movement isn't faster than axis-aligned.
         const float length_sq = MathLib::Vec3::Length_squared(movement);
@@ -139,7 +148,7 @@ namespace EngineCore
             movement = MathLib::Vec3::Normalize(movement);
 
             float speed = move_speed;
-            if (_input.Is_action_down(ids.sprint))
+            if (input.Is_action_down(ids.sprint))
                 speed *= sprint_multiplier;
 
             transform->Set_position(transform->position + movement * speed * _dt);

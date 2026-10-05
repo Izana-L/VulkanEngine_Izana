@@ -1,5 +1,8 @@
 #include <Engine.hpp>
+#include <Demo_Application.hpp>
+#include <Game_Config.hpp>
 
+#include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 
@@ -7,12 +10,12 @@ int main()
 {
     try
     {
-        EngineCore::Engine_Config config;
-        config.input.bindings_path = "../../Input/jsons/default_input_actions.json";
-        config.paths.assets_root = "../../Game/assets";
+        EngineCore::Engine engine(Game::Make_engine_config());
 
-        EngineCore::Engine engine(config);
-        engine.Run();
+        // Declared after the engine: it is destroyed first.
+        Game::Demo_Application application;
+
+        engine.Run(application);
     }
     catch (const std::exception& e)
     {

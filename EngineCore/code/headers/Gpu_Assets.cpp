@@ -51,7 +51,53 @@ namespace EngineCore
         return procedural_texture;
     }
 
-    // Create_material, Ensure_mesh_uploaded, Ensure_image_uploaded:
-    // moved from Engine.cpp unchanged (see above).
+    uint32_t Gpu_Assets::Ensure_mesh_uploaded(CoreTypes::Asset_Handle _mesh)
+    {
+        const uint32_t existing = resources.Get_gpu_id(_mesh);
+        if (existing != ResourceManager::Resource_Manager::INVALID_GPU_ID)
+            return existing;
+
+        const uint32_t gpu_id = renderer.Upload_mesh(resources.Get_mesh_data(_mesh));
+        resources.Register_gpu_id(_mesh, gpu_id);
+
+        return gpu_id;
+    }
+
+    uint32_t Gpu_Assets::Ensure_image_uploaded(CoreTypes::Asset_Handle _image)
+    {
+        const uint32_t existing = resources.Get_image_gpu_id(_image);
+        if (existing != ResourceManager::Resource_Manager::INVALID_GPU_ID)
+            return existing;
+
+        const uint32_t bindless_index = renderer.Upload_texture(resources.Get_image_data(_image));
+        resources.Register_image_gpu_id(_image, bindless_index);
+
+        return bindless_index;
+    }
+
+    uint32_t Gpu_Assets::Create_material(ECS::Material_Component& _material)
+    {
+        if (_material.gpu_material_id != ECS::Material_Component::INVALID_GPU_MATERIAL_ID)
+            return _material.gpu_material_id;
+
+        Renderer_System::Material_Desc desc;
+        desc.base_color = _material.base_color_factor;
+        desc.sampler = _material.sampler;
+
+        // Albedo not assigned: White (the Material_Desc default). Assigned
+        // but with no GPU index (never uploaded, or a stale handle): Error,
+        // so the mistake shows up magenta instead of silently white.
+        if (_material.albedo.Is_valid())
+        {
+            const uint32_t texture_index = resources.Get_image_gpu_id(_material.albedo);
+
+            desc.albedo_texture_index = texture_index != ResourceManager::Resource_Manager::INVALID_GPU_ID
+                ? texture_index : Renderer_System::Default_Texture::Error;
+        }
+
+        _material.gpu_material_id = renderer.Register_material(desc);
+
+        return _material.gpu_material_id;
+    }
 
 } // namespace EngineCore
