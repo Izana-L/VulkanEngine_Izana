@@ -5,8 +5,10 @@
 #include <Atomic_Counter.hpp>
 
 #include <algorithm>
-#include <cassert>
+#include <cstdint>
+#include <limits>
 #include <span>
+#include <stdexcept>
 #include <type_traits>
 #include <vector>
 
@@ -34,22 +36,38 @@ namespace ThreadDispatcher
         // Chunk builder
         // =========================================================
 
-        // Builds and submits all tasks for a Parallel_For call.
+        // Builds all tasks for a Parallel_For call.
         // Takes a pointer to the callable (stable for the duration of
         // the call since Parallel_For is synchronous) to avoid copying
         // a potentially large capture list N times.
         //
-        // Returns the shared Counter_Ptr so the caller can wait on it
-        // via Submit_group_and_wait.
+        // All tasks share one counter initialised to the number of chunks;
+        // Submit_group_and_wait() waits on it.
+        //
+        // Precondition: _chunk_size > 0 and _first < _last (Parallel_For
+        // checks both; this function does not divide by a value it has not
+        // seen validated).
         template< typename CALLABLE >
         std::vector< Task > Build_tasks(const CALLABLE* _callable,
                                                                 size_t    _first,
                                                                 size_t    _last,
                                                                 size_t    _chunk_size)
         {
-            // Compute number of chunks (ceiling division).
+            // Compute number of chunks (ceiling division). Written as
+            // quotient + remainder instead of (total + chunk - 1) / chunk:
+            // that form wraps around for a huge _chunk_size and would
+            // silently compute zero chunks, running nothing at all.
             const size_t total = _last - _first;
-            const size_t num_chunks = (total + _chunk_size - 1) / _chunk_size;
+            const size_t num_chunks = total / _chunk_size + (total % _chunk_size != 0 ? 1 : 0);
+
+            // The counter is 32-bit: a larger count would be truncated and
+            // the group would be reported complete too early.
+            if (num_chunks > std::numeric_limits< uint32_t >::max())
+            {
+                throw std::length_error(
+                    "Parallel_For: the range yields more chunks than a counter can hold; "
+                    "use a larger _chunk_size");
+            }
 
             // One shared counter for the whole group.
             // Initialised to num_chunks: each task decrements once on finish.
@@ -61,8 +79,13 @@ namespace ThreadDispatcher
 
             for (size_t c = 0; c < num_chunks; ++c)
             {
+                // c * _chunk_size < total, so this cannot overflow; and the
+                // end is clamped by comparing the remaining length instead of
+                // computing chunk_begin + _chunk_size, which could wrap.
                 const size_t chunk_begin = _first + c * _chunk_size;
-                const size_t chunk_end = std::min(chunk_begin + _chunk_size, _last);
+                const size_t chunk_end = (_last - chunk_begin > _chunk_size)
+                    ? chunk_begin + _chunk_size
+                    : _last;
 
                 if constexpr (is_range_callable< CALLABLE >)
                 {
@@ -73,8 +96,6 @@ namespace ThreadDispatcher
                         {
                             (*_callable)(chunk_begin, chunk_end);
                         }, counter));
-                           
-                            
                 }
                 else
                 {
@@ -87,8 +108,6 @@ namespace ThreadDispatcher
                                 for (size_t i = chunk_begin; i < chunk_end; ++i)
                                     (*_callable)(i);
                             },counter));
-                            
-                            
                 }
             }
 
@@ -112,22 +131,39 @@ namespace ThreadDispatcher
     //   void(size_t begin, size_t end)  — called once per chunk
     // Detected automatically at compile time via is_invocable.
     //
-    // Preconditions (asserted in debug):
-    //   _chunk_size > 0
-    //   CALLABLE matches one of the two supported signatures
+    // Preconditions (checked in EVERY build, not only in debug):
+    //   _chunk_size > 0   -> std::invalid_argument otherwise, even for an
+    //                        empty range: the same bad call must not succeed
+    //                        or fail depending on the data
+    //   CALLABLE matches one of the two supported signatures (compile time)
     //
     // Edge cases:
     //   _first >= _last   → no-op, nothing enqueued
     //   range < _chunk_size → single task covering the whole range
     //   range % _chunk_size != 0 → last chunk is smaller, clamped to _last
+    //   any _chunk_size, up to SIZE_MAX, covers the range exactly once
+    //
+    // Exceptions:
+    //   If a chunk throws, the other chunks still run to completion (they
+    //   reference this call's callable, which lives on the caller's stack),
+    //   and then the FIRST exception raised by a chunk of this call is
+    //   rethrown here - whether the chunk ran on a worker or on the calling
+    //   thread. Failures of unrelated tasks that the calling thread happens
+    //   to steal while waiting are never rethrown here.
+    //   std::runtime_error if the dispatcher was shut down: nothing has been
+    //   enqueued in that case, so the callable is never invoked.
     //
     // Note on nested Parallel_For:
-    //   Calling Parallel_For from inside a task lambda is safe (no deadlock)
-    //   because no thread ever sleeps while waiting — all waiting is done
-    //   by stealing work. However, deeply nested calls may starve outer
-    //   chunks if all workers are busy with inner tasks. Avoid nesting
-    //   more than one level deep until work-stealing per-thread deques
-    //   are introduced.
+    //   Calling Parallel_For from inside a task lambda is safe (no
+    //   deadlock). Two properties make that true: waiting is done by
+    //   stealing work, never by sleeping, and submitting never sleeps
+    //   either - when the queue is full the submitting thread runs queued
+    //   tasks until there is room (see Thread_Dispatcher::Submit). Hence
+    //   even if every worker is inside a task that submits a nested
+    //   Parallel_For at the same time, the queue keeps draining.
+    //   Stolen and helped tasks execute on the waiting thread's stack, so
+    //   very deep nesting grows that stack; and a waiting thread may run an
+    //   unrelated long task before it notices its own group is done.
     template< typename CALLABLE >
     void Parallel_For(Thread_Dispatcher& _dispatcher,
         size_t             _first,
@@ -141,7 +177,12 @@ namespace ThreadDispatcher
             "Parallel_For: CALLABLE must be void(size_t) or "
             "void(size_t begin, size_t end)");
 
-        assert(_chunk_size > 0 && "Parallel_For: _chunk_size must be > 0");
+        // A real check, not an assert: with assertions compiled out
+        // (Release) a zero chunk size would divide by zero in Build_tasks().
+        if (_chunk_size == 0)
+        {
+            throw std::invalid_argument("Parallel_For: _chunk_size must be > 0");
+        }
 
         // Nothing to do.
         if (_first >= _last) return;

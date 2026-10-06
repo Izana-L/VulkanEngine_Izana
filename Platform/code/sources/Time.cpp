@@ -2,14 +2,123 @@
 #include <thread>
 #include <numeric>
 #include <algorithm>
+#ifdef _WIN32
+// NOMINMAX: <windows.h> would otherwise define min/max macros that break
+// std::min / std::max below.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 
 namespace Platform {
+
+    // =========================================================
+    // Precise waiting (frame rate limiter)
+    // =========================================================
+
+    namespace {
+
+        using Wait_clock = std::chrono::steady_clock;
+
+        // How long before the deadline the thread stops sleeping and
+        // busy-waits instead. A sleeping thread is woken up late by the
+        // scheduler, by up to one timer tick; the margin has to cover that
+        // lateness so the deadline is reached by spinning, not overshot.
+        // std::this_thread::sleep_until alone has the full tick of error:
+        // about 15.6 ms by default on Windows, i.e. a whole 60 FPS frame.
+#ifdef _WIN32
+        // The high-resolution timer below wakes up within about a millisecond.
+        constexpr std::chrono::microseconds spin_margin{ 2000 };
+#else
+        constexpr std::chrono::microseconds spin_margin{ 1000 };
+#endif
+
+#ifdef _WIN32
+        // A high-resolution waitable timer (Windows 10 1803 and later): its
+        // wake-up error is around a millisecond instead of the system tick,
+        // and unlike timeBeginPeriod it needs no change to the global timer
+        // resolution. Creation fails on older systems, which is reported by
+        // Sleep_for() returning false so the caller can fall back.
+        class High_resolution_timer
+        {
+        public:
+            High_resolution_timer()
+                : handle(CreateWaitableTimerExW(nullptr, nullptr, high_resolution_flag, TIMER_ALL_ACCESS)) {}
+
+            ~High_resolution_timer() {
+                if (handle != nullptr) CloseHandle(handle);
+            }
+
+            High_resolution_timer(const High_resolution_timer&) = delete;
+            High_resolution_timer& operator=(const High_resolution_timer&) = delete;
+
+            // Blocks for _duration. Returns false if it could not wait
+            // (no high-resolution timer, or the wait failed); true otherwise.
+            bool Sleep_for(std::chrono::nanoseconds _duration) {
+                if (handle == nullptr) return false;
+                if (_duration.count() < 100) return true;
+
+                // A negative due time is relative, in units of 100 ns.
+                LARGE_INTEGER due_time;
+                due_time.QuadPart = -static_cast<LONGLONG>(_duration.count() / 100);
+                if (!SetWaitableTimer(handle, &due_time, 0, nullptr, nullptr, FALSE)) return false;
+
+                // The timeout is a safety net only: a timer that never fires
+                // must not hang the main loop.
+                const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(_duration);
+                const DWORD timeout = static_cast<DWORD>(milliseconds.count() + 100);
+                return WaitForSingleObject(handle, timeout) == WAIT_OBJECT_0;
+            }
+
+        private:
+#ifdef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+            static constexpr DWORD high_resolution_flag = CREATE_WAITABLE_TIMER_HIGH_RESOLUTION;
+#else
+            static constexpr DWORD high_resolution_flag = 0x00000002;
+#endif
+            HANDLE handle;
+        };
+#endif
+
+        // Sleeps until _target, as precisely as the platform's sleep allows.
+        void Sleep_until_target(Wait_clock::time_point _target) {
+#ifdef _WIN32
+            // One timer per thread: a waitable timer can only be armed by
+            // one wait at a time.
+            thread_local High_resolution_timer timer;
+
+            const auto remaining = _target - Wait_clock::now();
+            if (remaining <= Wait_clock::duration::zero()) return;
+            if (timer.Sleep_for(remaining)) return;
+#endif
+            std::this_thread::sleep_until(_target);
+        }
+
+        // Returns when _deadline has been reached, within microseconds:
+        // sleep (cheaply) until shortly before it, then spin the rest.
+        void Wait_until(Wait_clock::time_point _deadline) {
+            Sleep_until_target(_deadline - spin_margin);
+
+            while (Wait_clock::now() < _deadline) {
+                std::this_thread::yield();
+            }
+        }
+    }
+
+    // =========================================================
+    // Time
+    // =========================================================
 
     Time::Time()
         : start_time(Clock::now()),
         last_frame_time(start_time),
         delta_time(0.0f),
         unscaled_delta_time(0.0f),
+        real_delta_time(0.0),
         total_time(0.0),
         unscaled_total_time(0.0),
         time_scale(1.0f),
@@ -32,12 +141,13 @@ namespace Platform {
             const Time_point deadline = last_frame_time + period;
 
             if (now < deadline) {
-                std::this_thread::sleep_until(deadline);
+                Wait_until(deadline);
                 now = Clock::now();
             }
         }
 
         const double raw_delta = std::chrono::duration<double>(now - last_frame_time).count();
+        const bool is_first_update = (frame_count == 0);
 
         // Clamp the SIMULATION step to avoid huge spikes (e.g. after a
         // breakpoint, window drag-resize stall, or the very first frame) -
@@ -52,13 +162,23 @@ namespace Platform {
         unscaled_total_time = std::chrono::duration<double>(now - start_time).count();
         total_time += raw_delta * static_cast<double>(time_scale);
 
+        // Statistics see the real interval, not the clamped step: a stall
+        // must show up in the worst frame and the FPS figures at its true
+        // length, which is the whole point of measuring them.
+        real_delta_time = raw_delta;
+
         last_frame_time = now;
         ++frame_count;
 
-        // Update rolling window for average FPS
-        recent_delta_times.push_back(unscaled_delta_time);
-        if (recent_delta_times.size() > max_recent_samples) {
-            recent_delta_times.pop_front();
+        // Update rolling window for average FPS. The first Update() measures
+        // from construction, i.e. engine startup (device creation, asset
+        // loading), which is not a frame and would sit in the window, and in
+        // Get_worst_frame_time(), for the next 60 frames.
+        if (!is_first_update) {
+            recent_delta_times.push_back(static_cast<float>(real_delta_time));
+            if (recent_delta_times.size() > max_recent_samples) {
+                recent_delta_times.pop_front();
+            }
         }
     }
 
@@ -123,15 +243,16 @@ namespace Platform {
     // =========================================================
 
     float Time::Get_fps() const {
-        if (unscaled_delta_time <= 0.0f) return 0.0f;
-        return 1.0f / unscaled_delta_time;
+        if (real_delta_time <= 0.0) return 0.0f;
+        return static_cast<float>(1.0 / real_delta_time);
     }
 
     float Time::Get_average_delta() const {
         if (recent_delta_times.empty()) return 0.0f;
 
-        const float sum = std::accumulate(recent_delta_times.begin(), recent_delta_times.end(), 0.0f);
-        return sum / static_cast<float>(recent_delta_times.size());
+        // Summed in double: 60 float samples would lose precision for nothing.
+        const double sum = std::accumulate(recent_delta_times.begin(), recent_delta_times.end(), 0.0);
+        return static_cast<float>(sum / static_cast<double>(recent_delta_times.size()));
     }
 
     float Time::Get_average_fps() const {
@@ -161,7 +282,7 @@ namespace Platform {
         const float average = Get_average_delta();
 
         if (average <= 0.0f) return false;
-        return unscaled_delta_time > average * _spike_multiplier;
+        return static_cast<float>(real_delta_time) > average * _spike_multiplier;
     }
 
     // =========================================================
@@ -172,14 +293,18 @@ namespace Platform {
         active_timers[_name] = Clock::now();
     }
 
-    float Time::Stop_timer(const std::string& _name) {
+    std::optional<float> Time::Stop_timer(const std::string& _name) {
+        // Read the clock before anything else so the lookup below is not
+        // part of the measured time.
+        const Time_point stop_time = Clock::now();
+
         auto it = active_timers.find(_name);
         if (it == active_timers.end()) {
-            return 0.0f; // Stop_timer called without a matching Start_timer
+            return std::nullopt; // Stop_timer called without a matching Start_timer
         }
 
-        std::chrono::duration<float> elapsed = Clock::now() - it->second;
-        float duration = elapsed.count();
+        const std::chrono::duration<float> elapsed = stop_time - it->second;
+        const float duration = elapsed.count();
 
         timer_durations[_name] = duration;
         active_timers.erase(it);
@@ -187,9 +312,9 @@ namespace Platform {
         return duration;
     }
 
-    float Time::Get_timer_duration(const std::string& _name) const {
+    std::optional<float> Time::Get_timer_duration(const std::string& _name) const {
         auto it = timer_durations.find(_name);
-        if (it == timer_durations.end()) return 0.0f;
+        if (it == timer_durations.end()) return std::nullopt;
         return it->second;
     }
 

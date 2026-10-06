@@ -15,6 +15,12 @@ namespace Platform {
     // main loop, and manage window state (fullscreen, focus, position...).
     class Window
     {
+    public:
+        // Value of a size limit that is not set (equal to GLFW_DONT_CARE,
+        // which Window.cpp checks at compile time).
+        static constexpr int no_size_limit = -1;
+
+    private:
         GLFWwindow* window_handle;
         uint32_t    width;
         uint32_t    height;
@@ -28,13 +34,25 @@ namespace Platform {
         bool is_fullscreen;
         bool is_windowed_fullscreen;
 
-        static int window_count;
+        // Size limits currently applied to the GLFW window. GLFW only has one
+        // call that sets all four at once, so every change has to start from
+        // these values or it would reset the ones it does not mention.
+        int min_width  = no_size_limit;
+        int min_height = no_size_limit;
+        int max_width  = no_size_limit;
+        int max_height = no_size_limit;
 
-        // Destroys the GLFW window, if any, and terminates GLFW when it was
-        // the last one alive. Shared by the destructor and move assignment
-        // so the window_count / glfwTerminate bookkeeping lives in one place.
-        // Leaves window_handle null.
+        // Destroys the GLFW window, if any, and releases its reference to the
+        // GLFW library (which terminates GLFW when it was the last one).
+        // Shared by the destructor and move assignment. Leaves window_handle
+        // null.
         void Destroy_native();
+
+        // Validates the four limits as a set and applies them with a single
+        // glfwSetWindowSizeLimits call. Stores them only if GLFW received
+        // them, so the members always match what is in effect. Returns false,
+        // changing nothing, if the set is invalid.
+        bool Apply_size_limits(int _min_width, int _min_height, int _max_width, int _max_height);
 
         // Shared body of the move constructor and move assignment: takes
         // ownership of every field of _other, the input callbacks included,
@@ -83,8 +101,22 @@ namespace Platform {
         // Renderer so the swapchain is rebuilt on the next frame, without
         // depending on the driver returning OUT_OF_DATE / SUBOPTIMAL.
         bool Consume_resized_flag();
-        void Set_min_size(int _min_width, int _min_height);
-        void Set_max_size(int _max_width, int _max_height);
+
+        // Smallest / largest size the user can resize the window to. The two
+        // limits are independent: setting one never changes the other. Values
+        // are in screen coordinates and must be >= 0. They apply to windowed,
+        // resizable windows.
+        //
+        // Both return false, leaving every limit as it was, if the request is
+        // rejected: a negative value, or a minimum larger than the maximum
+        // (in either dimension) that is currently set. To move the range past
+        // the other limit, change that one first or call Clear_size_limits().
+        bool Set_min_size(int _min_width, int _min_height);
+        bool Set_max_size(int _max_width, int _max_height);
+
+        // Removes both the minimum and the maximum size limit.
+        void Clear_size_limits();
+
         void Set_resizable(bool _resizable);
 
         // =========================================================

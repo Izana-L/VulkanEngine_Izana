@@ -56,6 +56,9 @@ namespace Input_System
     //           support is added.
     // pressed:  true only on the frame the action became active.
     // released: true only on the frame the action became inactive.
+    //           A binding pressed and released within one frame still
+    //           produces both on that frame (value stays 0.0): the edges
+    //           are never lost to a tap shorter than the frame.
     struct Action
     {
         std::string                  name;

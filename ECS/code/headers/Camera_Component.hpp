@@ -2,6 +2,9 @@
 
 #include <Vector.hpp>
 #include <MathConstants.hpp>
+
+#include <cmath>
+#include <cstdint>
 namespace ECS
 {
 
@@ -39,7 +42,7 @@ namespace ECS
         // Vertical field of view in degrees.
         // 60 degrees is a common default — wide enough to feel natural,
         // narrow enough to avoid excessive perspective distortion.
-        float fov ;
+        float fov = MathLib::Constants::FOV_DEFAULT;
 
         // =========================================================
         // Orthographic parameters (Projection::Orthographic only)
@@ -60,7 +63,7 @@ namespace ECS
         // Under Reverse-Z with an infinite far plane this is the ONLY value
         // that affects depth precision (z_ndc = near_plane / distance), so
         // keep it as large as the game tolerates.
-        float near_plane ;
+        float near_plane = MathLib::Constants::NEAR_PLANE_DEFAULT;
 
         // Far clip plane distance.
         //
@@ -73,7 +76,7 @@ namespace ECS
         // Still used by Projection::Orthographic, which has no perspective
         // divide and therefore needs a finite range. Kept as a field for
         // that, and because frustum culling will want a finite bound later.
-        float far_plane ;
+        float far_plane = MathLib::Constants::FAR_PLANE_DEFAULT;
 
         // =========================================================
         // Aspect ratio
@@ -109,6 +112,29 @@ namespace ECS
         // When false this camera is ignored by the Extractor.
         // Allows switching between cameras by toggling is_active.
         bool is_active = true;
+
+        // =========================================================
+        // Validation
+        // =========================================================
+
+        // True when the parameters describe a usable projection: finite, a
+        // positive near plane (the reverse-Z matrix divides by it), a field of
+        // view strictly inside (0, 180) and, for orthographic cameras, a
+        // positive size and a far plane beyond the near one.
+        bool Is_valid() const noexcept
+        {
+            if (!std::isfinite(near_plane) || near_plane <= 0.0f) return false;
+            if (!std::isfinite(aspect_ratio) || aspect_ratio < 0.0f) return false;
+
+            if (projection == Projection::Perspective)
+            {
+                return std::isfinite(fov) &&
+                    fov >= MathLib::Constants::FOV_MIN && fov <= MathLib::Constants::FOV_MAX;
+            }
+
+            return std::isfinite(ortho_size) && ortho_size > 0.0f &&
+                std::isfinite(far_plane) && far_plane > near_plane;
+        }
 
         // =========================================================
         // Convenience constructors

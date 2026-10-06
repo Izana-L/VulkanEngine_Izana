@@ -39,6 +39,14 @@ namespace ThreadDispatcher
 
         using Value_Type = TYPE;
 
+        // Outcome of a non-blocking push.
+        enum class Try_push_result
+        {
+            Pushed,   // the element was stored
+            Full,     // no room right now; the argument was NOT consumed
+            Closed    // the queue no longer accepts elements (closed or cancelled)
+        };
+
     private:
 
         struct Storage_Deleter
@@ -174,6 +182,27 @@ namespace ThreadDispatcher
         bool Emplace(ARGUMENTS&&... _arguments)
         {
             return Enqueue(std::forward< ARGUMENTS >(_arguments)...);
+        }
+
+        // Non-blocking Emplace: never waits for room. The arguments are only
+        // moved from when the result is Pushed, so on Full / Closed the
+        // caller still owns them and may retry or do something else (the
+        // dispatcher runs a queued task itself instead of blocking, see
+        // Thread_Dispatcher::Enqueue_or_throw).
+        template< typename... ARGUMENTS >
+        Try_push_result Try_emplace(ARGUMENTS&&... _arguments)
+        {
+            std::unique_lock lock(mutex);
+
+            if (closed || cancelled) return Try_push_result::Closed;
+            if (count >= capacity)   return Try_push_result::Full;
+
+            Construct_back(std::forward< ARGUMENTS >(_arguments)...);
+
+            lock.unlock();
+            not_empty.notify_one();
+
+            return Try_push_result::Pushed;
         }
 
         // Copies an element to the back of the queue. Same blocking and

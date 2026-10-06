@@ -24,15 +24,28 @@ namespace Renderer_System
     {
         std::vector<uint8_t> blob;
 
+        // A missing file is the normal first run; a file that exists but
+        // cannot be read is worth saying so, since the cache then starts
+        // empty and is rebuilt (and overwritten) from scratch.
         if (Platform::Filesystem::Exists(file_path))
         {
-            blob = Platform::Filesystem::Read_binary_file(file_path);
+            std::optional<std::vector<uint8_t>> on_disk = Platform::Filesystem::Read_binary_file(file_path);
 
-            if (!Is_blob_usable(blob))
+            if (!on_disk)
             {
-                std::cout << "[Pipeline_Cache] On-disk cache rejected "
-                    "(different GPU or driver) — starting empty.\n";
-                blob.clear();
+                std::cerr << "[Pipeline_Cache] Could not read " << file_path
+                    << " — starting empty.\n";
+            }
+            else
+            {
+                blob = std::move(*on_disk);
+
+                if (!Is_blob_usable(blob))
+                {
+                    std::cout << "[Pipeline_Cache] On-disk cache rejected "
+                        "(different GPU or driver) — starting empty.\n";
+                    blob.clear();
+                }
             }
         }
 

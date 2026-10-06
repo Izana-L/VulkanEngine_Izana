@@ -40,18 +40,21 @@ namespace ECS
         return (static_cast<Entity>(_generation) << 32) | static_cast<Entity>(_index);
     }
     // Sentinel value representing an entity that doesn't exist or
-     // hasn't been assigned yet. Built from CoreTypes::INVALID_ID so the
-     // sentinel has a single source of truth: its index can never be
-     // allocated, so it never collides with a live entity.
+    // hasn't been assigned yet. Built from CoreTypes::INVALID_ID so the
+    // sentinel has a single source of truth: its index can never be
+    // allocated, so it never collides with a live entity.
     constexpr Entity INVALID_ENTITY = Make_entity(CoreTypes::INVALID_ID, CoreTypes::INVALID_ID);
-    
 
     // Returns true if the entity is a valid (non-sentinel) value.
-
-    // Returns true if the entity is a valid (non-sentinel) value.
+    //
+    // The sentinel is defined by its INDEX, whatever the generation: no slot
+    // with index INVALID_ID is ever allocated, so any such value is
+    // "no entity". Comparing against INVALID_ENTITY alone would accept
+    // Make_entity(INVALID_ID, 5) and let a stray value reach
+    // Sparse_Array::Set() with a slot of ~4 billion.
     constexpr bool Is_valid_entity(Entity _entity)
     {
-        return _entity != INVALID_ENTITY;
+        return Entity_index(_entity) != CoreTypes::INVALID_ID;
     }
 
     // Returns true if the entity is the sentinel/invalid value.
@@ -60,6 +63,9 @@ namespace ECS
         return _entity == INVALID_ENTITY;
     }
 
+    static_assert(!Is_valid_entity(INVALID_ENTITY));
+    static_assert(!Is_valid_entity(Make_entity(CoreTypes::INVALID_ID, 0u)), "the sentinel is the index, not the exact 64-bit value");
+    static_assert(Is_valid_entity(Make_entity(0u, CoreTypes::INVALID_ID)), "a valid slot may carry any generation");
     static_assert(Entity_index(Make_entity(7u, 3u)) == 7u);
     static_assert(Entity_generation(Make_entity(7u, 3u)) == 3u);
     static_assert(Make_entity(7u, 3u) != Make_entity(7u, 4u),"Two generations of the same slot must be distinct entities");

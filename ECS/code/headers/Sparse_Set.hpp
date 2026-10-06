@@ -71,8 +71,23 @@ namespace ECS
                     " still holds an entity of a previous generation");
             }
 
-            sparse.Set(Entity_index(_entity), static_cast<uint32_t>(dense.size()));
+            // push_back first: it has the strong guarantee, so a failure leaves
+            // the set untouched. Sparse_Array::Set may then allocate a segment;
+            // if it throws, the dense element is withdrawn so no sparse entry
+            // ever points past the end of `dense`.
+            const uint32_t position = static_cast<uint32_t>(dense.size());
+
             dense.push_back(_entity);
+
+            try
+            {
+                sparse.Set(Entity_index(_entity), position);
+            }
+            catch (...)
+            {
+                dense.pop_back();
+                throw;
+            }
         }
 
         // Removes _entity from the set. No-op if it is not present.

@@ -89,10 +89,7 @@ namespace EngineCore
 
         while (!_window.Should_close())
         {
-            // ── 1. Snapshot the input state of the previous frame ──
-            input.Begin_frame();
-
-            // ── 2. OS events -> GLFW callbacks ────────────────────
+            // ── 1. OS events -> GLFW callbacks ────────────────────
             _window.Poll_events();
 
             if (_window.Is_minimized())
@@ -108,11 +105,11 @@ namespace EngineCore
                 continue;
             }
 
-            // ── 3. Timing ─────────────────────────────────────────
+            // ── 2. Timing ─────────────────────────────────────────
             time.Update();
             const float dt = time.Get_delta_time();
 
-            // ── 4. Resize: window flag -> renderer ────────────────
+            // ── 3. Resize: window flag -> renderer ────────────────
             // The only place that recreates the swapchain, whatever asked
             // for it (a resize, or the driver reporting it out of date).
             // Applied before extract, so the aspect ratio below and the
@@ -130,16 +127,16 @@ namespace EngineCore
                 continue;
             }
 
-            // ── 5. Input snapshots + named actions ────────────────
+            // ── 4. Input snapshots + named actions ────────────────
             input.Update();
 
             // Systems of the Input phase (the render debug switches today).
             _context.Run_phase(Phase::Input, dt);
 
-            // ── 6. Gameplay ───────────────────────────────────────
+            // ── 5. Gameplay ───────────────────────────────────────
             _context.Run_phase(Phase::Gameplay, dt);
 
-            // ── 7. Simulation ─────────────────────────────────────
+            // ── 6. Simulation ─────────────────────────────────────
             // Fixed_Update is reserved for physics: it runs once per frame
             // for now, with no accumulator.
             _context.Run_phase(Phase::Fixed_Update, dt);
@@ -150,7 +147,7 @@ namespace EngineCore
             // entity this frame (TRS, hierarchy).
             _context.Transforms().Update(world);
 
-            // ── 8. Extract ECS -> RenderPacket ────────────────────
+            // ── 7. Extract ECS -> RenderPacket ────────────────────
             _context.Run_phase(Phase::Extract, dt);
 
             uint32_t render_width = 0;
@@ -163,7 +160,7 @@ namespace EngineCore
 
             const bool has_camera = _extractor.Extract(world, _resources, extract_params, packet);
 
-            // ── 9. Render ─────────────────────────────────────────
+            // ── 8. Render ─────────────────────────────────────────
             _context.Run_phase(Phase::Render, dt);
 
             // A failed frame has been undone by the Renderer, so the loop

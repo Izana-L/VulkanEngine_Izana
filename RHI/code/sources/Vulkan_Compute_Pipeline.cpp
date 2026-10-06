@@ -143,12 +143,21 @@ namespace Renderer_System
     // ---------- Create_shader_module ----------
     VkShaderModule Vulkan_Compute_Pipeline::Create_shader_module(const std::string& _spv_file_path) const
     {
-        std::vector<uint8_t> shader_code = Platform::Filesystem::Read_binary_file(_spv_file_path);
+        const std::optional<std::vector<uint8_t>> shader_file = Platform::Filesystem::Read_binary_file(_spv_file_path);
+
+        if (!shader_file)
+        {
+            throw std::runtime_error(
+                "Failed to read shader file: " + _spv_file_path
+            );
+        }
+
+        const std::vector<uint8_t>& shader_code = *shader_file;
 
         if (shader_code.empty())
         {
             throw std::runtime_error(
-                "Failed to read shader file or file is empty: " + _spv_file_path
+                "Shader file is empty: " + _spv_file_path
             );
         }
 

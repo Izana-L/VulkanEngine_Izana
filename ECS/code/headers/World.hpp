@@ -176,20 +176,34 @@ namespace ECS
         // The clone is fully independent - modifying one does not
         // affect the other.
         //
-        // Throws std::invalid_argument if _source is not alive.
+        // Throws std::invalid_argument if _source is not alive. If copying any
+        // component throws, the partial clone is destroyed before the exception
+        // propagates (strong guarantee).
         Entity Clone_entity(Entity _source)
         {
             Require_alive(_source, "Clone_entity");
 
             const Entity clone = Create_entity();
 
-            for (size_t i = 0; i < MAX_COMPONENT_TYPES; ++i)
+            try
             {
-                if (Mask_of(_source).test(i) && storages[i])
+                for (size_t i = 0; i < MAX_COMPONENT_TYPES; ++i)
                 {
-                    storages[i]->Clone_to(_source, clone);
-                    Mask_of(clone).set(i);
+                    if (Mask_of(_source).test(i) && storages[i])
+                    {
+                        storages[i]->Clone_to(_source, clone);
+                        Mask_of(clone).set(i);   // only after the storage holds it
+                    }
                 }
+            }
+            catch (...)
+            {
+                // The clone's mask lists exactly the storages that received a
+                // component, so Destroy_entity removes precisely those, frees
+                // the slot and advances its generation: the half-built handle
+                // is dead and the world is as before the call.
+                Destroy_entity(clone);
+                throw;
             }
 
             ++structural_version;
@@ -234,15 +248,26 @@ namespace ECS
         template< typename COMPONENT_TYPE, typename... Args >
         COMPONENT_TYPE& Add_component(Entity _entity, Args&&... _args)
         {
+            static_assert(!std::is_const_v< COMPONENT_TYPE > && !std::is_reference_v< COMPONENT_TYPE >,
+                "World::Add_component: the component type must not be const or a reference");
+
             Require_alive(_entity, "Add_component");
 
             const size_t type_id = Component_Id< COMPONENT_TYPE >();
 
+            // 1. Everything that can throw runs first. Emplace gives the strong
+            //    guarantee for a new component (Component_Storage rolls itself
+            //    back); a storage created here and left empty is a valid state.
+            COMPONENT_TYPE& component = Get_or_create_storage< COMPONENT_TYPE >()
+                .Emplace(_entity, std::forward< Args >(_args)...);
+
+            // 2. Publish. Nothing below can throw, so the mask never claims a
+            //    component the storage does not hold. When the component already
+            //    existed the bit was set and stays set.
             Mask_of(_entity).set(type_id);
             ++structural_version;
 
-            return Get_or_create_storage< COMPONENT_TYPE >()
-                .Emplace(_entity, std::forward< Args >(_args)...);
+            return component;
         }
 
         // Returns the component if the entity already has it, or creates
@@ -464,6 +489,15 @@ namespace ECS
         // slot's generation advances), and slot numbering restarts at 0.
         void Clear()
         {
+            // Storages first: they hold the components. The storage objects
+            // are kept (only emptied), so capacity reserved with Reserve<T>()
+            // survives a Clear(). IComponent_Storage::Clear() is noexcept, so
+            // from here on nothing can fail halfway.
+            for (const std::unique_ptr< IComponent_Storage >& storage : storages)
+            {
+                if (storage) storage->Clear();
+            }
+
             entity_masks->fill(Entity_Mask{});
 
             // Every allocated slot advances its generation, so each Entity handed
@@ -541,8 +575,18 @@ namespace ECS
         // Throws std::length_error the first time a type past
         // MAX_COMPONENT_TYPES is registered; the id is never handed out,
         // so no array below can be indexed out of range with it.
+        //
+        // cv-qualifiers are stripped BEFORE the static is chosen: Query<const T>,
+        // Has_component<const T>... must resolve to the same id and the same
+        // storage as T, not to a second, always-empty registration.
         template< typename COMPONENT_TYPE >
         static size_t Component_Id()
+        {
+            return Component_Id_impl< std::remove_cv_t< COMPONENT_TYPE > >();
+        }
+
+        template< typename STORED_TYPE >
+        static size_t Component_Id_impl()
         {
             static const size_t id = Register_component_id();
             return id;
@@ -568,29 +612,31 @@ namespace ECS
 
         // Returns the storage for T, creating it if it doesn't exist yet.
         template< typename COMPONENT_TYPE >
-        Component_Storage< COMPONENT_TYPE >& Get_or_create_storage()
+        Component_Storage< std::remove_cv_t< COMPONENT_TYPE > >& Get_or_create_storage()
         {
             const size_t type_id = Component_Id< COMPONENT_TYPE >();
 
+            using Storage = Component_Storage< std::remove_cv_t< COMPONENT_TYPE > >;
+
             if (!storages[type_id])
             {
-                storages[type_id] = std::make_unique< Component_Storage< COMPONENT_TYPE > >();
+                storages[type_id] = std::make_unique< Storage >();
             }
 
-            return static_cast<Component_Storage< COMPONENT_TYPE >&>(*storages[type_id]);
+            return static_cast< Storage& >(*storages[type_id]);
         }
 
         // Returns the storage for T.
         // Precondition: the storage must already exist (the type must have
         // been used at least once via Add_component or Reserve).
         template< typename COMPONENT_TYPE >
-        Component_Storage< COMPONENT_TYPE >& Get_storage()
+        Component_Storage< std::remove_cv_t< COMPONENT_TYPE > >& Get_storage()
         {
             return Get_storage_impl< COMPONENT_TYPE >(*this);
         }
 
         template< typename COMPONENT_TYPE >
-        const Component_Storage< COMPONENT_TYPE >& Get_storage() const
+        const Component_Storage< std::remove_cv_t< COMPONENT_TYPE > >& Get_storage() const
         {
             return Get_storage_impl< COMPONENT_TYPE >(*this);
         }
@@ -615,7 +661,7 @@ namespace ECS
                     "World::Get_storage: component type never registered via Add_component");
             }
 
-            using Storage = Component_Storage< COMPONENT_TYPE >;
+            using Storage = Component_Storage< std::remove_cv_t< COMPONENT_TYPE > >;
             using Result = std::conditional_t< std::is_const_v< SELF >, const Storage, Storage >;
 
             return static_cast<Result&>(*_self.storages[type_id]);

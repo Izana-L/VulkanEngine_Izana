@@ -8,13 +8,84 @@
 #include <stdexcept>
 #include <iostream>
 #include <cassert>
+#include <string>
 namespace Platform {
 
-    int Window::window_count = 0;
+    // Window::no_size_limit is declared without including GLFW; this is the
+    // one place where the two values meet.
+    static_assert(Window::no_size_limit == GLFW_DONT_CARE,
+        "Window::no_size_limit must match GLFW_DONT_CARE");
 
     // ---------- GLFW error callback ----------
     static void Glfw_error_callback(int _error_code, const char* _description) {
         std::cerr << "[GLFW Error " << _error_code << "] " << _description << "\n";
+    }
+
+    // ---------- GLFW library lifetime ----------
+
+    // GLFW is initialized by the first Window and terminated when the last
+    // one goes away. A "reference" is held by every Window that owns a GLFW
+    // window and, for as long as the constructor runs, by the Window being
+    // built. Counting the one being built is what makes a constructor that
+    // fails (the destructor of a half-built object never runs) give the
+    // reference back instead of leaving GLFW initialized for good.
+    //
+    // Not thread-safe, on purpose: GLFW itself has to be driven from the main
+    // thread.
+    namespace {
+        int glfw_reference_count = 0;
+
+        // The text of the last GLFW error on this thread, appended to
+        // _what, so a failure that throws says why and not just what.
+        std::string Describe_glfw_failure(const char* _what) {
+            std::string message = _what;
+
+            const char* description = nullptr;
+            if (glfwGetError(&description) != GLFW_NO_ERROR && description != nullptr) {
+                message += ": ";
+                message += description;
+            }
+            return message;
+        }
+
+        // Throws std::runtime_error if GLFW cannot be initialized, holding
+        // no reference in that case.
+        void Acquire_glfw() {
+            if (glfw_reference_count == 0) {
+                glfwSetErrorCallback(Glfw_error_callback);
+                if (!glfwInit()) {
+                    throw std::runtime_error(Describe_glfw_failure("Failed to initialize GLFW"));
+                }
+            }
+            ++glfw_reference_count;
+        }
+
+        void Release_glfw() noexcept {
+            assert(glfw_reference_count > 0 && "Release_glfw() without a matching Acquire_glfw()");
+
+            --glfw_reference_count;
+            if (glfw_reference_count == 0) {
+                glfwTerminate();
+            }
+        }
+
+        // Holds one reference to GLFW until Dismiss() hands it over to
+        // whoever keeps it from then on (here: the Window, which releases it
+        // in Destroy_native()).
+        class Glfw_reference
+        {
+        public:
+            Glfw_reference() { Acquire_glfw(); }
+            ~Glfw_reference() { if (held) Release_glfw(); }
+
+            Glfw_reference(const Glfw_reference&) = delete;
+            Glfw_reference& operator=(const Glfw_reference&) = delete;
+
+            void Dismiss() noexcept { held = false; }
+
+        private:
+            bool held = true;
+        };
     }
 
     // ---------- File-local helpers ----------
@@ -63,12 +134,9 @@ namespace Platform {
         // (alguien paso mal los parametros), no una condicion del entorno
         assert(_width > 0 && _height > 0 && "Window dimensions must be greater than zero");
 
-        if (window_count == 0) {
-            glfwSetErrorCallback(Glfw_error_callback);
-            if (!glfwInit()) {
-                throw std::runtime_error("Failed to initialize GLFW");
-            }
-        }
+        // Any exit from the constructor before Dismiss() below releases this
+        // reference, terminating GLFW again if this was the first Window.
+        Glfw_reference glfw_reference;
 
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
@@ -82,7 +150,7 @@ namespace Platform {
         );
 
         if (!window_handle) {
-            throw std::runtime_error("Failed to create GLFW window");
+            throw std::runtime_error(Describe_glfw_failure("Failed to create GLFW window"));
         }
 
         glfwSetWindowUserPointer(window_handle, this);
@@ -100,7 +168,8 @@ namespace Platform {
         windowed_width = static_cast<int>(_width);
         windowed_height = static_cast<int>(_height);
 
-        ++window_count;
+        // From here the Window owns the reference: Destroy_native() releases it.
+        glfw_reference.Dismiss();
     }
 
     // ---------- Destructor ----------
@@ -115,10 +184,7 @@ namespace Platform {
         glfwDestroyWindow(window_handle);
         window_handle = nullptr;
 
-        --window_count;
-        if (window_count == 0) {
-            glfwTerminate();
-        }
+        Release_glfw();
     }
 
     // ---------- Move_from ----------
@@ -134,6 +200,10 @@ namespace Platform {
         windowed_height = _other.windowed_height;
         is_fullscreen = _other.is_fullscreen;
         is_windowed_fullscreen = _other.is_windowed_fullscreen;
+        min_width = _other.min_width;
+        min_height = _other.min_height;
+        max_width = _other.max_width;
+        max_height = _other.max_height;
 
         // Every callback travels with the window. Leaving the input ones
         // behind would silently disconnect Input from a moved Window.
@@ -225,16 +295,63 @@ namespace Platform {
         return result;
     }
 
-    void Window::Set_min_size(int _min_width, int _min_height) {
-        assert(window_handle != nullptr && "Set_min_size() called on a moved-from Window");
-        assert(_min_width >= 0 && _min_height >= 0 && "Min size cannot be negative");
-        glfwSetWindowSizeLimits(window_handle, _min_width, _min_height, GLFW_DONT_CARE, GLFW_DONT_CARE);
+    // glfwSetWindowSizeLimits takes the minimum AND the maximum in one call,
+    // and a GLFW_DONT_CARE argument means "remove that limit", not "leave it
+    // alone". So every change is made by re-sending all four values: the new
+    // ones plus the stored ones for the limit the caller did not touch.
+    bool Window::Apply_size_limits(int _min_width, int _min_height, int _max_width, int _max_height) {
+        // GLFW rejects an inconsistent set with GLFW_INVALID_VALUE and applies
+        // nothing, which the members would then misreport. Checking first
+        // keeps them equal to what is in effect.
+        const bool width_inconsistent = _min_width != no_size_limit && _max_width != no_size_limit
+            && _min_width > _max_width;
+        const bool height_inconsistent = _min_height != no_size_limit && _max_height != no_size_limit
+            && _min_height > _max_height;
+
+        if (width_inconsistent || height_inconsistent) {
+            std::cerr << "[Window] Size limits ignored: the minimum (" << _min_width << "x" << _min_height
+                << ") exceeds the maximum (" << _max_width << "x" << _max_height << ")\n";
+            return false;
+        }
+
+        glfwSetWindowSizeLimits(window_handle, _min_width, _min_height, _max_width, _max_height);
+
+        min_width = _min_width;
+        min_height = _min_height;
+        max_width = _max_width;
+        max_height = _max_height;
+        return true;
     }
 
-    void Window::Set_max_size(int _max_width, int _max_height) {
+    bool Window::Set_min_size(int _min_width, int _min_height) {
+        assert(window_handle != nullptr && "Set_min_size() called on a moved-from Window");
+        assert(_min_width >= 0 && _min_height >= 0 && "Min size cannot be negative");
+
+        // Also checked in release builds: -1 would silently mean "no limit",
+        // and any other negative value is a GLFW error.
+        if (_min_width < 0 || _min_height < 0) {
+            std::cerr << "[Window] Set_min_size ignored: negative size\n";
+            return false;
+        }
+
+        return Apply_size_limits(_min_width, _min_height, max_width, max_height);
+    }
+
+    bool Window::Set_max_size(int _max_width, int _max_height) {
         assert(window_handle != nullptr && "Set_max_size() called on a moved-from Window");
         assert(_max_width >= 0 && _max_height >= 0 && "Max size cannot be negative");
-        glfwSetWindowSizeLimits(window_handle, GLFW_DONT_CARE, GLFW_DONT_CARE, _max_width, _max_height);
+
+        if (_max_width < 0 || _max_height < 0) {
+            std::cerr << "[Window] Set_max_size ignored: negative size\n";
+            return false;
+        }
+
+        return Apply_size_limits(min_width, min_height, _max_width, _max_height);
+    }
+
+    void Window::Clear_size_limits() {
+        assert(window_handle != nullptr && "Clear_size_limits() called on a moved-from Window");
+        Apply_size_limits(no_size_limit, no_size_limit, no_size_limit, no_size_limit);
     }
 
     void Window::Set_resizable(bool _resizable) {

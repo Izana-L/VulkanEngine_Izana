@@ -2,8 +2,10 @@
 
 #include <Atomic_Counter.hpp>
 
+#include <exception>
 #include <functional>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 
 namespace ThreadDispatcher
@@ -84,15 +86,25 @@ namespace ThreadDispatcher
         // it to signal completion to waiting threads and to trigger chained
         // work registered through Set_on_zero.
         //
+        // Completion is published last, and only when the task is entirely
+        // gone: the callable is destroyed - and with it everything it
+        // captured, whose destructors may touch the data the waiter is about
+        // to release - BEFORE the counter is decremented. Letting the Task
+        // object die after Execute() returned (e.g. at the end of a worker's
+        // loop iteration) would run those destructors after the waiter was
+        // already released.
+        //
         // The counter is released even when the callable throws: a failed
         // task still counts as finished, otherwise every thread waiting on
-        // its group would block forever. The exception then propagates to
-        // the executing thread, which decides how to report it (see
-        // Thread_Dispatcher::Worker_loop and Steal_until_done).
+        // its group would block forever. The exception is first recorded in
+        // the task's own counter (Atomic_Counter::Report_failure), so it
+        // reaches whoever waits on THAT group no matter which thread ran the
+        // task, and is then rethrown to the executing thread, which decides
+        // how to account for it (see Thread_Dispatcher::Run_task).
         //
-        // A task can be executed once: the counter is detached before the
-        // callable runs, so a second call can never decrement it again.
-        // Throws std::logic_error if the task is empty.
+        // A task can be executed once: callable and counter are detached
+        // before anything runs, so a second call can never decrement the
+        // counter again. Throws std::logic_error if the task is empty.
         void Execute()
         {
             if (!Is_valid())
@@ -101,30 +113,55 @@ namespace ThreadDispatcher
                     "Task::Execute: the task is empty (default-constructed or already moved from)");
             }
 
-            // Detach the counter first so it is decremented exactly once no
-            // matter how the callable exits.
+            // Take ownership of everything the task holds. A moved-from
+            // std::function is only "valid but unspecified", so reset both
+            // members explicitly: the task is empty from now on.
+            std::function< void() > work = std::move(callable);
             Counter_Ptr finished = std::move(counter);
+            callable = nullptr;
             counter = nullptr;
+
+            std::exception_ptr error;
 
             try
             {
-                callable();
+                work();
             }
             catch (...)
             {
-                if (finished)
+                error = std::current_exception();
+            }
+
+            // Destroy the captures now, still before completion is published.
+            work = nullptr;
+
+            if (finished)
+            {
+                // Recorded before the decrement: the release in Decrement()
+                // publishes it, so a waiter that sees the group done sees it.
+                if (error)
+                {
+                    finished->Report_failure(error);
+                }
+
+                try
                 {
                     finished->Decrement();
                 }
-
-                throw;
+                catch (...)
+                {
+                    // Underflow, or a progress/continuation callback threw
+                    // (already recorded in the counter by Decrement()).
+                    if (!error)
+                    {
+                        error = std::current_exception();
+                    }
+                }
             }
 
-            // Work first, then completion: waiters and on_zero continuations
-            // must observe a fully completed task.
-            if (finished)
+            if (error)
             {
-                finished->Decrement();
+                std::rethrow_exception(error);
             }
         }
 

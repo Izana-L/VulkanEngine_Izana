@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -38,6 +39,15 @@ namespace ECS
     public:
 
         using Component_Type = COMPONENT_TYPE;
+
+        // Remove() (swap-and-pop) and Reorder() move components around while the
+        // parallel arrays are momentarily out of step; a move that throws there
+        // would leave them corrupt. Requiring noexcept moves also makes the
+        // rollback paths of World (Clone_entity, Destroy_entity) unable to fail.
+        static_assert(!std::is_const_v< COMPONENT_TYPE > && !std::is_reference_v< COMPONENT_TYPE >,
+            "Component_Storage: the component type must not be const or a reference");
+        static_assert(std::is_nothrow_move_constructible_v< COMPONENT_TYPE > && std::is_nothrow_move_assignable_v< COMPONENT_TYPE >,
+            "Component_Storage: components must be nothrow move constructible and assignable");
 
     private:
 
@@ -185,7 +195,7 @@ namespace ECS
 
         // Swap-and-pop: the last element takes the removed one's place, in
         // BOTH dense arrays, so they stay parallel and gap-free.
-        void Remove(Entity _entity) override
+        void Remove(Entity _entity) noexcept override
         {
             const uint32_t* found = Find_index(_entity);
             if (!found) return;
@@ -205,7 +215,7 @@ namespace ECS
             sparse.Unset(Entity_index(_entity));
         }
 
-        void Clear() override
+        void Clear() noexcept override
         {
             for (Entity entity : entities)
                 sparse.Unset(Entity_index(entity));

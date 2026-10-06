@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace Input_System
@@ -17,15 +18,23 @@ namespace Input_System
     // named actions loaded from a JSON configuration file.
     //
     // Lifecycle per frame:
-    //   1. Input::Begin_frame()   - snapshot the previous key/button state
-    //   2. Window::Poll_events()  - GLFW fires callbacks -> Input stores raw events
-    //   3. Input::Update()        - publish mouse/scroll deltas, compute action states
-    //   4. Game code queries      - Is_key_down(), Get_action_value(), etc.
+    //   1. Window::Poll_events()  - GLFW fires callbacks -> Input accumulates
+    //                               raw events (key/button edges, mouse
+    //                               motion, scroll)
+    //   2. Input::Update()        - publish what was accumulated, compute
+    //                               action states
+    //   3. Game code queries      - Is_key_down(), Get_action_value(), etc.
     //
-    // While the window is minimized the loop does not run steps 3-4; it
-    // calls Discard_pending() instead, so that mouse motion and scroll
-    // received during that time is dropped rather than delivered as one
-    // huge delta on the first frame after restoring.
+    // Everything that is "since the last frame" (pressed/released edges,
+    // mouse delta, scroll) is accumulated by the callbacks and published
+    // by Update(), so it is delivered exactly once, no matter how many
+    // times Poll_events() ran in between and even if a press and its
+    // release arrive within the same Poll_events().
+    //
+    // While the window is minimized the loop does not run steps 2-3; it
+    // calls Discard_pending() instead, so that what was accumulated
+    // during that time is dropped rather than delivered as one huge delta
+    // (or a burst of stale edges) on the first frame after restoring.
     //
     // Subscribes to Window via std::function callbacks (Set_*_callback).
     // Does not touch GLFW directly except for cursor mode.
@@ -45,41 +54,48 @@ namespace Input_System
         // Frame update
         // =========================================================
 
-        // Must be called once per frame BEFORE Poll_events(): copies the
-        // current key/button state into the previous snapshot so the
-        // callbacks fired by Poll_events() produce edges relative to it.
-        void Begin_frame();
-
         // Must be called once per frame AFTER Poll_events() and BEFORE
         // any game code queries input state.
-        // Publishes the accumulated mouse/scroll deltas, resets the
-        // accumulators, and recomputes action values and edges.
+        // Publishes the key/button edges and the mouse/scroll deltas
+        // accumulated since the previous call, resets the accumulators,
+        // and recomputes action values and edges.
         void Update();
 
         // Drops everything accumulated since the last Update() (mouse
-        // motion, scroll, pressed/released edges) and re-syncs the
-        // snapshots with the current key/button state. Used while the
-        // window is minimized, when no frame consumes the input: without
-        // it the accumulators keep growing and the first frame after
-        // restoring receives the whole backlog at once.
+        // motion, scroll, pressed/released edges). Used while the window
+        // is minimized, when no frame consumes the input: without it the
+        // accumulators keep growing and the first frame after restoring
+        // receives the whole backlog at once. Keys that are still held
+        // stay held; only the history is dropped.
         void Discard_pending();
 
         // =========================================================
         // Raw keyboard state
         // =========================================================
+        //
+        // Every query is safe for any value of the enum: Key::COUNT, or a
+        // value cast from garbage, is "not a key" and reads as false
+        // instead of indexing past the state arrays.
 
         // True while the key is held down.
         bool Is_key_down(Key _key) const;
 
-        // True only on the frame the key transitioned from up to down.
+        // True on the frame the key went down. Latched: a key that was
+        // pressed AND released between two Update() calls still reports
+        // true here (and in Was_key_released), even though Is_key_down()
+        // is already false by then.
         bool Was_key_pressed(Key _key) const;
 
-        // True only on the frame the key transitioned from down to up.
+        // True on the frame the key went up. Same latching as above.
         bool Was_key_released(Key _key) const;
 
         // =========================================================
         // Raw mouse state
         // =========================================================
+        //
+        // Same guarantees as the keyboard: Mouse_Button::COUNT (the
+        // "unknown button" sentinel) and out-of-range values read as
+        // false, and a click shorter than a frame is not lost.
 
         bool Is_mouse_button_down(Mouse_Button _button) const;
         bool Was_mouse_button_pressed(Mouse_Button _button) const;
@@ -105,7 +121,9 @@ namespace Input_System
 
         // Switching modes discards any mouse delta latched for the current
         // frame and any motion accumulated since, so a toggle never turns
-        // the movement that triggered it into a camera jump.
+        // the movement that triggered it into a camera jump. Scroll is
+        // not mouse motion and is left alone: a wheel notch that arrived
+        // with the toggle is still delivered.
         void        Set_cursor_mode(Cursor_Mode _mode);
         Cursor_Mode Get_cursor_mode() const;
 
@@ -124,7 +142,13 @@ namespace Input_System
         void Load_actions(const std::string& _path);
 
         // 0.0 (inactive) or 1.0 (active) for keyboard/mouse bindings.
-        // Returns 0.0 if the action name is not found.
+        //
+        // The by-name queries (this one and the Is_/Was_ wrappers below)
+        // treat an action that is not defined as inactive, but they do not
+        // do it silently: the first query for each unknown name is reported
+        // once on std::cerr (not every frame), so a typo in the game code,
+        // or an action removed from the input JSON, shows up in the log
+        // instead of passing for "the player is not pressing it".
         float Get_action_value(const std::string& _action) const;
 
         // Resolves an action name to a stable index, once. Per-frame code
@@ -135,6 +159,8 @@ namespace Input_System
         // invalid afterwards. Today it is only called at startup.
         static constexpr size_t INVALID_ACTION = ~size_t(0);
 
+        // Pure lookup: returns INVALID_ACTION for an unknown name without
+        // reporting anything, so it can be used to probe for an action.
         size_t Get_action_id(const std::string& _action) const;
 
         // Get_action_id() for a consumer that binds its actions by name once
@@ -178,15 +204,63 @@ namespace Input_System
         static constexpr size_t KEY_COUNT = static_cast<size_t>(Key::COUNT);
         static constexpr size_t BTN_COUNT = static_cast<size_t>(Mouse_Button::COUNT);
 
-        struct Keyboard_State
+        // State of a set of digital inputs (keys, or mouse buttons).
+        //
+        // Edges are latched by the callbacks and published by Update(), the
+        // same accumulate / publish / reset pattern as the mouse delta. They
+        // are NOT derived by comparing the level before and after
+        // Poll_events(): that comparison cannot see a press that is
+        // released again within the same poll (a fast tap, or a low frame
+        // rate), which would make the key/button click vanish.
+        //
+        // All queries are range checked here, in one place, so no caller
+        // can index past the arrays with an out-of-range enum value (such as
+        // the COUNT sentinel).
+        template <size_t COUNT>
+        struct Digital_State
         {
-            std::array<bool, KEY_COUNT> keys{};
+            std::array<bool, COUNT> down{};          // live level, written by the callbacks
+            std::array<bool, COUNT> pressed_acc{};   // edges seen since the last Publish()
+            std::array<bool, COUNT> released_acc{};
+            std::array<bool, COUNT> pressed{};       // edges published for the current frame
+            std::array<bool, COUNT> released{};
+
+            bool Is_down(size_t _index)      const { return _index < COUNT && down[_index]; }
+            bool Was_pressed(size_t _index)  const { return _index < COUNT && pressed[_index]; }
+            bool Was_released(size_t _index) const { return _index < COUNT && released[_index]; }
+
+            // Records a level report from the OS. Only a real change is an
+            // edge: key repeat (down -> down) and duplicate releases are not.
+            void Set(size_t _index, bool _is_down)
+            {
+                if (_index >= COUNT || down[_index] == _is_down) return;
+
+                down[_index] = _is_down;
+                (_is_down ? pressed_acc : released_acc)[_index] = true;
+            }
+
+            // Makes the accumulated edges the current frame's and starts
+            // accumulating anew.
+            void Publish()
+            {
+                pressed = pressed_acc;
+                released = released_acc;
+                pressed_acc.fill(false);
+                released_acc.fill(false);
+            }
+
+            // Drops every edge, published or not. The level is kept.
+            void Discard_edges()
+            {
+                pressed_acc.fill(false);
+                released_acc.fill(false);
+                pressed.fill(false);
+                released.fill(false);
+            }
         };
 
-        struct Mouse_State
-        {
-            std::array<bool, BTN_COUNT> buttons{};
-        };
+        using Keyboard_State = Digital_State<KEY_COUNT>;
+        using Mouse_State    = Digital_State<BTN_COUNT>;
 
         // =========================================================
         // GLFW callbacks - called by Window during Poll_events()
@@ -211,11 +285,24 @@ namespace Input_System
         // Returns the raw bool state (down/not) for a single binding.
         bool Binding_is_down(const Action_Binding& _binding) const;
 
+        // True if the binding's key/button went down since the last
+        // Update(), even when it is already up again.
+        bool Binding_was_pressed(const Action_Binding& _binding) const;
+
         // Recomputes value, pressed and released for all actions.
         void Update_actions();
 
-        // Zeroes the latched deltas and the accumulators.
-        void Clear_motion();
+        // By-name lookup for the per-frame queries: like Get_action_id(),
+        // but an unknown name is reported once (see Get_action_value).
+        // _query names the calling query in the report.
+        size_t Find_action_for_query(const std::string& _action, const char* _query) const;
+
+        // Zeroes the mouse delta (published and accumulated). Scroll is a
+        // separate channel with its own reset.
+        void Clear_mouse_motion();
+
+        // Zeroes the scroll delta (published and accumulated).
+        void Clear_scroll();
 
         // =========================================================
         // Data
@@ -223,11 +310,9 @@ namespace Input_System
 
         Platform::Window& window;
 
-        // Double-buffered keyboard and mouse state.
-        Keyboard_State current_keys;
-        Keyboard_State previous_keys;
-        Mouse_State    current_buttons;
-        Mouse_State    previous_buttons;
+        // Keyboard and mouse button state: live level + latched edges.
+        Keyboard_State keyboard;
+        Mouse_State    mouse_buttons;
 
         // Mouse position and delta.
         float mouse_x = 0.0f;
@@ -246,6 +331,11 @@ namespace Input_System
         // Actions loaded from JSON.
         std::vector<Action>                        actions;
         std::unordered_map<std::string, size_t>    action_index;   // name -> index in actions
+
+        // Unknown names already reported by the by-name queries, so each
+        // one is logged once instead of every frame. Cleared by
+        // Load_actions(), after which the set of known names has changed.
+        mutable std::unordered_set<std::string>    reported_unknown_actions;
     };
 
 } // namespace Input_System

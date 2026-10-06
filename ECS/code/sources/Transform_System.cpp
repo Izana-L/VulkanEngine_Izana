@@ -3,6 +3,7 @@
 #include <World.hpp>
 #include <Matrix4.hpp>
 
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -54,10 +55,14 @@ namespace ECS
             }
         }
 
-        if (child_transform.Get_parent() == _parent) return;
+        // Any "no entity" value means detach; store the canonical sentinel so
+        // `parent == INVALID_ENTITY` comparisons keep working.
+        const Entity new_parent = Is_valid_entity(_parent) ? _parent : INVALID_ENTITY;
+
+        if (child_transform.Get_parent() == new_parent) return;
 
         // Everything is validated: mutate the component (source of truth).
-        child_transform.parent = _parent;
+        child_transform.parent = new_parent;
         child_transform.dirty = true;
 
         // Hierarchy changed: reorder the storage so the parent-before-child
@@ -208,9 +213,10 @@ namespace ECS
 
         std::vector<Entity> stack;
 
-        for (Entity root : roots)
+        // Appends _root and its whole subtree to new_order, parents first.
+        const auto visit_subtree = [&](Entity _root)
         {
-            stack.push_back(root);
+            stack.push_back(_root);
 
             while (!stack.empty())
             {
@@ -228,26 +234,59 @@ namespace ECS
                 for (auto child = it->second.rbegin(); child != it->second.rend(); ++child)
                     stack.push_back(*child);
             }
-        }
+        };
 
-        // ── 3. Anything not reached is part of a cycle ────────────
+        for (Entity root : roots) visit_subtree(root);
+
+        // ── 3. Anything not reached hangs from a cycle ────────────
         // Set_parent() rejects cycles, so this is a defence against
-        // corruption, not an expected path. Each such entity has its link
-        // cut and is appended to the order as a root, so the order stays a
-        // permutation of the storage (which is what Reorder_storage
-        // requires).
+        // corruption, not an expected path.
+        //
+        // A transform whose parent was visited is itself visited (the parent
+        // pushed all its children), so every unreached transform has an
+        // UNREACHED parent. In that graph each connected component holds
+        // exactly one cycle, with trees hanging from it. Cutting ONE link per
+        // cycle makes the cycle's node a root and lets the DFS reach the whole
+        // component: members of the cycle keep their other links and the
+        // descendants that merely hang from it keep their parents. The order
+        // stays a permutation of the storage, which Reorder_storage requires.
         if (new_order.size() != transform_count)
         {
-            _world.Each<Transform_Component>([&](Entity entity, Transform_Component& transform)
+            std::unordered_set<Entity> walk;
+
+            _world.Each<Transform_Component>([&](Entity entity, Transform_Component&)
             {
                 if (visited.count(entity)) return;
 
-                std::cerr << "[Transform_System] Entity " << entity
-                    << " is part of a parent cycle; the link is cut and it becomes a root.\n";
+                // Climb parent links until a node repeats: that node is ON the
+                // cycle. (The null/no-parent exits cannot happen here; they only
+                // keep the loop total if the invariant above is ever broken.)
+                walk.clear();
+                Entity cursor = entity;
 
-                Cut_parent_link(transform);
-                visited.insert(entity);
-                new_order.push_back(entity);
+                while (walk.insert(cursor).second)
+                {
+                    const Transform_Component* t = _world.Try_get_component<Transform_Component>(cursor);
+                    if (!t || !t->Has_parent()) break;
+                    cursor = t->Get_parent();
+                }
+
+                Transform_Component* cut = _world.Try_get_component<Transform_Component>(cursor);
+
+                if (cut && cut->Has_parent())
+                {
+                    std::cerr << "[Transform_System] Entity " << cursor
+                        << " is part of a parent cycle; its link to " << cut->Get_parent()
+                        << " is cut and it becomes a root.\n";
+
+                    // Keep the adjacency snapshot in step with the component.
+                    std::vector<Entity>& siblings = children[cut->Get_parent()];
+                    siblings.erase(std::remove(siblings.begin(), siblings.end(), cursor), siblings.end());
+
+                    Cut_parent_link(*cut);
+                }
+
+                visit_subtree(cursor);
             });
         }
 

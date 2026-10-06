@@ -250,22 +250,18 @@ namespace Input_System
         window.Set_scroll_callback(nullptr);
     }
 
-    void Input::Begin_frame()
-    {
-        previous_keys = current_keys;
-        previous_buttons = current_buttons;
-    }
-
     // =========================================================
     // Update - call once per frame after Poll_events()
     // =========================================================
 
     void Input::Update()
     {
-        // Transfer accumulated mouse delta to the readable fields,
-        // then reset the accumulators for the next frame.
-        // This mirrors the scroll pattern: accumulate during Poll_events(),
-        // expose via Update(), reset for next frame.
+        // Publish what the callbacks accumulated during Poll_events(), and
+        // start accumulating anew. Key/button edges, mouse delta and
+        // scroll all follow the same pattern.
+        keyboard.Publish();
+        mouse_buttons.Publish();
+
         mouse_delta_x = mouse_delta_x_acc;
         mouse_delta_y = mouse_delta_y_acc;
         mouse_delta_x_acc = 0.0f;
@@ -274,23 +270,25 @@ namespace Input_System
         scroll_delta = scroll_accumulator;
         scroll_accumulator = 0.0f;
 
-        // Recompute action states based on the new snapshots.
+        // Recompute action states from the published state.
         Update_actions();
     }
 
     void Input::Discard_pending()
     {
-        Clear_motion();
+        Clear_mouse_motion();
+        Clear_scroll();
 
         // The next motion event re-anchors the absolute position instead
         // of producing a delta against a position from before the pause.
         first_mouse = true;
 
-        // Re-sync the edge snapshots with the present state, then compute
-        // the action values from it and drop the edges: a key pressed and
-        // released while nothing was listening never happened.
-        previous_keys = current_keys;
-        previous_buttons = current_buttons;
+        // Drop the edges, keeping the levels: a key pressed and released
+        // while nothing was listening never happened, and one still held
+        // stays held. Then compute the action values from that and drop
+        // their edges too.
+        keyboard.Discard_edges();
+        mouse_buttons.Discard_edges();
 
         Update_actions();
 
@@ -301,12 +299,16 @@ namespace Input_System
         }
     }
 
-    void Input::Clear_motion()
+    void Input::Clear_mouse_motion()
     {
         mouse_delta_x = 0.0f;
         mouse_delta_y = 0.0f;
         mouse_delta_x_acc = 0.0f;
         mouse_delta_y_acc = 0.0f;
+    }
+
+    void Input::Clear_scroll()
+    {
         scroll_delta = 0.0f;
         scroll_accumulator = 0.0f;
     }
@@ -314,22 +316,23 @@ namespace Input_System
     // =========================================================
     // Raw keyboard
     // =========================================================
+    //
+    // The range check lives in Digital_State, so an out-of-range Key
+    // (Key::COUNT, or an integer cast to the enum) reads as "not down".
 
     bool Input::Is_key_down(Key _key) const
     {
-        return current_keys.keys[static_cast<size_t>(_key)];
+        return keyboard.Is_down(static_cast<size_t>(_key));
     }
 
     bool Input::Was_key_pressed(Key _key) const
     {
-        const size_t idx = static_cast<size_t>(_key);
-        return current_keys.keys[idx] && !previous_keys.keys[idx];
+        return keyboard.Was_pressed(static_cast<size_t>(_key));
     }
 
     bool Input::Was_key_released(Key _key) const
     {
-        const size_t idx = static_cast<size_t>(_key);
-        return !current_keys.keys[idx] && previous_keys.keys[idx];
+        return keyboard.Was_released(static_cast<size_t>(_key));
     }
 
     // =========================================================
@@ -338,19 +341,17 @@ namespace Input_System
 
     bool Input::Is_mouse_button_down(Mouse_Button _button) const
     {
-        return current_buttons.buttons[static_cast<size_t>(_button)];
+        return mouse_buttons.Is_down(static_cast<size_t>(_button));
     }
 
     bool Input::Was_mouse_button_pressed(Mouse_Button _button) const
     {
-        const size_t idx = static_cast<size_t>(_button);
-        return current_buttons.buttons[idx] && !previous_buttons.buttons[idx];
+        return mouse_buttons.Was_pressed(static_cast<size_t>(_button));
     }
 
     bool Input::Was_mouse_button_released(Mouse_Button _button) const
     {
-        const size_t idx = static_cast<size_t>(_button);
-        return !current_buttons.buttons[idx] && previous_buttons.buttons[idx];
+        return mouse_buttons.Was_released(static_cast<size_t>(_button));
     }
 
     float Input::Get_mouse_delta_x() const { return mouse_delta_x; }
@@ -374,7 +375,10 @@ namespace Input_System
         // toggle belongs to the previous mode. first_mouse makes the next
         // event re-anchor the position, because GLFW switches between
         // real and virtual cursor coordinates when the mode changes.
-        Clear_motion();
+        // Scroll is untouched: the wheel does not depend on the cursor
+        // mode, so a notch that arrived with the toggle is not "motion of
+        // the previous mode" and must not be swallowed.
+        Clear_mouse_motion();
         first_mouse = true;
 
         const int glfw_mode = (_mode == Cursor_Mode::Camera)
@@ -479,21 +483,34 @@ namespace Input_System
         actions = std::move(parsed);
         action_index = std::move(parsed_index);
 
+        // The set of known names changed, so what was reported as unknown
+        // before may be defined now, and the other way round.
+        reported_unknown_actions.clear();
+
         std::cout << "[Input] Loaded " << actions.size()
             << " action(s) from '" << _path << "'\n";
-    }
-
-    float Input::Get_action_value(const std::string& _action) const
-    {
-        auto it = action_index.find(_action);
-        if (it == action_index.end()) return 0.0f;
-        return actions[it->second].value;
     }
 
     size_t Input::Get_action_id(const std::string& _action) const
     {
         auto it = action_index.find(_action);
         return (it == action_index.end()) ? INVALID_ACTION : it->second;
+    }
+
+    size_t Input::Find_action_for_query(const std::string& _action, const char* _query) const
+    {
+        const size_t id = Get_action_id(_action);
+
+        // These queries run every frame, so an unknown name is reported the
+        // first time only. insert() tells us whether the name was new.
+        if (id == INVALID_ACTION && reported_unknown_actions.insert(_action).second)
+        {
+            std::cerr << "[Input] " << _query << ": action \"" << _action
+                      << "\" is not defined in the input JSON; it is always inactive"
+                         " (reported once).\n";
+        }
+
+        return id;
     }
 
     size_t Input::Resolve_action_id(const std::string& _action, const char* _consumer) const
@@ -531,19 +548,24 @@ namespace Input_System
         return (_action_id < actions.size()) ? actions[_action_id].released : false;
     }
 
+    float Input::Get_action_value(const std::string& _action) const
+    {
+        return Get_action_value(Find_action_for_query(_action, "Get_action_value"));
+    }
+
     bool Input::Is_action_down(const std::string& _action) const
     {
-        return Get_action_value(_action) > 0.5f;
+        return Is_action_down(Find_action_for_query(_action, "Is_action_down"));
     }
 
     bool Input::Was_action_pressed(const std::string& _action) const
     {
-        return Was_action_pressed(Get_action_id(_action));
+        return Was_action_pressed(Find_action_for_query(_action, "Was_action_pressed"));
     }
 
     bool Input::Was_action_released(const std::string& _action) const
     {
-        return Was_action_released(Get_action_id(_action));
+        return Was_action_released(Find_action_for_query(_action, "Was_action_released"));
     }
 
     // =========================================================
@@ -555,9 +577,9 @@ namespace Input_System
         const Key key = Glfw_key_to_key(_glfw_key);
         if (key == Key::Unknown) return;
 
-        const size_t idx = static_cast<size_t>(key);
-
-        current_keys.keys[idx] = (_glfw_action != GLFW_RELEASE);
+        // Set() latches the edge, so a press followed by a release before
+        // the next Update() is still seen as a press and a release.
+        keyboard.Set(static_cast<size_t>(key), _glfw_action != GLFW_RELEASE);
     }
 
     void Input::Handle_mouse_button(int _glfw_button, int _glfw_action)
@@ -565,8 +587,7 @@ namespace Input_System
         const Mouse_Button btn = Glfw_button_to_btn(_glfw_button);
         if (btn == Mouse_Button::COUNT) return;
 
-        current_buttons.buttons[static_cast<size_t>(btn)] =
-            (_glfw_action != GLFW_RELEASE);
+        mouse_buttons.Set(static_cast<size_t>(btn), _glfw_action != GLFW_RELEASE);
     }
 
     void Input::Handle_mouse_move(double _xpos, double _ypos)
@@ -603,22 +624,28 @@ namespace Input_System
     {
         for (Action& action : actions)
         {
-            const float prev_value = action.value;
+            const bool was_active = action.value > 0.5f;
 
             // OR of all bindings: any active binding makes the action active.
-            float new_value = 0.0f;
+            bool is_active = false;
+
+            // True if some binding went down during the frame, even when it
+            // is already up again at the end of it (a tap shorter than the
+            // frame): the level alone cannot show that.
+            bool saw_press = false;
+
             for (const Action_Binding& binding : action.bindings)
             {
-                if (Binding_is_down(binding))
-                {
-                    new_value = 1.0f;
-                    break;
-                }
+                is_active |= Binding_is_down(binding);
+                saw_press |= Binding_was_pressed(binding);
             }
 
-            action.value = new_value;
-            action.pressed = (new_value > 0.5f) && (prev_value < 0.5f);
-            action.released = (new_value < 0.5f) && (prev_value > 0.5f);
+            // The action's own edges, not its bindings': pressing a second
+            // binding while another is held does not make the action
+            // "pressed" again, because it was active the whole time.
+            action.value = is_active ? 1.0f : 0.0f;
+            action.pressed = !was_active && (is_active || saw_press);
+            action.released = !is_active && (was_active || saw_press);
         }
     }
 
@@ -628,6 +655,14 @@ namespace Input_System
             return Is_key_down(_binding.key);
         else
             return Is_mouse_button_down(_binding.mouse_button);
+    }
+
+    bool Input::Binding_was_pressed(const Action_Binding& _binding) const
+    {
+        if (_binding.type == Action_Binding::Type::Key)
+            return Was_key_pressed(_binding.key);
+        else
+            return Was_mouse_button_pressed(_binding.mouse_button);
     }
 
     // =========================================================

@@ -19,26 +19,27 @@ namespace EngineCore
     // engine's own steps and the systems of the application (registered by
     // Phase in the Engine_Context) interleave:
     //
-    //   1. Input::Begin_frame()          - snapshot previous input state
-    //   2. Window::Poll_events()         - GLFW dispatches callbacks
+    //   1. Window::Poll_events()         - GLFW dispatches callbacks; Input
+    //                                      accumulates the raw events
     //      (minimized: discard pending input, wait for events, restart)
-    //   3. Time::Update()                - delta time, FPS
-    //   4. Resize handling               - Window flag -> Renderer swapchain;
+    //   2. Time::Update()                - delta time, FPS
+    //   3. Resize handling               - Window flag -> Renderer swapchain;
     //      the only place that recreates it
-    //   5. Input::Update()               - publish deltas, flush actions
+    //   4. Input::Update()               - publish edges and deltas, flush
+    //                                      actions
     //      Phase::Input systems          - after the engine's input steps
-    //   6. Phase::Gameplay systems
-    //   7. Phase::Fixed_Update systems   - reserved for physics: once per
+    //   5. Phase::Gameplay systems
+    //   6. Phase::Fixed_Update systems   - reserved for physics: once per
     //                                      frame for now, no accumulator yet
     //      Phase::Simulation systems
     //      Transform_System::Update()    - the engine's own system of this
     //                                      phase, always the last one
-    //   8. Phase::Extract systems, then
+    //   7. Phase::Extract systems, then
     //      Extractor::Extract()          - ECS -> RenderPacket
-    //   9. Phase::Render systems, then
+    //   8. Phase::Render systems, then
     //      Renderer::Render()            - draw the frame
     //
-    // The Renderer's calls in steps 4 and 9 may throw. A failure is logged
+    // The Renderer's calls in steps 3 and 8 may throw. A failure is logged
     // and the loop goes on with the next frame, since a failed frame is
     // undone by the Renderer; it leaves the loop when the Renderer reports
     // itself lost, or after several failures in a row.

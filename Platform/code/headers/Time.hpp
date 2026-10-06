@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <optional>
 #include <string>
 #include <unordered_map>
 
@@ -26,6 +27,12 @@ namespace Platform
     //     two-second stall moves the game clock by two seconds instead of
     //     silently losing 1.75 of them. Get_unscaled_total_time() is read
     //     straight from the clock and never accumulates rounding error.
+    //
+    // The frame statistics (FPS, average, worst frame, spike detection) are
+    // measurements, not simulation input, so they follow the same rule as
+    // total_time: they use the REAL frame interval, never the clamped one.
+    // Otherwise a two-second stall would be recorded as 0.25 s, and the
+    // very frames those statistics exist to expose would be hidden.
     class Time 
     {
     private:
@@ -38,6 +45,9 @@ namespace Platform
 
         float delta_time;
         float unscaled_delta_time;
+        // Real interval since the previous Update(), in seconds: not clamped
+        // and not scaled. Feeds the frame statistics only.
+        double real_delta_time;
         double total_time;
         double unscaled_total_time;
 
@@ -54,7 +64,7 @@ namespace Platform
 
         float fixed_time_accumulator;
 
-        // Mean of the unscaled delta times in the rolling window, in seconds,
+        // Mean of the real frame times in the rolling window, in seconds,
         // or 0 when the window is empty. Shared by Get_average_fps() and
         // Is_frame_spike() so both always agree on what "average" means.
         float Get_average_delta() const;
@@ -131,13 +141,16 @@ namespace Platform
         // FPS and frame statistics
         // =========================================================
 
-        // Instantaneous FPS, computed from the current frame's delta time.
+        // Instantaneous FPS, computed from the real duration of the current
+        // frame (not the clamped delta: a 2 s stall reads as 0.5 FPS, not 4).
         // Can fluctuate a lot frame to frame - prefer Get_average_fps()
         // for a stable value to display to the user.
         float Get_fps() const;
 
         // FPS averaged over a rolling window of recent frames (smoother,
         // more readable value for UI/debug display than the raw Get_fps()).
+        // The interval between constructing this Time and the first Update()
+        // is startup time, not a frame, so it is left out of the window.
         float Get_average_fps() const;
 
         // Total number of frames processed since this Time instance started
@@ -147,10 +160,16 @@ namespace Platform
         // Frame rate limiting
         // =========================================================
 
-        // Sets a target FPS cap (0 = uncapped). When set, Update() sleeps
+        // Sets a target FPS cap (0 = uncapped). When set, Update() waits
         // until one frame period has elapsed since the previous Update(),
         // preventing the loop from running faster than necessary (saves
         // CPU/GPU power, avoids unnecessarily high input polling rates).
+        //
+        // The wait sleeps for most of the period and busy-waits for the last
+        // millisecond or two: the operating system can wake a sleeping
+        // thread late by up to its timer tick (about 15.6 ms by default on
+        // Windows, i.e. a whole frame at 60 FPS), so sleeping alone cannot
+        // hit the deadline. The price is a little CPU time per frame.
         void Set_target_fps(float _target_fps);
         float Get_target_fps() const;
 
@@ -176,13 +195,14 @@ namespace Platform
         // Frame spike detection
         // =========================================================
 
-        // Returns the longest unscaled delta time within the recent rolling
-        // window (the "worst frame" recently). Useful to detect stutters
+        // Returns the longest real frame time, in seconds, within the recent
+        // rolling window (the "worst frame" recently). Not clamped, so a long
+        // stall is reported at its true length. Useful to detect stutters
         // even when the average FPS looks healthy.
         float Get_worst_frame_time() const;
 
-        // Returns true if the current frame's unscaled delta time exceeds
-        // the average by more than the given multiplier (default 2x).
+        // Returns true if the current frame's real duration exceeds the
+        // average by more than the given multiplier (default 2x).
         // Useful for logging/flagging spikes as they happen.
         bool Is_frame_spike(float _spike_multiplier = 2.0f) const;
 
@@ -193,15 +213,21 @@ namespace Platform
         // Marks the start of a named timed section. Call Stop_timer with
         // the same name to record its duration. Prefer using Scoped_timer
         // below instead of calling these manually where possible.
+        // Starting a timer that is already running restarts it.
         void Start_timer(const std::string& _name);
 
         // Stops a named timer and stores its duration, retrievable later
-        // with Get_timer_duration(). Returns the duration in seconds.
-        float Stop_timer(const std::string& _name);
+        // with Get_timer_duration(). Returns the duration in seconds, or
+        // std::nullopt if no timer of that name is running (Stop_timer
+        // without a matching Start_timer, a misspelt name, or a second Stop):
+        // a legitimate duration of 0 is not mistaken for that mistake, and
+        // nothing is recorded in that case.
+        std::optional<float> Stop_timer(const std::string& _name);
 
         // Returns the duration (in seconds) recorded the last time the
-        // named timer was stopped. Returns 0 if the timer was never used.
-        float Get_timer_duration(const std::string& _name) const;
+        // named timer was stopped, or std::nullopt if it has never been
+        // stopped.
+        std::optional<float> Get_timer_duration(const std::string& _name) const;
 
         // Returns all recorded timer names and their last duration -
         // useful for building a simple on-screen profiler overlay.

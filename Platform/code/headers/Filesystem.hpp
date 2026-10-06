@@ -5,62 +5,99 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <system_error>
 
 namespace Platform {
 
     // Filesystem: stateless utility functions for reading/writing files,
     // checking paths, and navigating directories. Wraps std::filesystem
-    // with a simpler, engine-friendly API and consistent error handling
-    // (returns empty/false on failure instead of throwing, except where noted).
+    // with a simpler, engine-friendly API and consistent error handling.
+    //
+    // Failure reporting: nothing here throws. A function that can fail
+    // returns std::optional (std::nullopt = failure) or bool (false =
+    // failure), so a failure is never confused with a legitimate result such
+    // as an empty file, a size of 0 or an empty directory. The few predicates
+    // that stay plain bool (Exists, Is_file, Is_directory) also have an
+    // overload that reports the underlying std::error_code.
+    //
+    // Path encoding: every std::string path that goes in or out of this API
+    // is UTF-8, on every platform. On Windows the strings are converted to and
+    // from the native UTF-16 paths internally, so file names with accents,
+    // CJK or emoji characters work regardless of the system code page and are
+    // never mangled into '?'. A string that is not valid UTF-8 is read as
+    // being in the system ANSI code page instead (what argv[] holds), so
+    // legacy callers keep working. Code that hands these paths to a third
+    // party library (fopen, stbi_load...) needs a UTF-8 aware entry point on
+    // Windows; the std::string overloads of the C runtime are not.
     namespace Filesystem {
 
         // =========================================================
         // Existence and type checks
         // =========================================================
 
-        // Returns true if a file or directory exists at the given path
+        // Returns true if a file or directory exists at the given path.
+        // Also false when that cannot be determined (e.g. access denied on a
+        // parent directory): use the overload below to tell the two apart.
         bool Exists(const std::string& _path);
+
+        // Same, but _error receives the reason when the answer could not be
+        // determined, and is cleared otherwise. false with an empty _error
+        // means the path really does not exist.
+        bool Exists(const std::string& _path, std::error_code& _error);
 
         // Returns true if the path exists and is a regular file
         bool Is_file(const std::string& _path);
+        bool Is_file(const std::string& _path, std::error_code& _error);
 
         // Returns true if the path exists and is a directory
         bool Is_directory(const std::string& _path);
+        bool Is_directory(const std::string& _path, std::error_code& _error);
 
         // =========================================================
         // Reading files
         // =========================================================
 
         // Reads an entire text file into a string. Returns std::nullopt if
-        // the file doesn't exist or can't be opened; an empty file returns "".
-        // Nothing is logged: the caller decides how to report the failure.
+        // the file doesn't exist, can't be opened, is not a readable file
+        // (e.g. a directory) or the read fails half way (I/O error): a
+        // truncated string is never returned as if it were the whole file.
+        // An empty file returns "". Nothing is logged: the caller decides how
+        // to report the failure.
         std::optional<std::string> Read_text_file(const std::string& _path);
 
         // Reads an entire binary file into a byte buffer.
         // This is what you'll use to load compiled SPIR-V shaders (.spv),
         // since they must be read as raw bytes, not text.
-        std::vector<uint8_t> Read_binary_file(const std::string& _path);
+        // Returns std::nullopt on any failure (same cases as Read_text_file),
+        // so an empty file (a valid, empty buffer) can be told apart from a
+        // file that could not be read. Nothing is logged.
+        std::optional<std::vector<uint8_t>> Read_binary_file(const std::string& _path);
 
         // =========================================================
         // Writing files
         // =========================================================
 
         // Writes a string to a file, overwriting it if it already exists.
-        // Returns true on success. Creates parent directories if needed.
+        // Creates parent directories if needed. Returns true only once the
+        // data has been flushed and the file closed without error (a full
+        // disk, for instance, is reported by the flush, not by the write).
+        // On failure the error is logged, and a file that was opened but not
+        // completely written is deleted rather than left truncated.
         bool Write_text_file(const std::string& _path, const std::string& _content);
 
         // Writes raw bytes to a file, overwriting it if it already exists.
-        // Returns true on success. Creates parent directories if needed.
+        // Same guarantees as Write_text_file.
         bool Write_binary_file(const std::string& _path, const std::vector<uint8_t>& _data);
 
         // =========================================================
         // Executable and working directory
         // =========================================================
 
-        // Returns the full path to the currently running executable.
-        // Useful for building asset paths relative to where the engine
-        // actually lives, instead of relying on the current working
-        // directory (which can vary depending on how the app was launched).
+        // Returns the full path to the currently running executable, or ""
+        // if it cannot be determined (logged). Useful for building asset
+        // paths relative to where the engine actually lives, instead of
+        // relying on the current working directory (which can vary depending
+        // on how the app was launched).
         std::string Get_executable_path();
 
         // Returns the directory containing the currently running executable
@@ -77,16 +114,24 @@ namespace Platform {
         // Directory listing
         // =========================================================
 
+        // The List_* functions return std::nullopt when the listing could not
+        // be completed: _directory is not a readable directory, or reading it
+        // failed part way. They never return a silently truncated list, so an
+        // empty list always means "nothing matched". Two things are skipped
+        // on purpose and do not count as a failure: subdirectories the
+        // process is not allowed to enter (recursive listing), and entries
+        // that cannot be inspected at all (a symlink loop, say).
+
         // Lists all files directly inside a directory (non-recursive).
         // If _extension_filter is non-empty (e.g. ".spv"), only files
         // with that extension are returned.
-        std::vector<std::string> List_files(const std::string& _directory, const std::string& _extension_filter = "");
+        std::optional<std::vector<std::string>> List_files(const std::string& _directory, const std::string& _extension_filter = "");
 
         // Same as List_files but recurses into subdirectories as well
-        std::vector<std::string> List_files_recursive(const std::string& _directory, const std::string& _extension_filter = "");
+        std::optional<std::vector<std::string>> List_files_recursive(const std::string& _directory, const std::string& _extension_filter = "");
 
         // Lists all subdirectories directly inside a directory (non-recursive)
-        std::vector<std::string> List_directories(const std::string& _directory);
+        std::optional<std::vector<std::string>> List_directories(const std::string& _directory);
 
         // =========================================================
         // Path manipulation
@@ -138,14 +183,17 @@ namespace Platform {
         // Overwrites the destination if it already exists.
         bool Copy_file(const std::string& _source, const std::string& _destination);
 
-        // Returns the size of a file in bytes. Returns 0 if the file
-        // doesn't exist (use Exists() first to distinguish from an empty file).
-        uint64_t Get_file_size(const std::string& _path);
+        // Returns the size of a file in bytes. Returns std::nullopt if the
+        // file doesn't exist, is not a regular file or can't be queried; an
+        // empty file returns 0.
+        std::optional<uint64_t> Get_file_size(const std::string& _path);
 
         // Returns the last modification time of a file as a Unix timestamp
-        // (seconds since epoch). Useful for hot-reloading systems that
-        // need to detect when an asset file has changed on disk.
-        int64_t Get_last_write_time(const std::string& _path);
+        // (seconds since epoch), or std::nullopt if it can't be queried.
+        // Useful for hot-reloading systems that need to detect when an asset
+        // file has changed on disk (a failed query is not a timestamp of 0,
+        // which would look like "changed" or "unchanged" by accident).
+        std::optional<int64_t> Get_last_write_time(const std::string& _path);
 
     }
 

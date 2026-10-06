@@ -33,11 +33,11 @@ namespace ECS
         // Removes the component of the given entity from this storage.
         // Used by World::Destroy_entity to clean up all components of
         // an entity across every storage, without knowing T.
-        virtual void Remove(Entity _entity) = 0;
+        virtual void Remove(Entity _entity) noexcept = 0;
 
         // Removes all components from this storage.
         // Used by World::Clear to reset the entire world state.
-        virtual void Clear() = 0;
+        virtual void Clear() noexcept = 0;
 
         // Returns the number of entities that have a component in this storage.
         virtual size_t Size() const = 0;
