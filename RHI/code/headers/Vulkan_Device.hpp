@@ -8,6 +8,7 @@
 #include <vector>
 #include <optional>
 #include <string>
+#include <tuple>
 
 namespace Renderer_System 
 {
@@ -173,6 +174,33 @@ namespace Renderer_System
         Queue_Family_Indices queue_families;
     };
 
+    // How a suitable GPU ranks against the others. Compared field by field,
+    // in declaration order, never added up: memory only breaks a tie between
+    // GPUs of the same type, so a large shared heap on an integrated GPU can
+    // never outrank a discrete one.
+    struct Device_Rank
+    {
+        // 2 discrete, 1 integrated, 0 anything else (virtual, CPU, other).
+        uint32_t type_level = 0;
+
+        // Largest VK_MEMORY_HEAP_DEVICE_LOCAL_BIT heap. The largest one, not
+        // the sum: some drivers expose a second, small device-local heap
+        // (the host-visible window into VRAM) that must not count twice.
+        uint64_t device_local_bytes = 0;
+
+        // Last resort so that two different GPUs never compare equal and the
+        // winner does not depend on the order the loader enumerates them.
+        // Identical GPUs (same ids) are interchangeable; the first one wins.
+        uint32_t vendor_id = 0;
+        uint32_t device_id = 0;
+
+        friend bool operator<(const Device_Rank& _a, const Device_Rank& _b)
+        {
+            return std::tie(_a.type_level, _a.device_local_bytes, _a.vendor_id, _a.device_id)
+                 < std::tie(_b.type_level, _b.device_local_bytes, _b.vendor_id, _b.device_id);
+        }
+    };
+
     // Vulkan_Device: selects a suitable physical GPU and creates the
     // logical device (the actual "connection" to that GPU) along with the
     // queues used to submit graphics and presentation work.
@@ -294,7 +322,9 @@ namespace Renderer_System
 
         bool             Is_device_suitable(const Device_Support& _support, const Device_Requirements& _requirements) const;
         Queue_Family_Indices Find_queue_families(VkPhysicalDevice _device, VkSurfaceKHR _surface) const;
-        uint32_t         Rate_device_suitability(VkPhysicalDevice _device, const Device_Support& _support, const Device_Requirements& _requirements) const;
+
+        // Rank of a suitable GPU, std::nullopt when it is not suitable.
+        std::optional<Device_Rank> Rate_device_suitability(VkPhysicalDevice _device, const Device_Support& _support, const Device_Requirements& _requirements) const;
         void             Log_selected_device(VkPhysicalDevice _device);
     };
 

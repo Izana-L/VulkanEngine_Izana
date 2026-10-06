@@ -152,6 +152,7 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
     <ClInclude Include="..\code\headers\Pipeline_Registry.hpp" />
     <ClInclude Include="..\code\headers\Present_Sync.hpp" />
     <ClInclude Include="..\code\headers\Renderer.hpp" />
+    <ClInclude Include="..\code\headers\Renderer_Impl.hpp" />
     <ClInclude Include="..\code\headers\Renderer_Limits.hpp" />
     <ClInclude Include="..\code\headers\RenderPacket.hpp" />
     <ClInclude Include="..\code\headers\Render_Debug_Settings.hpp" />
@@ -164,7 +165,6 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
     <ClInclude Include="..\code\headers\Vulkan_OIT_Resources.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Render_Pass.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Vertex_Layout.hpp" />
-    <ClInclude Include="..\code\sources\Renderer_Impl.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

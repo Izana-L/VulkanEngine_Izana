@@ -1,3 +1,25 @@
+// UV convention, shared by EVERY primitive built here:
+//
+//   U grows to the RIGHT as seen from outside the surface.
+//   V = 0 is the TOP edge of the image; V grows downward.
+//
+// This is the Vulkan / glTF convention, and it is the one the rest of the
+// engine already assumes: Image_Loader does not flip rows (the first row
+// of the file is the top row of the texture) and the shaders sample with
+// the vertex UV as is. A generator therefore never picks a V direction on
+// its own: it writes its UVs in the "natural" form (U to the right, V UP,
+// like a plot) and converts them once, in Image_uv() below.
+//
+// Two traps this convention exposes in the generators:
+//   - Surfaces of revolution run their azimuth from +X toward +Z, and seen
+//     from outside that is toward the LEFT, so the natural U is 1 - azimuth
+//     fraction (not the azimuth fraction itself).
+//   - A disc cap has no intrinsic "up": Cap_uv() fixes it, so the top and
+//     bottom caps both stay unmirrored.
+//
+// Tangents come out of Compute_tangents() from these UVs, with the
+// bitangent defined as glTF expects it (see there).
+
 #include <Primitive_Builder.hpp>
 #include <MathConstants.hpp>
 #include <Vector.hpp>
@@ -36,6 +58,30 @@ namespace ResourceManager::Primitive_Builder
         // =========================================================
         // Mesh assembly helpers
         // =========================================================
+
+        // =========================================================
+        // UV convention (documented at the top of this file)
+        // =========================================================
+
+        // Converts a "natural" UV (U to the right as seen from outside, V UP)
+        // to the stored one (V = 0 at the top edge). The ONLY place the V
+        // flip happens.
+        Vec2 Image_uv(float _u_right, float _v_up)
+        {
+            return { _u_right, 1.0f - _v_up };
+        }
+
+        // UV of the point (_x, _z) of a unit-radius disc cap lying in a
+        // horizontal plane, seen from outside. Seen from above (top cap),
+        // -Z is the top of the image; seen from below (bottom cap), +Z is.
+        // In both cases U grows toward +X, which keeps the mapping
+        // unmirrored: flipping only V for both caps would mirror one.
+        Vec2 Cap_uv(float _x, float _z, bool _faces_up)
+        {
+            const float v_up = _faces_up ? (0.5f - 0.5f * _z) : (0.5f + 0.5f * _z);
+
+            return Image_uv(0.5f + 0.5f * _x, v_up);
+        }
 
         // Appends a vertex and returns its index. Tangent and color are
         // filled in by Finalize().
@@ -121,7 +167,13 @@ namespace ResourceManager::Primitive_Builder
                 const float f = (std::fabs(denom) < 1e-8f) ? 0.0f : (1.0f / denom);
 
                 const Vec3 tangent = f * (d2.y * e1 - d1.y * e2);
-                const Vec3 bitangent = f * (d1.x * e2 - d2.x * e1);
+
+                // The bitangent points toward DEcreasing V, i.e. UP in the
+                // image (+Y of a glTF normal map): that is the direction
+                // glTF's tangent.w assumes, so primitives and loaded meshes
+                // share one tangent frame. It is minus dP/dV, because V = 0
+                // is the top edge. On an unmirrored mapping w comes out +1.
+                const Vec3 bitangent = f * (d2.x * e1 - d1.x * e2);
 
                 for (uint32_t idx : { i0, i1, i2 })
                 {
@@ -273,7 +325,9 @@ namespace ResourceManager::Primitive_Builder
             { { 0, 0,-1}, {{ h,-h,-h}, {-h,-h,-h}, {-h, h,-h}, { h, h,-h}} },
         };
 
-        const Vec2 uvs[4] = { {0,0}, {1,0}, {1,1}, {0,1} };
+        // Natural UVs of the corners above: bottom-left, bottom-right,
+        // top-right, top-left. On the +Y / -Y faces "top" is -Z / +Z.
+        const Vec2 uvs[4] = { Image_uv(0, 0), Image_uv(1, 0), Image_uv(1, 1), Image_uv(0, 1) };
 
         for (const Face& face : faces)
         {
@@ -300,11 +354,12 @@ namespace ResourceManager::Primitive_Builder
         const float h = 0.5f;
         const Vec3 n{ 0, 1, 0 };
 
-        // Counter-clockwise as seen from +Y (looking down).
-        Add_vertex(mesh, { -h, 0,  h }, n, { 0, 0 });
-        Add_vertex(mesh, {  h, 0,  h }, n, { 1, 0 });
-        Add_vertex(mesh, {  h, 0, -h }, n, { 1, 1 });
-        Add_vertex(mesh, { -h, 0, -h }, n, { 0, 1 });
+        // Counter-clockwise as seen from +Y (looking down). Seen from above
+        // the top edge is -Z, the same orientation as the plane.
+        Add_vertex(mesh, { -h, 0,  h }, n, Image_uv(0, 0));
+        Add_vertex(mesh, {  h, 0,  h }, n, Image_uv(1, 0));
+        Add_vertex(mesh, {  h, 0, -h }, n, Image_uv(1, 1));
+        Add_vertex(mesh, { -h, 0, -h }, n, Image_uv(0, 1));
 
         Add_quad(mesh, 0, 1, 2, 3);
 
@@ -322,9 +377,10 @@ namespace ResourceManager::Primitive_Builder
 
         const Vec3 n{ 0, 1, 0 };
 
-        Add_vertex(mesh, { -0.5f, 0,  0.5f }, n, { 0.0f, 0.0f });
-        Add_vertex(mesh, {  0.5f, 0,  0.5f }, n, { 1.0f, 0.0f });
-        Add_vertex(mesh, {  0.0f, 0, -0.5f }, n, { 0.5f, 1.0f });
+        // Base on the +Z side, apex at -Z: the apex is the top of the image.
+        Add_vertex(mesh, { -0.5f, 0,  0.5f }, n, Image_uv(0.0f, 0.0f));
+        Add_vertex(mesh, {  0.5f, 0,  0.5f }, n, Image_uv(1.0f, 0.0f));
+        Add_vertex(mesh, {  0.0f, 0, -0.5f }, n, Image_uv(0.5f, 1.0f));
 
         Add_triangle(mesh, 0, 1, 2);
 
@@ -357,7 +413,10 @@ namespace ResourceManager::Primitive_Builder
             { b, c, d },
         };
 
-        const Vec2 uvs[3] = { {0.0f, 0.0f}, {1.0f, 0.0f}, {0.5f, 1.0f} };
+        // Every face uses the same natural UV triangle. A tetrahedron has no
+        // "up" on its faces, so only the handedness matters: the corners are
+        // counter-clockwise from outside, which Image_uv keeps unmirrored.
+        const Vec2 uvs[3] = { Image_uv(0.0f, 0.0f), Image_uv(1.0f, 0.0f), Image_uv(0.5f, 1.0f) };
 
         for (const auto& tri : tris)
         {
@@ -394,7 +453,9 @@ namespace ResourceManager::Primitive_Builder
                 const float fx = static_cast<float>(x) / static_cast<float>(divs);
                 const float fz = static_cast<float>(z) / static_cast<float>(divs);
 
-                Add_vertex(mesh, { fx - 0.5f, 0.0f, fz - 0.5f }, n, { fx, fz });
+                // fz counts from -Z, the top edge seen from +Y, so the
+                // natural height of the point is 1 - fz.
+                Add_vertex(mesh, { fx - 0.5f, 0.0f, fz - 0.5f }, n, Image_uv(fx, 1.0f - fz));
             }
         }
 
@@ -433,12 +494,12 @@ namespace ResourceManager::Primitive_Builder
         const uint32_t rings = Clamp_param(Primitive_Type::Sphere, 1, _rings);
         const uint32_t stride = segments + 1;
 
-        const uint32_t north_pole = Add_vertex(mesh, { 0, 1, 0 }, { 0, 1, 0 }, { 0.5f, 0.0f });
+        const uint32_t north_pole = Add_vertex(mesh, { 0, 1, 0 }, { 0, 1, 0 }, Image_uv(0.5f, 1.0f));
 
         // Rings 1 .. rings-1 (the poles are rings 0 and `rings`).
         for (uint32_t r = 1; r < rings; ++r)
         {
-            const float v = static_cast<float>(r) / static_cast<float>(rings);
+            const float v = static_cast<float>(r) / static_cast<float>(rings);   // 0 at the north pole .. 1 at the south
             const float phi = v * PI;            // 0..PI latitude
             const float y = std::cos(phi);
             const float r_xz = std::sin(phi);
@@ -450,11 +511,15 @@ namespace ResourceManager::Primitive_Builder
 
                 const Vec3 p{ r_xz * std::cos(theta), y, r_xz * std::sin(theta) };
 
-                Add_vertex(mesh, p, p, { u, v });   // unit sphere: position == normal
+                // Unit sphere: position == normal. theta runs from +X toward
+                // +Z, i.e. to the left seen from outside, so U to the right
+                // is 1 - u; v counts down from the north pole, so the
+                // natural height is 1 - v.
+                Add_vertex(mesh, p, p, Image_uv(1.0f - u, 1.0f - v));
             }
         }
 
-        const uint32_t south_pole = Add_vertex(mesh, { 0, -1, 0 }, { 0, -1, 0 }, { 0.5f, 1.0f });
+        const uint32_t south_pole = Add_vertex(mesh, { 0, -1, 0 }, { 0, -1, 0 }, Image_uv(0.5f, 0.0f));
 
         // First vertex of ring r (1 <= r <= rings-1).
         const auto ring_start = [&](uint32_t r) { return 1u + (r - 1u) * stride; };
@@ -521,9 +586,15 @@ namespace ResourceManager::Primitive_Builder
             const Vec3 base0{ std::cos(t0), 0.0f, std::sin(t0) };
             const Vec3 base1{ std::cos(t1), 0.0f, std::sin(t1) };
 
-            const uint32_t i0 = Add_vertex(mesh, base0, side_normal(t0), { static_cast<float>(s) / seg, 0.0f });
-            const uint32_t i1 = Add_vertex(mesh, base1, side_normal(t1), { static_cast<float>(s + 1) / seg, 0.0f });
-            const uint32_t ia = Add_vertex(mesh, apex, side_normal(0.5f * (t0 + t1)), { (static_cast<float>(s) + 0.5f) / seg, 1.0f });
+            // Azimuth runs to the left seen from outside: U to the right
+            // is 1 - azimuth fraction. The base is the bottom, the apex the top.
+            const float u0 = 1.0f - static_cast<float>(s) / seg;
+            const float u1 = 1.0f - static_cast<float>(s + 1) / seg;
+            const float ua = 1.0f - (static_cast<float>(s) + 0.5f) / seg;
+
+            const uint32_t i0 = Add_vertex(mesh, base0, side_normal(t0), Image_uv(u0, 0.0f));
+            const uint32_t i1 = Add_vertex(mesh, base1, side_normal(t1), Image_uv(u1, 0.0f));
+            const uint32_t ia = Add_vertex(mesh, apex, side_normal(0.5f * (t0 + t1)), Image_uv(ua, 1.0f));
 
             // base0 -> apex -> base1 is counter-clockwise from outside.
             Add_triangle(mesh, i0, ia, i1);
@@ -531,7 +602,7 @@ namespace ResourceManager::Primitive_Builder
 
         // Base cap (facing -Y), center fan.
         const Vec3 down{ 0, -1, 0 };
-        const uint32_t center = Add_vertex(mesh, { 0, 0, 0 }, down, { 0.5f, 0.5f });
+        const uint32_t center = Add_vertex(mesh, { 0, 0, 0 }, down, Cap_uv(0.0f, 0.0f, false));
         const uint32_t rim = static_cast<uint32_t>(mesh.vertices.size());
 
         for (uint32_t s = 0; s <= segments; ++s)
@@ -539,7 +610,7 @@ namespace ResourceManager::Primitive_Builder
             const float t = static_cast<float>(s) / seg * TWO_PI;
             const float x = std::cos(t);
             const float z = std::sin(t);
-            Add_vertex(mesh, { x, 0, z }, down, { x * 0.5f + 0.5f, z * 0.5f + 0.5f });
+            Add_vertex(mesh, { x, 0, z }, down, Cap_uv(x, z, false));
         }
 
         // Seen from below (-Y), increasing azimuth runs clockwise, so the
@@ -571,8 +642,10 @@ namespace ResourceManager::Primitive_Builder
             const float z = std::sin(t);
             const Vec3 nrm{ x, 0.0f, z };
 
-            Add_vertex(mesh, { x, 0.0f, z }, nrm, { u, 0.0f });
-            Add_vertex(mesh, { x, 1.0f, z }, nrm, { u, 1.0f });
+            // Azimuth runs to the left seen from outside: U to the right
+            // is 1 - u. y = 0 is the bottom, y = 1 the top.
+            Add_vertex(mesh, { x, 0.0f, z }, nrm, Image_uv(1.0f - u, 0.0f));
+            Add_vertex(mesh, { x, 1.0f, z }, nrm, Image_uv(1.0f - u, 1.0f));
         }
 
         for (uint32_t s = 0; s < segments; ++s)
@@ -589,7 +662,7 @@ namespace ResourceManager::Primitive_Builder
 
         // Top cap (+Y).
         const Vec3 up{ 0, 1, 0 };
-        const uint32_t top_center = Add_vertex(mesh, { 0, 1, 0 }, up, { 0.5f, 0.5f });
+        const uint32_t top_center = Add_vertex(mesh, { 0, 1, 0 }, up, Cap_uv(0.0f, 0.0f, true));
         const uint32_t top_rim = static_cast<uint32_t>(mesh.vertices.size());
 
         for (uint32_t s = 0; s <= segments; ++s)
@@ -597,7 +670,7 @@ namespace ResourceManager::Primitive_Builder
             const float t = static_cast<float>(s) / seg * TWO_PI;
             const float x = std::cos(t);
             const float z = std::sin(t);
-            Add_vertex(mesh, { x, 1, z }, up, { x * 0.5f + 0.5f, z * 0.5f + 0.5f });
+            Add_vertex(mesh, { x, 1, z }, up, Cap_uv(x, z, true));
         }
 
         // Seen from above (+Y), increasing azimuth runs clockwise, so the
@@ -607,7 +680,7 @@ namespace ResourceManager::Primitive_Builder
 
         // Bottom cap (-Y).
         const Vec3 down{ 0, -1, 0 };
-        const uint32_t bot_center = Add_vertex(mesh, { 0, 0, 0 }, down, { 0.5f, 0.5f });
+        const uint32_t bot_center = Add_vertex(mesh, { 0, 0, 0 }, down, Cap_uv(0.0f, 0.0f, false));
         const uint32_t bot_rim = static_cast<uint32_t>(mesh.vertices.size());
 
         for (uint32_t s = 0; s <= segments; ++s)
@@ -615,7 +688,7 @@ namespace ResourceManager::Primitive_Builder
             const float t = static_cast<float>(s) / seg * TWO_PI;
             const float x = std::cos(t);
             const float z = std::sin(t);
-            Add_vertex(mesh, { x, 0, z }, down, { x * 0.5f + 0.5f, z * 0.5f + 0.5f });
+            Add_vertex(mesh, { x, 0, z }, down, Cap_uv(x, z, false));
         }
 
         for (uint32_t s = 0; s < segments; ++s)
@@ -660,7 +733,10 @@ namespace ResourceManager::Primitive_Builder
                 // Normal points outward from the tube center.
                 const Vec3 nrm{ cos_p * cos_t, sin_p, cos_p * sin_t };
 
-                Add_vertex(mesh, { x, y, z }, nrm, { u, v });
+                // theta runs to the left seen from outside, so U to the right
+                // is 1 - u. phi = 0 is the outer equator and grows upward on
+                // the visible outer side, so v is already the natural height.
+                Add_vertex(mesh, { x, y, z }, nrm, Image_uv(1.0f - u, v));
             }
         }
 
@@ -708,13 +784,13 @@ namespace ResourceManager::Primitive_Builder
         const uint32_t row_count = 2 * rings + 2;
         const float    v_scale = 1.0f / static_cast<float>(row_count - 1);
 
-        const uint32_t north_pole = Add_vertex(mesh, { 0, half_body + radius, 0 }, { 0, 1, 0 }, { 0.5f, 0.0f });
+        const uint32_t north_pole = Add_vertex(mesh, { 0, half_body + radius, 0 }, { 0, 1, 0 }, Image_uv(0.5f, 1.0f));
 
         const auto add_ring = [&](float phi, float y_offset, uint32_t row)
             {
                 const float y_sphere = std::cos(phi) * radius;
                 const float r_xz = std::sin(phi) * radius;
-                const float v = static_cast<float>(row) * v_scale;
+                const float v = static_cast<float>(row) * v_scale;   // 0 at the north pole .. 1 at the south
 
                 for (uint32_t s = 0; s <= segments; ++s)
                 {
@@ -726,7 +802,10 @@ namespace ResourceManager::Primitive_Builder
                     const Vec3 nrm{ std::sin(phi) * std::cos(theta), std::cos(phi), std::sin(phi) * std::sin(theta) };
                     const Vec3 pos{ r_xz * std::cos(theta), y_sphere + y_offset, r_xz * std::sin(theta) };
 
-                    Add_vertex(mesh, pos, nrm, { u, v });
+                    // theta runs to the left seen from outside, so U to the
+                    // right is 1 - u; v counts down from the north pole, so
+                    // the natural height is 1 - v.
+                    Add_vertex(mesh, pos, nrm, Image_uv(1.0f - u, 1.0f - v));
                 }
             };
 
@@ -738,7 +817,7 @@ namespace ResourceManager::Primitive_Builder
         for (uint32_t r = 0; r < rings; ++r)
             add_ring(HALF_PI + static_cast<float>(r) / static_cast<float>(rings) * HALF_PI, -half_body, rings + 1 + r);
 
-        const uint32_t south_pole = Add_vertex(mesh, { 0, -half_body - radius, 0 }, { 0, -1, 0 }, { 0.5f, 1.0f });
+        const uint32_t south_pole = Add_vertex(mesh, { 0, -half_body - radius, 0 }, { 0, -1, 0 }, Image_uv(0.5f, 0.0f));
 
         // First vertex of ring row (1 <= row <= 2*rings).
         const auto row_start = [&](uint32_t row) { return 1u + (row - 1u) * stride; };

@@ -24,6 +24,14 @@ namespace ResourceManager::Primitive_Builder
     //   Both properties are verified on every generated mesh; a violation
     //   throws std::logic_error, so a broken generator is reported at load
     //   time instead of showing up as a missing or inside-out object.
+    //
+    // UV contract, identical for every generator (the Vulkan / glTF
+    // convention, the one Image_Loader and the shaders already assume,
+    // since nothing flips V):
+    //   - U grows to the RIGHT as seen from outside the surface.
+    //   - V = 0 is the TOP edge of the image; V grows downward.
+    //   Tangents are derived from these UVs, with tangent.w = +1 on an
+    //   unmirrored mapping, as in glTF. See the top of Primitive_Builder.cpp.
     CoreTypes::MeshData Build(const Primitive_Desc& _desc);
 
     // =========================================================

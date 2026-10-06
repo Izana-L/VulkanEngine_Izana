@@ -175,7 +175,7 @@ namespace Renderer_System {
         if (available_devices.empty())
             throw std::runtime_error("No GPUs with Vulkan support found on this system");
 
-        uint32_t best_score = 0;
+        std::optional<Device_Rank> best_rank;
         VkPhysicalDevice best_device = VK_NULL_HANDLE;
         Device_Support best_support;
 
@@ -185,9 +185,9 @@ namespace Renderer_System {
 
         for (VkPhysicalDevice candidate : available_devices) {
             const Device_Support support = Query_device_support(candidate, surface_handle, _instance);
-            const uint32_t score = Rate_device_suitability(candidate, support, requirements);
-            if (score > best_score) {
-                best_score = score;
+            const std::optional<Device_Rank> rank = Rate_device_suitability(candidate, support, requirements);
+            if (rank && (!best_rank || *best_rank < *rank)) {
+                best_rank = rank;
                 best_device = candidate;
                 best_support = support;
             }
@@ -759,12 +759,12 @@ namespace Renderer_System {
     }
 
     // ---------- Rate_device_suitability ----------
-    uint32_t Vulkan_Device::Rate_device_suitability(
+    std::optional<Device_Rank> Vulkan_Device::Rate_device_suitability(
         VkPhysicalDevice _device, const Device_Support& _support, const Device_Requirements& _requirements) const
     {
         assert(_device != VK_NULL_HANDLE);
 
-        if (!Is_device_suitable(_support, _requirements)) return 0;
+        if (!Is_device_suitable(_support, _requirements)) return std::nullopt;
 
         VkPhysicalDeviceProperties properties{};
         vkGetPhysicalDeviceProperties(_device, &properties);
@@ -772,23 +772,22 @@ namespace Renderer_System {
         VkPhysicalDeviceMemoryProperties memory_properties{};
         vkGetPhysicalDeviceMemoryProperties(_device, &memory_properties);
 
-        uint32_t score = 0;
+        Device_Rank rank;
 
         if (properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
-            score += 1000;
+            rank.type_level = 2;
         else if (properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU)
-            score += 100;
-
-        score += properties.limits.maxImageDimension2D;
+            rank.type_level = 1;
 
         for (uint32_t i = 0; i < memory_properties.memoryHeapCount; ++i)
             if (memory_properties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
-                score += static_cast<uint32_t>(
-                    memory_properties.memoryHeaps[i].size / (1024 * 1024));
+                rank.device_local_bytes = std::max<uint64_t>(
+                    rank.device_local_bytes, memory_properties.memoryHeaps[i].size);
 
-        // Never zero for a suitable device, so a suitable device always
-        // beats "no device".
-        return score + 1;
+        rank.vendor_id = properties.vendorID;
+        rank.device_id = properties.deviceID;
+
+        return rank;
     }
 
     // ---------- Log_selected_device ----------

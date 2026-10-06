@@ -21,11 +21,11 @@
     <ClInclude Include="..\code\headers\System.hpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\code\headers\Gpu_Assets.cpp" />
     <ClCompile Include="..\code\sources\Engine.cpp" />
     <ClCompile Include="..\code\sources\Engine_Context.cpp" />
     <ClCompile Include="..\code\sources\Engine_Loop.cpp" />
     <ClCompile Include="..\code\sources\Extractor.cpp" />
+    <ClCompile Include="..\code\sources\Gpu_Assets.cpp" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>18.0</VCProjectVersion>
