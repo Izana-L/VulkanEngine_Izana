@@ -36,6 +36,10 @@ namespace ResourceManager
     // in a std::deque, which never relocates its elements when it grows at
     // the back: the references handed out by Get / Get_data stay valid for
     // the lifetime of the table.
+    //
+    // The special members are the compiler-generated ones, and they are
+    // correct: Id_Provider keeps no pointers into itself, so a copy is an
+    // independent table and a moved-from table is empty and usable.
     template <typename Data>
     class Asset_Table
     {

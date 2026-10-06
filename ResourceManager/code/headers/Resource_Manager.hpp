@@ -53,6 +53,12 @@ namespace ResourceManager
 
         Resource_Manager(const Resource_Manager&) = delete;
         Resource_Manager& operator=(const Resource_Manager&) = delete;
+
+        // Moving transfers every asset, handle validity and cache entry.
+        // The defaulted moves are sound because nothing here holds an
+        // address of its own storage (Id_Provider links its free list by
+        // ID); the moved-from manager is empty and can be reused, and it
+        // shares no state with the destination.
         Resource_Manager(Resource_Manager&&) = default;
         Resource_Manager& operator=(Resource_Manager&&) = default;
 

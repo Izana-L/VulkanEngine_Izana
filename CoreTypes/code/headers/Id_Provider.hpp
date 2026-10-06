@@ -3,6 +3,8 @@
 #include <Id.hpp>
 #include <cstdint>
 #include <cstddef>
+#include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace CoreTypes
@@ -14,10 +16,19 @@ namespace CoreTypes
     // free list (an intrusive singly linked list of released nodes), so a
     // slot can be reused without gaps and without a linear search.
     //
-    // Memory is organized in fixed-size segments of 256 IDs each. A new
-    // segment is allocated only when the free list is exhausted, and an
-    // existing segment is never reallocated, so a Node* stays valid for
-    // the lifetime of the provider.
+    // The free list is linked by ID, never by pointer: a node stores the ID
+    // of the next free node, and the provider stores the ID of the first
+    // one. Nothing in the object holds an address of its own storage, so
+    // the storage can be copied or moved freely and every link stays valid:
+    //   - a copy is a fully independent provider (it never writes into the
+    //     original's nodes);
+    //   - a move transfers the whole state and leaves the source empty,
+    //     exactly like a default-constructed provider, instead of leaving it
+    //     with a free list that now belongs to the destination.
+    //
+    // Memory grows in steps of 256 IDs, only when the free list is
+    // exhausted. Nodes may be relocated when the storage grows; that is
+    // safe precisely because they are addressed by ID.
     //
     // Every node carries an `allocated` flag. It is what makes the free
     // list robust: releasing an ID that is not allocated, or an ID that
@@ -26,153 +37,102 @@ namespace CoreTypes
     // Allocate_id() return the same value forever).
     class Id_Provider
     {
-        static constexpr size_t pool_capacity = 32;    // segments reserved upfront
-        static constexpr size_t segment_size = 256;    // IDs per segment
-        static constexpr size_t segment_shift = 8;     // log2(segment_size)
-        static constexpr size_t segment_mask = 255;    // segment_size - 1
+        static constexpr size_t growth_step = 256;     // IDs added per extension
+
+        // Largest capacity for which every ID is still below INVALID_ID,
+        // which is reserved as the "no node" link. It also guarantees that
+        // INVALID_ID is never a position inside `nodes`.
+        static constexpr size_t max_capacity =
+            (static_cast<size_t>(INVALID_ID) / growth_step) * growth_step;
 
         struct Node
         {
-            Node* next = nullptr;
-            Id    id = INVALID_ID;
+            Id       next = INVALID_ID;     // next free node; INVALID_ID ends the list
             uint32_t generation = 0;
-            bool  allocated = false;
+            bool     allocated = false;
         };
 
-        class Segment
+        // The ID of a node is its position in this vector.
+        std::vector< Node > nodes;
+        Id                  first_free = INVALID_ID;
+        size_t              allocated_count = 0;
+
+        // True if the ID has a backing node. INVALID_ID never does.
+        bool Has_node(const Id id) const
         {
-            std::vector< Node > nodes;
+            return static_cast<size_t>(id) < nodes.size();
+        }
 
-        public:
-
-            explicit Segment(size_t segment_index) : nodes(segment_size)
-            {
-                Id id = static_cast<Id>(segment_index * segment_size);
-
-                for (size_t i = 0; i < segment_size; ++i)
-                {
-                    nodes[i].next = (i + 1 < segment_size) ? &nodes[i + 1] : nullptr;
-                    nodes[i].id = id++;
-                    nodes[i].allocated = false;
-                }
-            }
-
-            Node& first_node()
-            {
-                return nodes.front();
-            }
-
-            Node& operator [] (size_t index)
-            {
-                return nodes[index];
-            }
-
-            const Node& operator [] (size_t index) const
-            {
-                return nodes[index];
-            }
-        };
-
-        class Pool
+        // Appends growth_step nodes, links them in ID order and makes the
+        // first of them the head of the free list. Called only when the
+        // free list is empty, so no free node is lost.
+        // Throws std::length_error when the ID space is exhausted; the
+        // provider is left unchanged in that case and when allocation fails.
+        void Extend()
         {
-            std::vector< Segment > segments;
+            const size_t first = nodes.size();
 
-        public:
+            if (first >= max_capacity)
+                throw std::length_error("Id_Provider: ID space exhausted");
 
-            Pool()
-            {
-                segments.reserve(pool_capacity);
-            }
+            nodes.resize(first + growth_step);
 
-            // Adds a new segment and returns a pointer to its first node.
-            // The pointer stays valid even if the vector of segments
-            // reallocates, because each Segment owns its own std::vector
-            // of nodes: only the outer vector moves, never the nodes.
-            Node* Extend()
-            {
-                segments.emplace_back(segments.size());
-                return &segments.back().first_node();
-            }
+            // The last node keeps next == INVALID_ID and ends the list.
+            for (size_t i = first; i + 1 < nodes.size(); ++i)
+                nodes[i].next = static_cast<Id>(i + 1);
 
-            // Number of IDs that currently have a backing node.
-            size_t Capacity() const
-            {
-                return segments.size() * segment_size;
-            }
-
-            void Clear()
-            {
-                segments.clear();
-            }
-
-            //Frees every node and threads the free list through all segments in
-            // index order. A node that was allocated gets its generation advanced,
-            // so every ID handed out before the call is stale afterwards.
-            // Returns the head of the new free list (nullptr without segments).
-            Node * Invalidate_all()
-            {
-                Node* head = nullptr;
-                Node* tail = nullptr;
-
-                for (Segment& segment : segments)
-                {
-                    for (size_t i = 0; i < segment_size; ++i)
-                    {
-                        Node& node = segment[i];
-
-                        if (node.allocated)
-                        {
-                            node.allocated = false;
-                            ++node.generation;
-                        }
-
-                        node.next = nullptr;
-
-                        if (tail) tail->next = &node;
-                        else      head = &node;
-
-                        tail = &node;
-                    }
-                }
-
-                return head;
-            }
-
-            Node& operator [] (Id index)
-            {
-                return segments[index >> segment_shift][index & segment_mask];
-            }
-
-            const Node& operator [] (Id index) const
-            {
-                return segments[index >> segment_shift][index & segment_mask];
-            }
-        };
-
-    private:
-
-        Pool   pool;
-        Node*  first_free_node = nullptr;
-        size_t allocated_count = 0;
+            first_free = static_cast<Id>(first);
+        }
 
     public:
 
         Id_Provider() = default;
+        ~Id_Provider() = default;
+
+        // Deep copy: the free list is made of IDs, so the copy's links
+        // refer to the copy's own nodes.
+        Id_Provider(const Id_Provider&) = default;
+        Id_Provider& operator=(const Id_Provider&) = default;
+
+        // The source is left empty and reusable: no allocations, no free
+        // list, Allocate_id() returns 0 again.
+        Id_Provider(Id_Provider&& other) noexcept
+            : nodes(std::move(other.nodes))
+            , first_free(std::exchange(other.first_free, INVALID_ID))
+            , allocated_count(std::exchange(other.allocated_count, size_t{ 0 }))
+        {
+            other.nodes.clear();
+        }
+
+        Id_Provider& operator=(Id_Provider&& other) noexcept
+        {
+            if (this != &other)
+            {
+                nodes = std::move(other.nodes);
+                first_free = std::exchange(other.first_free, INVALID_ID);
+                allocated_count = std::exchange(other.allocated_count, size_t{ 0 });
+                other.nodes.clear();
+            }
+
+            return *this;
+        }
 
         // Returns a unique ID, reusing a previously released one if
         // available, or extending the pool to get a fresh one.
         Id Allocate_id()
         {
-            if (!first_free_node) first_free_node = pool.Extend();
+            if (Not_valid(first_free)) Extend();
 
-            Node& node = *first_free_node;
-            first_free_node = node.next;
+            const Id id = first_free;
+            Node& node = nodes[id];
 
-            node.next = nullptr;
+            first_free = node.next;
+
+            node.next = INVALID_ID;
             node.allocated = true;
             ++allocated_count;
 
-            return node.id;
+            return id;
         }
 
         // Returns an ID to the free list for future reuse.
@@ -185,11 +145,11 @@ namespace CoreTypes
         {
             if (!Is_allocated(id)) return false;
 
-            Node& node = pool[id];
+            Node& node = nodes[id];
             node.allocated = false;
             ++node.generation;
-            node.next = first_free_node;
-            first_free_node = &node;
+            node.next = first_free;
+            first_free = id;
             --allocated_count;
 
             return true;
@@ -199,27 +159,23 @@ namespace CoreTypes
         // released since. An ID outside the pool is reported as not allocated.
         bool Is_allocated(const Id id) const
         {
-            if (Not_valid(id)) return false;
-            if (static_cast<size_t>(id) >= pool.Capacity()) return false;
-
-            return pool[id].allocated;
+            return Has_node(id) && nodes[id].allocated;
         }
+
         // Generation the slot currently carries. A handle for a live ID must
         // carry this value. An ID outside the pool reports 0.
         uint32_t Generation(const Id id) const
         {
-            if (Not_valid(id)) return 0;
-            if (static_cast<size_t>(id) >= pool.Capacity()) return 0;
-
-            return pool[id].generation;
+            return Has_node(id) ? nodes[id].generation : 0;
         }
 
         // True if the ID is allocated AND the generation matches: the check
         // that detects a handle kept after its slot was released and reused.
         bool Is_current(const Id id, const uint32_t generation) const
         {
-            return Is_allocated(id) && pool[id].generation == generation;
+            return Is_allocated(id) && nodes[id].generation == generation;
         }
+
         // Number of IDs currently allocated.
         size_t Allocated_count() const
         {
@@ -229,24 +185,44 @@ namespace CoreTypes
         // Number of IDs that have a backing node (allocated or free).
         size_t Capacity() const
         {
-            return pool.Capacity();
+            return nodes.size();
         }
+
         // Forgets every allocation. The next Allocate_id() returns 0 again.
         // Callers must make sure no ID handed out before the reset is used
         // afterwards; a generation counter on the caller's side (see
         // ECS::World) is what makes that detectable.
         void Reset()
         {
-            pool.Clear();
-            first_free_node = nullptr;
+            nodes.clear();
+            first_free = INVALID_ID;
             allocated_count = 0;
         }
+
         // Releases every allocation at once. Each allocated ID advances its
         // generation, so every handle handed out before the call fails
-        // Is_current() afterwards. The next Allocate_id() returns 0 again.
+        // Is_current() afterwards. The free list is rebuilt in ID order, so
+        // the next Allocate_id() returns 0 again.
         void Invalidate_all()
         {
-            first_free_node = pool.Invalidate_all();
+            Id head = INVALID_ID;
+
+            // Walking backwards links each node to the one that follows it.
+            for (size_t i = nodes.size(); i-- > 0;)
+            {
+                Node& node = nodes[i];
+
+                if (node.allocated)
+                {
+                    node.allocated = false;
+                    ++node.generation;
+                }
+
+                node.next = head;
+                head = static_cast<Id>(i);
+            }
+
+            first_free = head;
             allocated_count = 0;
         }
     };

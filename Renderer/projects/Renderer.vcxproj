@@ -129,14 +129,12 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
     <ClCompile Include="..\code\sources\Vulkan_Framebuffer.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_OIT_Resources.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Render_Pass.cpp" />
-    <ClCompile Include="..\code\sources\Vulkan_Vertex_Layout.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\code\headers\Bindless_Registry.hpp" />
     <ClInclude Include="..\code\headers\Cluster_Grid.hpp" />
     <ClInclude Include="..\code\headers\Descriptor_Layout_Cache.hpp" />
     <ClInclude Include="..\code\headers\Descriptor_Sets.hpp" />
-    <ClInclude Include="..\code\headers\Device_Requirements.hpp" />
     <ClInclude Include="..\code\headers\Draw_List_Builder.hpp" />
     <ClInclude Include="..\code\headers\Frame_Data.hpp" />
     <ClInclude Include="..\code\headers\Frame_Statistics.hpp" />
