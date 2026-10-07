@@ -17,15 +17,17 @@
 //   - A disc cap has no intrinsic "up": Cap_uv() fixes it, so the top and
 //     bottom caps both stay unmirrored.
 //
-// Tangents come out of Compute_tangents() from these UVs, with the
+// Tangents come out of Mesh_Tangents::Compute() from these UVs, with the
 // bitangent defined as glTF expects it (see there).
 
 #include <Primitive_Builder.hpp>
+#include <Mesh_Tangents.hpp>
 #include <MathConstants.hpp>
 #include <Vector.hpp>
 #include <Vector3.hpp>
 
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <stdexcept>
@@ -121,92 +123,6 @@ namespace ResourceManager::Primitive_Builder
             return MathLib::Vec3::Normalize(MathLib::Vec3::Cross(_p1 - _p0, _p2 - _p0));
         }
 
-        // =========================================================
-        // Tangent computation
-        // =========================================================
-
-        // Computes per-vertex tangents from positions, UVs and normals
-        // using the standard Lengyel method (gradient of UV over the
-        // triangle). Fills vertex.tangent.xyz with the orthonormalized
-        // tangent and vertex.tangent.w with the bitangent sign (+1/-1).
-        //
-        // Call after all positions, normals, UVs and indices are set.
-        void Compute_tangents(Mesh& _mesh)
-        {
-            const size_t vertex_count = _mesh.vertices.size();
-
-            std::vector<Vec3> tan_accum(vertex_count, { 0.0f, 0.0f, 0.0f });
-            std::vector<Vec3> bitan_accum(vertex_count, { 0.0f, 0.0f, 0.0f });
-
-            // Accumulate tangent/bitangent contributions per triangle.
-            //
-            // Solves the 2x2 system that relates the triangle's 3D edges to
-            // its UV deltas:   e1 = T*du1 + B*dv1
-            //                  e2 = T*du2 + B*dv2
-            // whose inverse is the 1/denom factor below.
-            for (size_t i = 0; i + 2 < _mesh.indices.size(); i += 3)
-            {
-                const uint32_t i0 = _mesh.indices[i + 0];
-                const uint32_t i1 = _mesh.indices[i + 1];
-                const uint32_t i2 = _mesh.indices[i + 2];
-
-                const Vertex& v0 = _mesh.vertices[i0];
-                const Vertex& v1 = _mesh.vertices[i1];
-                const Vertex& v2 = _mesh.vertices[i2];
-
-                const Vec3 e1 = v1.position - v0.position;
-                const Vec3 e2 = v2.position - v0.position;
-
-                const Vec2 d1 = v1.uv - v0.uv;   // d1.x = du1, d1.y = dv1
-                const Vec2 d2 = v2.uv - v0.uv;   // d2.x = du2, d2.y = dv2
-
-                // denom is twice the triangle's area in UV space. Near zero
-                // means the three UVs are collinear: the system has no
-                // solution, so f = 0 and this triangle contributes nothing.
-                const float denom = d1.x * d2.y - d2.x * d1.y;
-                const float f = (std::fabs(denom) < 1e-8f) ? 0.0f : (1.0f / denom);
-
-                const Vec3 tangent = f * (d2.y * e1 - d1.y * e2);
-
-                // The bitangent points toward DEcreasing V, i.e. UP in the
-                // image (+Y of a glTF normal map): that is the direction
-                // glTF's tangent.w assumes, so primitives and loaded meshes
-                // share one tangent frame. It is minus dP/dV, because V = 0
-                // is the top edge. On an unmirrored mapping w comes out +1.
-                const Vec3 bitangent = f * (d2.x * e1 - d1.x * e2);
-
-                for (uint32_t idx : { i0, i1, i2 })
-                {
-                    tan_accum[idx] += tangent;
-                    bitan_accum[idx] += bitangent;
-                }
-            }
-
-            // Orthonormalize each tangent against its normal (Gram-Schmidt)
-            // and compute the handedness sign for the bitangent.
-            for (size_t i = 0; i < vertex_count; ++i)
-            {
-                const Vec3& n = _mesh.vertices[i].normal;
-
-                // Strip the component along the normal: averaging across
-                // triangles leaves the accumulated tangent non-perpendicular.
-                Vec3 tangent = tan_accum[i] - n * MathLib::Vec3::Dot(n, tan_accum[i]);
-
-                // NOT a bare normalize: a zero-length tangent (a vertex whose
-                // triangles are all degenerate in UV) would normalize to NaN,
-                // and a NaN here reaches the vertex buffer and lights the
-                // surface with garbage. The arbitrary fallback stays finite.
-                const float len = MathLib::Vec3::Length(tangent);
-                tangent = (len > 1e-8f) ? tangent / len : Vec3(1.0f, 0.0f, 0.0f);
-
-                // The bitangent is not stored: the shader rebuilds it as
-                // cross(N, T) * w. w is that reconstruction's sign.
-                const float sign = (MathLib::Vec3::Dot(MathLib::Vec3::Cross(n, tangent), bitan_accum[i]) < 0.0f) ? -1.0f : 1.0f;
-
-                _mesh.vertices[i].tangent = MathLib::Vector4(tangent, sign);
-            }
-        }
-
         // Sets every vertex color to white (default tint).
         void Set_default_color(Mesh& _mesh)
         {
@@ -239,10 +155,24 @@ namespace ResourceManager::Primitive_Builder
 
             const size_t vertex_count = _mesh.vertices.size();
 
-            // Squared length of the edge cross product, i.e. (2 * area)^2.
-            // Unit-sized primitives at the maximum tessellation (512 x 512)
-            // still produce triangles far above this threshold.
-            constexpr float min_cross_length_sq = 1e-14f;
+            // A triangle is degenerate when its area is negligible compared to
+            // its own size, never compared to an absolute number: the area of
+            // a legitimate triangle scales with the square of the primitive's
+            // size and of its tessellation (a capsule has a quarter of the
+            // sphere's radius, so 16 times less area per triangle, and the
+            // fan triangles around a pole shrink with the segment count), so
+            // any fixed floor rejects valid meshes somewhere in the legal
+            // parameter range.
+            //
+            // The measure is (2 * area) / longest_edge^2: 0 for a collapsed
+            // (collinear or coincident) triangle, sqrt(3) / 2 for an
+            // equilateral one, scale-invariant, and independent of the vertex
+            // order. The thinnest legitimate triangle any generator emits is
+            // a pole fan at maximum tessellation, about 2 * pi / 512 = 0.012;
+            // the floor sits two orders of magnitude below that, and far above
+            // the ~1e-7 that single-precision rounding leaves on a triangle
+            // that is collapsed by construction.
+            constexpr float min_relative_area = 1e-4f;
 
             for (size_t i = 0; i < _mesh.indices.size(); i += 3)
             {
@@ -263,7 +193,15 @@ namespace ResourceManager::Primitive_Builder
                 const Vec3 cross = MathLib::Vec3::Cross(v1.position - v0.position, v2.position - v0.position);
                 const float cross_length_sq = MathLib::Vec3::Length_squared(cross);
 
-                if (cross_length_sq < min_cross_length_sq)
+                const float longest_edge_sq = std::max({
+                    MathLib::Vec3::Length_squared(v1.position - v0.position),
+                    MathLib::Vec3::Length_squared(v2.position - v1.position),
+                    MathLib::Vec3::Length_squared(v0.position - v2.position) });
+
+                // cross_length = 2 * area, so this is
+                // (2 * area / longest_edge^2) <= min_relative_area, squared
+                // to avoid the square root. <= also catches the all-zero case.
+                if (cross_length_sq <= min_relative_area * min_relative_area * longest_edge_sq * longest_edge_sq)
                 {
                     throw std::logic_error("Primitive_Builder: " + name + " triangle " +
                         std::to_string(i / 3) + " is degenerate (zero area)");
@@ -289,7 +227,7 @@ namespace ResourceManager::Primitive_Builder
         void Finalize(Mesh& _mesh, const char* _name)
         {
             Set_default_color(_mesh);
-            Compute_tangents(_mesh);
+            Mesh_Tangents::Compute(_mesh);
 
             Validate_geometry(_mesh, _name);
         }
@@ -482,10 +420,15 @@ namespace ResourceManager::Primitive_Builder
     // Sphere: UV sphere, radius 1, centered
     // =========================================================
 
-    // Each pole is a SINGLE vertex. A ring of coincident vertices at the
-    // poles (the usual UV-sphere shortcut) produces one zero-area triangle
-    // per segment at each pole and (segments + 1) duplicate vertices per
-    // pole, all of which would be uploaded and rasterized every frame.
+    // The poles. A pole is a single point, but it cannot be a single VERTEX:
+    // its U would have to be one value, and every triangle of the fan that
+    // meets it needs a different one (the pole is where all the meridians
+    // converge). With one shared U the texture is sheared across the whole
+    // fan, at every tessellation. So each fan triangle gets its own copy of
+    // the pole, with U at the middle of its segment. That is `segments`
+    // vertices per pole, not a ring of segments + 1 coincident ones, and
+    // every fan triangle keeps its full area: no zero-area triangle exists.
+    // Each copy also gets its own tangent, computed from its one triangle.
     CoreTypes::MeshData Build_sphere(uint16_t _segments, uint16_t _rings)
     {
         Mesh mesh;
@@ -493,8 +436,6 @@ namespace ResourceManager::Primitive_Builder
         const uint32_t segments = Clamp_param(Primitive_Type::Sphere, 0, _segments);
         const uint32_t rings = Clamp_param(Primitive_Type::Sphere, 1, _rings);
         const uint32_t stride = segments + 1;
-
-        const uint32_t north_pole = Add_vertex(mesh, { 0, 1, 0 }, { 0, 1, 0 }, Image_uv(0.5f, 1.0f));
 
         // Rings 1 .. rings-1 (the poles are rings 0 and `rings`).
         for (uint32_t r = 1; r < rings; ++r)
@@ -519,16 +460,18 @@ namespace ResourceManager::Primitive_Builder
             }
         }
 
-        const uint32_t south_pole = Add_vertex(mesh, { 0, -1, 0 }, { 0, -1, 0 }, Image_uv(0.5f, 0.0f));
-
         // First vertex of ring r (1 <= r <= rings-1).
-        const auto ring_start = [&](uint32_t r) { return 1u + (r - 1u) * stride; };
+        const auto ring_start = [&](uint32_t r) { return (r - 1u) * stride; };
+
+        // U (to the right) at the middle of segment s: where its pole copy sits.
+        const auto segment_mid_u = [&](uint32_t s) { return 1.0f - (static_cast<float>(s) + 0.5f) / static_cast<float>(segments); };
 
         // Top fan.
         for (uint32_t s = 0; s < segments; ++s)
         {
+            const uint32_t pole = Add_vertex(mesh, { 0, 1, 0 }, { 0, 1, 0 }, Image_uv(segment_mid_u(s), 1.0f));
             const uint32_t a = ring_start(1) + s;
-            Add_triangle(mesh, north_pole, a + 1, a);
+            Add_triangle(mesh, pole, a + 1, a);
         }
 
         // Quads between consecutive rings. a is on the upper ring, b right
@@ -548,8 +491,9 @@ namespace ResourceManager::Primitive_Builder
         // Bottom fan.
         for (uint32_t s = 0; s < segments; ++s)
         {
+            const uint32_t pole = Add_vertex(mesh, { 0, -1, 0 }, { 0, -1, 0 }, Image_uv(segment_mid_u(s), 0.0f));
             const uint32_t a = ring_start(rings - 1) + s;
-            Add_triangle(mesh, a, a + 1, south_pole);
+            Add_triangle(mesh, a, a + 1, pole);
         }
 
         Finalize(mesh, "sphere");
@@ -576,28 +520,35 @@ namespace ResourceManager::Primitive_Builder
 
         const Vec3 apex{ 0.0f, 1.0f, 0.0f };
 
-        // Side: the apex is duplicated per segment so each triangle gets its
-        // own apex normal (the normal at the segment's mid azimuth).
-        for (uint32_t s = 0; s < segments; ++s)
-        {
-            const float t0 = static_cast<float>(s) / seg * TWO_PI;
-            const float t1 = static_cast<float>(s + 1) / seg * TWO_PI;
+        // Base ring of the side wall: ONE vertex per azimuth, shared by the
+        // two triangles that meet there (the last repeats the first for the
+        // U seam). Sharing is what makes the tangent smooth: tangents are
+        // accumulated per vertex, so a vertex owned by a single triangle
+        // would keep that triangle's flat tangent while its normal is
+        // smooth, and the frame would jump at every edge.
+        const uint32_t ring = static_cast<uint32_t>(mesh.vertices.size());
 
-            const Vec3 base0{ std::cos(t0), 0.0f, std::sin(t0) };
-            const Vec3 base1{ std::cos(t1), 0.0f, std::sin(t1) };
+        for (uint32_t s = 0; s <= segments; ++s)
+        {
+            const float t = static_cast<float>(s) / seg * TWO_PI;
 
             // Azimuth runs to the left seen from outside: U to the right
-            // is 1 - azimuth fraction. The base is the bottom, the apex the top.
-            const float u0 = 1.0f - static_cast<float>(s) / seg;
-            const float u1 = 1.0f - static_cast<float>(s + 1) / seg;
-            const float ua = 1.0f - (static_cast<float>(s) + 0.5f) / seg;
+            // is 1 - azimuth fraction. The base is the bottom of the image.
+            Add_vertex(mesh, { std::cos(t), 0.0f, std::sin(t) }, side_normal(t),
+                Image_uv(1.0f - static_cast<float>(s) / seg, 0.0f));
+        }
 
-            const uint32_t i0 = Add_vertex(mesh, base0, side_normal(t0), Image_uv(u0, 0.0f));
-            const uint32_t i1 = Add_vertex(mesh, base1, side_normal(t1), Image_uv(u1, 0.0f));
-            const uint32_t ia = Add_vertex(mesh, apex, side_normal(0.5f * (t0 + t1)), Image_uv(ua, 1.0f));
+        // The apex is duplicated per segment: each copy gets the normal and
+        // the U of its segment's mid azimuth, as the apex has no single one.
+        for (uint32_t s = 0; s < segments; ++s)
+        {
+            const float t_mid = (static_cast<float>(s) + 0.5f) / seg * TWO_PI;
+            const float u_mid = 1.0f - (static_cast<float>(s) + 0.5f) / seg;
 
-            // base0 -> apex -> base1 is counter-clockwise from outside.
-            Add_triangle(mesh, i0, ia, i1);
+            const uint32_t ia = Add_vertex(mesh, apex, side_normal(t_mid), Image_uv(u_mid, 1.0f));
+
+            // base[s] -> apex -> base[s+1] is counter-clockwise from outside.
+            Add_triangle(mesh, ring + s, ia, ring + s + 1);
         }
 
         // Base cap (facing -Y), center fan.
@@ -764,11 +715,18 @@ namespace ResourceManager::Primitive_Builder
 
     // Unit-sized like every other primitive: the body spans -0.25..0.25 in
     // Y and each hemispherical cap adds 0.25, for a total height of 1.
-    // Built as one latitude/longitude grid: a single north pole vertex,
-    // `rings` rows for the top hemisphere ending at the upper equator,
-    // `rings` rows for the bottom hemisphere starting at the lower
-    // equator, and a single south pole vertex. The body is the band of
-    // quads between the two equators.
+    // Built as one latitude/longitude grid: `rings` rows for the top
+    // hemisphere ending at the upper equator, `rings` rows for the bottom
+    // hemisphere starting at the lower equator, and the body is the band of
+    // quads between the two equators. The poles are one copy per fan
+    // triangle with U at the middle of its segment, for the reason given at
+    // Build_sphere.
+    //
+    // V follows the ARC LENGTH along the meridian, not the row index. Rows
+    // are evenly spaced in angle on the hemispheres but the body is a single
+    // band, so a per-row V would give that band the V span of one hemisphere
+    // row (a few percent of the texture for half the capsule's length) and
+    // stretch the texture there by about an order of magnitude.
     CoreTypes::MeshData Build_capsule(uint16_t _segments, uint16_t _rings)
     {
         Mesh mesh;
@@ -780,17 +738,17 @@ namespace ResourceManager::Primitive_Builder
         const float radius = 0.25f;
         const float half_body = 0.25f;
 
-        // Rows 0 and 2*rings+1 are the poles; rows 1..2*rings are rings.
-        const uint32_t row_count = 2 * rings + 2;
-        const float    v_scale = 1.0f / static_cast<float>(row_count - 1);
+        // Length of the meridian from the north pole to the south pole:
+        // two quarter circles and the straight body between them.
+        const float cap_length = HALF_PI * radius;
+        const float body_length = 2.0f * half_body;
+        const float meridian_length = 2.0f * cap_length + body_length;
 
-        const uint32_t north_pole = Add_vertex(mesh, { 0, half_body + radius, 0 }, { 0, 1, 0 }, Image_uv(0.5f, 1.0f));
-
-        const auto add_ring = [&](float phi, float y_offset, uint32_t row)
+        const auto add_ring = [&](float phi, float y_offset, float arc_from_north)
             {
                 const float y_sphere = std::cos(phi) * radius;
                 const float r_xz = std::sin(phi) * radius;
-                const float v = static_cast<float>(row) * v_scale;   // 0 at the north pole .. 1 at the south
+                const float v = arc_from_north / meridian_length;   // 0 at the north pole .. 1 at the south
 
                 for (uint32_t s = 0; s <= segments; ++s)
                 {
@@ -811,23 +769,31 @@ namespace ResourceManager::Primitive_Builder
 
         // Top hemisphere: phi in (0, PI/2], last row is the upper equator.
         for (uint32_t r = 1; r <= rings; ++r)
-            add_ring(static_cast<float>(r) / static_cast<float>(rings) * HALF_PI, half_body, r);
+        {
+            const float phi = static_cast<float>(r) / static_cast<float>(rings) * HALF_PI;
+            add_ring(phi, half_body, radius * phi);
+        }
 
         // Bottom hemisphere: phi in [PI/2, PI), first row is the lower equator.
         for (uint32_t r = 0; r < rings; ++r)
-            add_ring(HALF_PI + static_cast<float>(r) / static_cast<float>(rings) * HALF_PI, -half_body, rings + 1 + r);
-
-        const uint32_t south_pole = Add_vertex(mesh, { 0, -half_body - radius, 0 }, { 0, -1, 0 }, Image_uv(0.5f, 0.0f));
+        {
+            const float quarter = static_cast<float>(r) / static_cast<float>(rings) * HALF_PI;
+            add_ring(HALF_PI + quarter, -half_body, cap_length + body_length + radius * quarter);
+        }
 
         // First vertex of ring row (1 <= row <= 2*rings).
-        const auto row_start = [&](uint32_t row) { return 1u + (row - 1u) * stride; };
+        const auto row_start = [&](uint32_t row) { return (row - 1u) * stride; };
         const uint32_t last_ring_row = 2 * rings;
+
+        // U (to the right) at the middle of segment s: where its pole copy sits.
+        const auto segment_mid_u = [&](uint32_t s) { return 1.0f - (static_cast<float>(s) + 0.5f) / static_cast<float>(segments); };
 
         // Top fan.
         for (uint32_t s = 0; s < segments; ++s)
         {
+            const uint32_t pole = Add_vertex(mesh, { 0, half_body + radius, 0 }, { 0, 1, 0 }, Image_uv(segment_mid_u(s), 1.0f));
             const uint32_t a = row_start(1) + s;
-            Add_triangle(mesh, north_pole, a + 1, a);
+            Add_triangle(mesh, pole, a + 1, a);
         }
 
         // Quads between consecutive ring rows (hemispheres and the body).
@@ -846,8 +812,9 @@ namespace ResourceManager::Primitive_Builder
         // Bottom fan.
         for (uint32_t s = 0; s < segments; ++s)
         {
+            const uint32_t pole = Add_vertex(mesh, { 0, -half_body - radius, 0 }, { 0, -1, 0 }, Image_uv(segment_mid_u(s), 0.0f));
             const uint32_t a = row_start(last_ring_row) + s;
-            Add_triangle(mesh, a, a + 1, south_pole);
+            Add_triangle(mesh, a, a + 1, pole);
         }
 
         Finalize(mesh, "capsule");

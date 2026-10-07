@@ -2,6 +2,8 @@
 
 #include <cassert>
 #include <cstdint>
+#include <stdexcept>
+#include <string>
 
 namespace ResourceManager
 {
@@ -176,9 +178,12 @@ namespace ResourceManager
     // their legal range, so "same geometry" and "same key" become the same
     // statement, by construction. To_key() does this for you.
     //
-    // Canonicalization keeps the CACHE correct; the asserts keep the
-    // CALLER honest. Both are needed — asserts vanish under NDEBUG, so
-    // they can never be what guarantees the cache is duplicate-free.
+    // Canonicalization keeps the CACHE correct; rejecting bad values keeps
+    // the CALLER honest. Both are needed — the Make_* constructors throw in
+    // every build configuration (an assert would vanish under NDEBUG and
+    // turn the mistake into a silent clamp), while Canonical() is the
+    // explicit, deliberate repair for data that is not under the caller's
+    // control.
     //
     // ── How to build one ──────────────────────────────────────────
     //
@@ -188,6 +193,11 @@ namespace ResourceManager
     //
     //       Primitive_Desc::Make_cube()          // no params to get wrong
     //       Primitive_Desc::Make_sphere(16, 8)
+    //
+    //   A value outside the legal range (Make_sphere(1, 1), Make_cone(600))
+    //   throws std::invalid_argument in every build configuration, and is
+    //   a compile error when the call is a constant expression. It is never
+    //   clamped behind the caller's back.
     //
     //   From data (scene files, editor, network): validate instead of
     //   asserting — external data is not a programmer error:
@@ -210,7 +220,9 @@ namespace ResourceManager
         //
         // The first line of defence: a type that reads no parameters has
         // no parameters in its signature, so {Cube, 1, 999} is not a
-        // mistake that can be made. Each one returns a canonical desc.
+        // mistake that can be made. Each one returns a canonical desc, and
+        // throws std::invalid_argument for a parameter outside the legal
+        // range (see Make() below).
 
         static constexpr Primitive_Desc Make_cube() { return Make(Primitive_Type::Cube, 0, 0); }
         static constexpr Primitive_Desc Make_quad() { return Make(Primitive_Type::Quad, 0, 0); }
@@ -337,7 +349,8 @@ namespace ResourceManager
         //
         // In a debug build a non-canonical descriptor asserts instead of
         // being silently repaired, so the caller learns that the value
-        // they passed is being ignored.
+        // they passed is being ignored. (The release build keys the
+        // canonical form, which is what keeps the cache duplicate-free.)
         constexpr uint64_t To_key() const
         {
             assert(Is_known_type(type) &&
@@ -385,19 +398,27 @@ namespace ResourceManager
             return _value;
         }
 
-        // Shared body of the Make_* named constructors: asserts in debug
-        // that the caller asked for something legal, and returns the
-        // canonical descriptor either way.
+        // Shared body of the Make_* named constructors. A value outside the
+        // legal range is a programmer error, and it is reported the same way
+        // in every build configuration: clamping it (what the generators and
+        // Canonical() do for data) would build a different mesh from the one
+        // the call site asked for, and an assert would disappear in Release
+        // and leave exactly that silent clamp behind.
+        //
+        // Being constexpr, a constant-expression call with a bad value does
+        // not compile (the throw is evaluated); at run time it throws.
         static constexpr Primitive_Desc Make(Primitive_Type _type, uint16_t _param1, uint16_t _param2)
         {
             const Primitive_Desc raw{ _type, _param1, _param2, 0 };
 
-            assert(raw.Is_canonical() &&
-                "Primitive_Desc::Make_*: parameter out of range — below the minimum the "
-                "generator clamps to, or above MAX_TOPOLOGY_PARAM. The value has been "
-                "clamped; Validate() reports which rule was broken.");
+            if (!raw.Is_canonical())
+            {
+                throw std::invalid_argument(std::string("Primitive_Desc::Make_") + Type_name(_type) + "(" +
+                    std::to_string(_param1) + ", " + std::to_string(_param2) + "): " + Error_message(raw.Validate()) +
+                    " (legal range per parameter: see Spec_of(), upper bound MAX_TOPOLOGY_PARAM)");
+            }
 
-            return raw.Canonical();
+            return raw;
         }
     };
 

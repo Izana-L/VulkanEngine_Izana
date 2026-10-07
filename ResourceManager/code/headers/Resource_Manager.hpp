@@ -33,10 +33,13 @@ namespace ResourceManager
     // GPU mesh, differing only by their Transform.
     //
     // Cache keys:
-    //   - Mesh files:  the path string itself.
-    //   - Images:      the path string plus the requested pixel format.
+    //   - Mesh files:  the normalized absolute path (Platform::Filesystem::
+    //                  Normalize_path), so every spelling of one file --
+    //                  "./a.glb", "dir/../a.glb", the absolute path -- is the
+    //                  same entry.
+    //   - Images:      the normalized path plus the requested pixel format.
     //   - Primitives:  the canonical Primitive_Desc packed into a uint64_t.
-    //   Strings are compared in full, so two different paths can never
+    //   Strings are compared in full, so two different files can never
     //   share an entry, whatever their hashes are; the primitive key is
     //   one-to-one with the geometry by construction.
     //
@@ -144,6 +147,7 @@ namespace ResourceManager
         // Internal helpers
         // =========================================================
 
+        static std::string Make_path_key(const std::string& _path);
         static std::string Make_image_key(const std::string& _path, CoreTypes::Pixel_Format _format);
 
         // =========================================================

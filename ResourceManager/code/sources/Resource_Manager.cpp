@@ -1,5 +1,7 @@
 #include <Resource_Manager.hpp>
 
+#include <Filesystem.hpp>
+
 #include <iostream>
 #include <stdexcept>
 
@@ -10,11 +12,25 @@ namespace ResourceManager
     // Key helpers
     // =========================================================
 
+    // The identity of a file for the caches: its normalized absolute path.
+    // The spelling a caller used says nothing about which file it is --
+    // "a/b.glb", "./a/b.glb", "a//b.glb", "a/c/../b.glb" and the absolute
+    // path all name one file, and keying on the raw string would load it
+    // (and upload it to the GPU) once per spelling. Normalize_path resolves
+    // ".", ".." and repeated separators, makes the path absolute, follows
+    // symlinks and, like the rest of Platform::Filesystem, takes and returns
+    // UTF-8. It never throws, and a file that does not exist normalizes
+    // lexically, so the loader still reports the real error.
+    std::string Resource_Manager::Make_path_key(const std::string& _path)
+    {
+        return Platform::Filesystem::Normalize_path(_path);
+    }
+
     std::string Resource_Manager::Make_image_key(const std::string& _path, CoreTypes::Pixel_Format _format)
     {
         // The separator cannot appear in a path, so distinct (path, format)
         // pairs always produce distinct keys.
-        return _path + '\n' + std::to_string(static_cast<unsigned>(_format));
+        return Make_path_key(_path) + '\n' + std::to_string(static_cast<unsigned>(_format));
     }
 
     // =========================================================
@@ -23,7 +39,9 @@ namespace ResourceManager
 
     std::vector<CoreTypes::Asset_Handle> Resource_Manager::Load_mesh(const std::string& _path)
     {
-        auto it = file_mesh_cache.find(_path);
+        const std::string key = Make_path_key(_path);
+
+        auto it = file_mesh_cache.find(key);
         if (it != file_mesh_cache.end())
         {
             std::cout << "[Resource_Manager] Mesh cache hit: " << _path << "\n";
@@ -42,7 +60,7 @@ namespace ResourceManager
             handles.push_back(meshes.Register(std::move(mesh_data), _path));
         }
 
-        file_mesh_cache[_path] = handles;
+        file_mesh_cache[key] = handles;
 
         std::cout << "[Resource_Manager] Loaded and cached " << handles.size()
             << " primitive(s) from " << _path << "\n";

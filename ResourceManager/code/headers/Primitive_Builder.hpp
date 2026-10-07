@@ -47,7 +47,7 @@ namespace ResourceManager::Primitive_Builder
 
     // Parametrized geometry.
     CoreTypes::MeshData Build_plane(uint16_t _subdivisions);               // 1x1 grid in XZ, facing +Y
-    CoreTypes::MeshData Build_sphere(uint16_t _segments, uint16_t _rings); // radius 1, centered, one vertex per pole
+    CoreTypes::MeshData Build_sphere(uint16_t _segments, uint16_t _rings); // radius 1, centered, one pole vertex per fan triangle
     CoreTypes::MeshData Build_cone(uint16_t _segments);                    // radius 1 base at y=0, apex at y=1
     CoreTypes::MeshData Build_cylinder(uint16_t _segments);                // radius 1, y from 0 to 1
     CoreTypes::MeshData Build_torus(uint16_t _segments, uint16_t _rings);  // outer radius 1, tube radius 0.25
