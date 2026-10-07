@@ -20,13 +20,15 @@ namespace Renderer_System
                                                            _preferred_image_count,
                                                            _prefer_mailbox,
                                                            _desired_extent,
-                                                           VK_NULL_HANDLE)
+                                                           VK_NULL_HANDLE,
+                                                           std::nullopt)
     {
     }
 
     Vulkan_Swapchain::Vulkan_Swapchain( VkDevice _device,VkPhysicalDevice _physical_device,VkSurfaceKHR _surface,
                                         const Queue_Family_Indices& _queue_family_indices,uint32_t _preferred_image_count,
-                                        bool _prefer_mailbox,VkExtent2D _desired_extent,VkSwapchainKHR _old_swapchain)
+                                        bool _prefer_mailbox,VkExtent2D _desired_extent,VkSwapchainKHR _old_swapchain,
+                                        std::optional<VkSurfaceFormatKHR> _required_format)
                                         : device_handle(_device),
                                         physical_device_handle(_physical_device),
                                         surface_handle(_surface),
@@ -34,6 +36,7 @@ namespace Renderer_System
                                         prefer_mailbox(_prefer_mailbox),
                                         queue_family_indices(_queue_family_indices),
                                         image_format(VK_FORMAT_UNDEFINED),
+                                        image_color_space(VK_COLOR_SPACE_SRGB_NONLINEAR_KHR),
                                         extent{ 0, 0 },
                                         selected_present_mode(VK_PRESENT_MODE_FIFO_KHR),
                                         retired(false)
@@ -42,7 +45,7 @@ namespace Renderer_System
         assert(surface_handle != VK_NULL_HANDLE && "Vulkan_Surface must be fully constructed before creating a swapchain");
         assert(_preferred_image_count >= 1 && "Preferred image count must be at least 1");
 
-        Create_swapchain(_desired_extent, _old_swapchain);
+        Create_swapchain(_desired_extent, _old_swapchain, _required_format);
         Create_image_views();
     }
 
@@ -63,6 +66,7 @@ namespace Renderer_System
             prefer_mailbox = _other.prefer_mailbox;
             queue_family_indices = _other.queue_family_indices;
             image_format = _other.image_format;
+            image_color_space = _other.image_color_space;
             extent = _other.extent;
             selected_present_mode = _other.selected_present_mode;
             retired = _other.retired;
@@ -82,13 +86,20 @@ namespace Renderer_System
     {
         assert(device_handle != VK_NULL_HANDLE && "Can_recreate() called on a moved-from Vulkan_Swapchain");
 
-        VkSurfaceCapabilitiesKHR capabilities{};
-        VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device_handle, surface_handle, &capabilities),
-            "Vulkan_Swapchain: query surface capabilities");
+        const Swap_chain_support_details support = Query_swap_chain_support(physical_device_handle, surface_handle);
 
-        const VkExtent2D chosen = Choose_extent(capabilities, _desired_extent);
+        const VkExtent2D chosen = Choose_extent(support.capabilities, _desired_extent);
 
-        return chosen.width > 0 && chosen.height > 0;
+        // A surface without area is a state that passes (a minimized
+        // window): the answer is "not now", whatever it offers.
+        if (chosen.width == 0 || chosen.height == 0)
+            return false;
+
+        // The format of the first swapchain is kept: asking for it throws
+        // if the surface stopped offering it.
+        Choose_surface_format(support.formats, VkSurfaceFormatKHR{ image_format, image_color_space });
+
+        return true;
     }
 
     // ---------- Recreate ----------
@@ -99,8 +110,10 @@ namespace Renderer_System
     {
         assert(device_handle != VK_NULL_HANDLE && "Recreate() called on a moved-from Vulkan_Swapchain");
 
-        // A surface without area cannot hold a swapchain. Nothing has been
-        // touched, so the current swapchain stays as it is.
+        // A surface without area cannot hold a swapchain, and one that no
+        // longer offers the format of the first swapchain cannot hold this
+        // one (Can_recreate throws). Nothing has been touched either way,
+        // so the current swapchain stays as it is, usable.
         if (!Can_recreate(_desired_extent))
             return false;
 
@@ -120,7 +133,8 @@ namespace Renderer_System
         retired = old_swapchain != VK_NULL_HANDLE;
 
         Vulkan_Swapchain replacement(device_handle, physical_device_handle, surface_handle, queue_family_indices,
-                                     preferred_image_count, prefer_mailbox, _desired_extent, old_swapchain);
+                                     preferred_image_count, prefer_mailbox, _desired_extent, old_swapchain,
+                                     VkSurfaceFormatKHR{ image_format, image_color_space });
 
         // Destroys the old image views and the old swapchain, and clears
         // the retired flag (the replacement is a fresh swapchain).
@@ -169,7 +183,8 @@ namespace Renderer_System
     // Core creation logic, shared by the constructor and Recreate() through
     // the private constructor. Uses the cached members plus the two
     // arguments that change between creations.
-    void Vulkan_Swapchain::Create_swapchain(VkExtent2D _desired_extent, VkSwapchainKHR _old_swapchain)
+    void Vulkan_Swapchain::Create_swapchain(VkExtent2D _desired_extent, VkSwapchainKHR _old_swapchain,
+                                            std::optional<VkSurfaceFormatKHR> _required_format)
     {
         Swap_chain_support_details support =
             Query_swap_chain_support(physical_device_handle, surface_handle);
@@ -180,7 +195,7 @@ namespace Renderer_System
             );
         }
 
-        VkSurfaceFormatKHR surface_format = Choose_surface_format(support.formats);
+        VkSurfaceFormatKHR surface_format = Choose_surface_format(support.formats, _required_format);
         VkPresentModeKHR   present_mode = Choose_present_mode(support.present_modes, prefer_mailbox);
         VkExtent2D         chosen_extent = Choose_extent(support.capabilities, _desired_extent);
 
@@ -237,6 +252,7 @@ namespace Renderer_System
         swapchain = Unique_Swapchain(device_handle, created);
 
         image_format = surface_format.format;
+        image_color_space = surface_format.colorSpace;
         extent = chosen_extent;
         selected_present_mode = present_mode;
 
@@ -316,8 +332,25 @@ namespace Renderer_System
 
     // ---------- Choose_surface_format ----------
     VkSurfaceFormatKHR Vulkan_Swapchain::Choose_surface_format(
-        const std::vector<VkSurfaceFormatKHR>& _available_formats) const
+        const std::vector<VkSurfaceFormatKHR>& _available_formats,
+        std::optional<VkSurfaceFormatKHR> _required_format) const
     {
+        // A recreation keeps the format of the first swapchain: the render
+        // pass and the pipelines were built for it. Nothing is chosen, and
+        // an empty list simply does not offer it.
+        if (_required_format.has_value())
+        {
+            for (const auto& format : _available_formats)
+            {
+                if (format.format == _required_format->format &&
+                    format.colorSpace == _required_format->colorSpace)
+                    return format;
+            }
+
+            throw std::runtime_error("Vulkan_Swapchain: the surface no longer offers the format the swapchain was created with (" +
+                Vulkan_Utils::Vk_format_to_string(_required_format->format) + "); the render pass and the pipelines are built for it");
+        }
+
         assert(!_available_formats.empty() && "Choose_surface_format() called with an empty format list");
 
         for (const auto& format : _available_formats)

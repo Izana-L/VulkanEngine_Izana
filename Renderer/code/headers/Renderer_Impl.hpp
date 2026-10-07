@@ -13,9 +13,7 @@
 #include <Vulkan_Allocator.hpp>
 #include <Vulkan_Swapchain.hpp>
 #include <Vulkan_Render_Pass.hpp>
-#include <Vulkan_Depth_Resources.hpp>
-#include <Vulkan_OIT_Resources.hpp>
-#include <Vulkan_Framebuffer.hpp>
+#include <Swapchain_Targets.hpp>
 #include <Vulkan_Handles.hpp>
 #include <Vulkan_Pipeline.hpp>
 #include <Vulkan_Compute_Pipeline.hpp>
@@ -177,14 +175,12 @@ namespace Renderer_System
 
         Vulkan_Swapchain        swapchain;
         Vulkan_Render_Pass      render_pass;
-        Vulkan_Depth_Resources  depth_resources;
 
-        // Accumulation and revealage targets of the transparent subpass,
-        // read by the composite subpass. Screen sized: recreated with the
-        // swapchain. Declared before the framebuffers, which reference them.
-        Vulkan_OIT_Resources    oit_resources;
-
-        Vulkan_Framebuffer      framebuffers;
+        // The depth buffer, the accumulation and revealage targets of the
+        // transparent subpass (read by the composite subpass) and the
+        // framebuffers. All of them are sized by the swapchain and
+        // recreated with it, as one set.
+        Swapchain_Targets       targets;
 
         // =====================================================
         // Pipelines
@@ -380,6 +376,17 @@ namespace Renderer_System
         uint32_t                uploaded_light_count = 0;
         uint32_t                uploaded_directional_light_count = 0;
 
+        // Near distance the cluster grid of this frame is built for: the
+        // packet's near plane, or CLUSTER_FALLBACK_NEAR_DISTANCE when that
+        // is not a positive, finite distance (reported by
+        // Write_frame_uniforms). The uniforms and the cluster boxes use this
+        // one value, so they cannot disagree.
+        float                   uploaded_cluster_near_plane = CLUSTER_FALLBACK_NEAR_DISTANCE;
+
+        // The previous packet had an unusable near plane: the report is made
+        // when that starts, not on every frame it lasts.
+        bool                    reported_invalid_near_plane = false;
+
         // Mesh of the unit sphere drawn by the bounding volume debug view:
         // bounds.vert places it on every object's local bounding sphere and
         // transforms it by the model matrix, which yields the ellipsoid the
@@ -406,8 +413,9 @@ namespace Renderer_System
         // Only Recreate_swapchain_if_needed acts on it.
         bool                    swapchain_recreation_pending = false;
 
-        // The device is lost, or the recovery of a failed frame failed (see
-        // Is_lost in Renderer.hpp). Never cleared.
+        // The device is lost, the recovery of a failed frame failed, or a
+        // failed transfer could not be waited for (see Is_lost in
+        // Renderer.hpp). Never cleared.
         bool                    device_lost = false;
 
         // vkReleaseSwapchainImagesKHR (or its EXT predecessor), loaded when
@@ -426,6 +434,15 @@ namespace Renderer_System
         Impl& operator=(const Impl&) = delete;
         Impl(Impl&&) = delete;
         Impl& operator=(Impl&&) = delete;
+
+        // Blocks until the device is idle, so nothing the GPU may still be
+        // executing (a transfer that failed and could not be waited for, see
+        // Settle_failed_transfer) refers to what is about to be released. A
+        // device that cannot go idle (lost) is reported and is not a reason
+        // to skip the release. Used by the destructor and by the
+        // constructor's failure path, before Destroy_owned_handles. Does not
+        // throw.
+        void Wait_for_device_before_release() noexcept;
 
         // Destroys every handle owned directly (not through a member's
         // destructor). Used by the destructor and by the constructor's
@@ -494,8 +511,11 @@ namespace Renderer_System
         uint32_t Register_material(const Material_Desc& _desc);
 
         // Blocks until every submitted frame has completed (the serial of
-        // the last submission is reached), then frees the retired geometry.
-        // Used before an upload writes buffers that frames in flight read.
+        // the last submission is reached); the geometry retired by those
+        // frames is freed (Wait_for_serial). Used before an upload writes
+        // buffers that frames in flight read, and before it reserves the
+        // ranges it needs, so that geometry waiting for those frames can be
+        // reused by the same batch.
         void Wait_for_frames_in_flight();
 
         // =====================================================
@@ -548,11 +568,39 @@ namespace Renderer_System
         void Record_command_buffer(Frame_Data& _frame, const RenderPacket& _packet,
                                    uint32_t _image_index, Frame_Effects& _out_effects);
 
+        // What one submission to the graphics queue waits for, executes and
+        // signals besides the timeline semaphore, which every submission of
+        // a frame signals with the next serial.
+        struct Timeline_Submit
+        {
+            // Binary semaphore signaled by the acquire, waited on at
+            // wait_stage.
+            VkSemaphore          wait_semaphore = VK_NULL_HANDLE;
+            VkPipelineStageFlags wait_stage = 0;
+
+            // The commands to execute; null for a submission without any.
+            VkCommandBuffer      command_buffer = VK_NULL_HANDLE;
+
+            // Binary semaphore signaled for the present; null for none.
+            VkSemaphore          signal_semaphore = VK_NULL_HANDLE;
+
+            // Names the submission in the message of the exception thrown
+            // when vkQueueSubmit fails.
+            const char*          what = "Renderer: failed to submit";
+        };
+
+        // Submits _submit and makes it the next serial of the timeline for
+        // the current frame slot. The serial is consumed
+        // (Frame_Timeline::Record_submission) only when the submission
+        // succeeded; a failed one leaves the timeline as it was, and the
+        // next submission signals the same value. The one place that
+        // builds a frame's submit, for the frame itself (Submit_frame) and
+        // for the recovery of a frame that failed (Recover_acquired_image).
+        void Submit_to_timeline(const Timeline_Submit& _submit);
+
         // Submits the recorded command buffer of _frame: waits for the
         // acquire semaphore, signals _render_finished for the present and
-        // the next serial of frame_semaphore. The serial is consumed
-        // (Frame_Timeline::Record_submission) only when the submission
-        // succeeded; a failed one leaves the timeline as it was.
+        // the next serial of frame_semaphore (Submit_to_timeline).
         void Submit_frame(Frame_Data& _frame, VkSemaphore _render_finished);
 
         // Applies the effects of a frame that was submitted.
@@ -582,13 +630,18 @@ namespace Renderer_System
         //                              list resolved.
         //   Record_transparent_draws - subpass 1, depth writes already
         //                              disabled.
+        //   Record_direct_draws      - the draw loop of both, when the CPU
+        //                              records one draw per object.
         //   Record_composite_draw    - subpass 2: the full-screen triangle
         //                              that resolves the OIT targets.
         //   Record_bounds_draw       - subpass 2, after the composite.
         struct Draw_State
         {
-            // Id of the graphics pipeline currently bound (0xFF: none).
-            uint8_t     bound_pipeline_id = 0xFF;
+            // The graphics pipeline currently bound, null until the first
+            // bind. A handle and not an id: the ids of Pipeline_Registry use
+            // every value of a uint8_t, so none can mean "nothing bound",
+            // while a null handle is never a valid pipeline.
+            VkPipeline  bound_pipeline = VK_NULL_HANDLE;
 
             // Front face currently set.
             VkFrontFace front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
@@ -601,6 +654,13 @@ namespace Renderer_System
         void Record_transparent_draws(VkCommandBuffer _command_buffer, Draw_State& _state);
         void Record_composite_draw(VkCommandBuffer _command_buffer, Draw_State& _state);
         void Record_bounds_draw(VkCommandBuffer _command_buffer, Draw_State& _state);
+
+        // One vkCmdDrawIndexed per entry of _draws, straight from the pool,
+        // in order. The pipeline and the winding are set only when they
+        // change from one draw to the next. The recording of the transparent
+        // subpass, and of the opaque one on the Direct path.
+        void Record_direct_draws(VkCommandBuffer _command_buffer,
+                                 const std::vector<Draw_List_Builder::Draw_Record>& _draws, Draw_State& _state);
 
         // Binds graphics pipeline _pipeline_id unless it is already bound.
         void Bind_graphics_pipeline(VkCommandBuffer _command_buffer, uint8_t _pipeline_id, Draw_State& _state);
@@ -619,9 +679,20 @@ namespace Renderer_System
         // =====================================================
 
         // Blocks until frame_semaphore reaches _serial, then tells the
-        // timeline how far the GPU got. Returns at once for serial 0 and
-        // for serials already known to be complete. Throws on a wait error.
+        // timeline how far the GPU got and frees the geometry that the
+        // frames now known to be complete were holding. The blocking is
+        // skipped for serial 0 and for serials already known to be complete;
+        // the counter is read, and the completed geometry freed, in every
+        // case (the GPU may have gone beyond _serial). Throws on a wait
+        // error.
         void Wait_for_serial(uint64_t _serial, const char* _what);
+
+        // Blocks until the device is idle, then tells the timeline that
+        // every submitted frame completed and frees the geometry they were
+        // holding. For work that must not overlap anything on the GPU (the
+        // swapchain recreation). _what names the wait in the message of the
+        // exception thrown on failure.
+        void Wait_idle(const char* _what);
 
         // Throws std::runtime_error at once, without touching the GPU, when
         // the Renderer is lost. _operation names the caller in the message.
@@ -632,6 +703,16 @@ namespace Renderer_System
         // block of an operation that touches the GPU, before it rethrows.
         // Does not throw.
         void Note_current_failure() noexcept;
+
+        // Called from the catch block of a failed transfer
+        // (Upload_Context::Run), before it releases anything the transfer
+        // wrote. True: the transfer is not running any more, so the handler
+        // can release what the transfer targeted. False: Run could not wait
+        // for the device (Upload_Context::Is_usable), so the GPU may still
+        // be writing there; the Renderer is lost, like when the recovery of
+        // a failed frame fails, the handler leaves those resources alone and
+        // the destructor releases them after its own wait. Does not throw.
+        bool Settle_failed_transfer() noexcept;
 
         // =====================================================
         // Surface size
@@ -644,10 +725,19 @@ namespace Renderer_System
         // recreation fails; the flag stays set and the next call retries.
         bool Recreate_swapchain_if_needed();
 
-        // Recreates the swapchain, depth resources, OIT targets (and the
-        // descriptors that read them), framebuffers and per-image
+        // Recreates the swapchain, the targets that follow it (depth
+        // buffer, OIT targets, framebuffers: Swapchain_Targets), the
+        // descriptors that read the OIT targets and the per-image
         // synchronization after a resize or OUT_OF_DATE error. Pipelines
         // are unaffected (viewport/scissor are dynamic).
+        //
+        // The swapchain keeps the format of the first one: the render pass
+        // and the pipelines are built for it, so a surface that no longer
+        // offers it makes the recreation throw (Vulkan_Swapchain::
+        // Can_recreate) instead of producing framebuffers the render pass
+        // cannot use. It throws before the device wait and before anything
+        // is retired: the old swapchain and its objects stay as they were,
+        // and every retry is as cheap as the query of the surface.
         //
         // Transactional: everything that can fail is created first, in
         // temporaries, and only then are the members replaced by moving. If

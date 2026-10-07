@@ -33,10 +33,18 @@ namespace Renderer_System::Cluster_Grid
         float bias = 0.0f;
     };
 
+    // True when _near_plane can start the slices: a positive, finite view
+    // distance.
+    bool Is_valid_near_plane(float _near_plane);
+
     // Mapping for a camera whose near plane is _near_plane (a view
-    // distance). A non-positive or non-finite value falls back to 0.1, and
-    // the end of the range is kept at least twice the near distance, so
-    // the logarithms are always defined.
+    // distance). The end of the range is kept at least twice the near
+    // distance, so the logarithms are always defined.
+    //
+    // Throws std::invalid_argument unless Is_valid_near_plane(_near_plane):
+    // a pure function does not invent a distance. The Renderer decides what
+    // to do with a packet whose near plane is not one (it reports it and
+    // builds the grid for CLUSTER_FALLBACK_NEAR_DISTANCE).
     Slice_Mapping Make_slice_mapping(float _near_plane);
 
     // View distance where slice _slice starts, for _slice in

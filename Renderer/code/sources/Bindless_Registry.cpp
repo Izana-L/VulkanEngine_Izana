@@ -174,6 +174,14 @@ namespace Renderer_System
         max_textures = effective.textures;
         max_samplers = effective.samplers;
 
+        // Both arrays are visible to every stage in Bindless_Reader_Stages
+        // (Shader_Stages.hpp). The barriers that leave an image readable
+        // through this set wait on the matching
+        // Bindless_Reader_Pipeline_Stages, so a stage added there is covered
+        // by the layout and by the barriers at once.
+        layout_bindings[0] = { Binding_Bindless::Textures, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, Bindless_Reader_Stages, max_textures };
+        layout_bindings[1] = { Binding_Bindless::Samplers, VK_DESCRIPTOR_TYPE_SAMPLER, Bindless_Reader_Stages, max_samplers };
+
         // Storage for every slot up front: Register_texture then never
         // allocates, so it cannot throw once a free slot exists (see
         // Get_free_texture_count). Done before the Vulkan objects exist,
@@ -292,18 +300,13 @@ namespace Renderer_System
     // ---------- Write_texture_slot ----------
     void Bindless_Registry::Write_texture_slot(uint32_t _index, VkImageView _image_view)
     {
-        VkDescriptorImageInfo image_info{};
-        image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        image_info.imageView = _image_view;
+        // The writer holds its single write inside itself: no allocation,
+        // so this cannot fail for lack of memory (Register_texture relies on
+        // it). The slot index and the view were validated by the caller; the
+        // writer checks them against the layout all the same.
+        Vulkan_Descriptor_Utils::Descriptor_Writer writer(layout_bindings);
 
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = set;
-        write.dstBinding = Binding_Bindless::Textures;
-        write.dstArrayElement = _index;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-        write.descriptorCount = 1;
-        write.pImageInfo = &image_info;
+        writer.Write_image(set, Binding_Bindless::Textures, _image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, _index);
 
         // Every caller guarantees that no command buffer pending execution
         // reads this slot, which is what makes the write legal while frames
@@ -311,7 +314,7 @@ namespace Renderer_System
         // allows writing the descriptors those frames do not read, and
         // UPDATE_AFTER_BIND a command buffer that bound the set and is
         // still being recorded, whose submission then sees the new view.
-        vkUpdateDescriptorSets(device_handle, 1, &write, 0, nullptr);
+        writer.Update(device_handle);
     }
 
     // ---------- Validate_mutable_slot ----------
@@ -343,21 +346,10 @@ namespace Renderer_System
             );
         }
 
-        // A SAMPLER descriptor only reads the sampler field; imageView and
-        // imageLayout are ignored.
-        VkDescriptorImageInfo sampler_info{};
-        sampler_info.sampler = _sampler;
+        Vulkan_Descriptor_Utils::Descriptor_Writer writer(layout_bindings);
 
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = set;
-        write.dstBinding = Binding_Bindless::Samplers;
-        write.dstArrayElement = _index;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-        write.descriptorCount = 1;
-        write.pImageInfo = &sampler_info;
-
-        vkUpdateDescriptorSets(device_handle, 1, &write, 0, nullptr);
+        writer.Write_sampler(set, Binding_Bindless::Samplers, _sampler, _index);
+        writer.Update(device_handle);
     }
 
     // ---------- Get_registered_count ----------
@@ -396,22 +388,9 @@ namespace Renderer_System
     // ---------- Create_layout ----------
     void Bindless_Registry::Create_layout()
     {
-        // Two arrays in the same set, both visible to every stage in
-        // Bindless_Reader_Stages (Shader_Stages.hpp). The barriers that
-        // leave an image readable through this set wait on the matching
-        // Bindless_Reader_Pipeline_Stages, so a stage added there is
-        // covered by the layout and by the barriers at once.
-        std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
-
-        bindings[0].binding = Binding_Bindless::Textures;
-        bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-        bindings[0].descriptorCount = max_textures;
-        bindings[0].stageFlags = Bindless_Reader_Stages;
-
-        bindings[1].binding = Binding_Bindless::Samplers;
-        bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-        bindings[1].descriptorCount = max_samplers;
-        bindings[1].stageFlags = Bindless_Reader_Stages;
+        // Two arrays in the same set (layout_bindings), both visible to
+        // every stage in Bindless_Reader_Stages.
+        const std::vector<VkDescriptorSetLayoutBinding> bindings = Vulkan_Descriptor_Utils::To_vk_bindings(layout_bindings);
 
         // Per-binding flags required for bindless, the same for both arrays:
         //   PARTIALLY_BOUND   — slots that were never written are legal to
@@ -438,7 +417,7 @@ namespace Renderer_System
                                                             VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT;
 
         // One entry per binding, in the same order as `bindings`.
-        const std::array<VkDescriptorBindingFlags, 2> binding_flags = { bindless_flags, bindless_flags };
+        const std::vector<VkDescriptorBindingFlags> binding_flags(bindings.size(), bindless_flags);
 
         VkDescriptorSetLayoutBindingFlagsCreateInfo binding_flags_info{};
         binding_flags_info.sType =
@@ -470,48 +449,31 @@ namespace Renderer_System
                                       std::to_string(max_textures) + " textures and " + std::to_string(max_samplers) + " samplers");
         }
 
-        VK_CHECK(vkCreateDescriptorSetLayout(device_handle, &layout_info, nullptr, &layout),"Bindless_Registry: failed to create descriptor set layout");
+        // The output of a failed creation is undefined: the member takes
+        // the handle only after a success.
+        VkDescriptorSetLayout created = VK_NULL_HANDLE;
+        VK_CHECK(vkCreateDescriptorSetLayout(device_handle, &layout_info, nullptr, &created), "Bindless_Registry: failed to create descriptor set layout");
+        layout = created;
     }
 
     // ---------- Create_pool ----------
     void Bindless_Registry::Create_pool()
     {
-        std::array<VkDescriptorPoolSize, 2> pool_sizes{};
-
-        pool_sizes[0].type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-        pool_sizes[0].descriptorCount = max_textures;
-
-        pool_sizes[1].type = VK_DESCRIPTOR_TYPE_SAMPLER;
-        pool_sizes[1].descriptorCount = max_samplers;
-
-        VkDescriptorPoolCreateInfo pool_info{};
-        pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-
+        // Only one descriptor set is ever allocated from this pool - the
+        // single global bindless set - with room for exactly its two arrays.
         // UPDATE_AFTER_BIND_BIT on the pool is required to allocate sets
         // from a layout that uses UPDATE_AFTER_BIND bindings.
-        pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
-        pool_info.poolSizeCount = static_cast<uint32_t>(pool_sizes.size());
-        pool_info.pPoolSizes = pool_sizes.data();
+        Vulkan_Descriptor_Utils::Pool_Builder pool_builder;
+        pool_builder.Add_sets(layout_bindings);
 
-        // Only one descriptor set is ever allocated from this pool — the
-        // single global bindless set.
-        pool_info.maxSets = 1;
-
-        VK_CHECK(vkCreateDescriptorPool(device_handle, &pool_info, nullptr, &pool),
+        pool = pool_builder.Create(device_handle, VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
             "Bindless_Registry: failed to create descriptor pool");
     }
 
     // ---------- Create_set ----------
     void Bindless_Registry::Create_set()
     {
-        VkDescriptorSetAllocateInfo alloc_info{};
-        alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        alloc_info.descriptorPool = pool;
-        alloc_info.descriptorSetCount = 1;
-        alloc_info.pSetLayouts = &layout;
-
-        VK_CHECK(vkAllocateDescriptorSets(device_handle, &alloc_info, &set),
-            "Bindless_Registry: failed to allocate descriptor set");
+        set = Vulkan_Descriptor_Utils::Allocate_set(device_handle, pool, layout, "Bindless_Registry: failed to allocate descriptor set");
     }
 
-} // namespace Renderer
+} // namespace Renderer_System

@@ -8,6 +8,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <stdexcept>
+#include <string>
 
 // The sequence of passes of a frame: command buffer recording and draw
 // recording. The frame's CPU-side draw lists come from Draw_List_Builder
@@ -101,7 +103,9 @@ namespace Renderer_System
 
         if (record_procedural)
         {
-            assert(procedural_image.has_value() && "Record_command_buffer: Init_procedural_pass() has not run");
+            // Init_procedural_pass emplaces it before the first frame.
+            if (!procedural_image.has_value())
+                throw std::logic_error("Record_command_buffer: Init_procedural_pass() has not run");
 
             // Not up to date until the frame is submitted (Apply_effects).
             _out_effects.procedural_recorded = true;
@@ -110,17 +114,10 @@ namespace Renderer_System
 
             const VkExtent2D procedural_extent = procedural_image->Get_extent();
 
-            vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, procedural_pipeline.Get_handle());
-
             Procedural_Push_Constants procedural_push{};
             procedural_push.image_width = procedural_extent.width;
             procedural_push.image_height = procedural_extent.height;
             procedural_push.time = 0.0f;   // animated in milestone 1.3
-
-            // Stage flags must match the range of compute_pipeline_layout
-            // exactly (VK_SHADER_STAGE_COMPUTE_BIT).
-            vkCmdPushConstants(command_buffer, compute_pipeline_layout.Get_handle(), VK_SHADER_STAGE_COMPUTE_BIT,
-                0, sizeof(Procedural_Push_Constants), &procedural_push);
 
             // UNDEFINED -> GENERAL (contents discarded), after the reads of
             // the frames in flight that share this image (write-after-read).
@@ -128,9 +125,9 @@ namespace Renderer_System
 
             // Rounded up: a size that is not a multiple of the group size
             // still covers every texel; the shader discards the excess.
-            const uint32_t group_count_x = Dispatch_group_count(procedural_extent.width, PROCEDURAL_GROUP_SIZE);
-            const uint32_t group_count_y = Dispatch_group_count(procedural_extent.height, PROCEDURAL_GROUP_SIZE);
-            vkCmdDispatch(command_buffer, group_count_x, group_count_y, 1);
+            procedural_pipeline.Dispatch(command_buffer, compute_pipeline_layout.Get_handle(), procedural_push,
+                Dispatch_group_count(procedural_extent.width, PROCEDURAL_GROUP_SIZE),
+                Dispatch_group_count(procedural_extent.height, PROCEDURAL_GROUP_SIZE));
 
             // GENERAL -> SHADER_READ_ONLY_OPTIMAL, compute writes made
             // visible to the fragment stage before the render pass begins,
@@ -154,11 +151,14 @@ namespace Renderer_System
             // The boxes count as rebuilt only after the submit
             // (Apply_effects): this frame may still fail, and then the
             // next one has to record the update again.
-            if (light_clusters.Record_aabb_update(command_buffer, _packet.view.projection, _packet.view.near_plane))
+            // The near plane is the one the uniforms of this frame were
+            // written with (Write_frame_uniforms), valid whatever the packet
+            // said.
+            if (light_clusters.Record_aabb_update(command_buffer, _packet.view.projection, uploaded_cluster_near_plane))
             {
                 _out_effects.cluster_boxes_recorded = true;
                 _out_effects.cluster_projection = _packet.view.projection;
-                _out_effects.cluster_near_plane = _packet.view.near_plane;
+                _out_effects.cluster_near_plane = uploaded_cluster_near_plane;
             }
 
             Vulkan_Buffer_Utils::Record_zero_fill_and_barrier(command_buffer,
@@ -186,18 +186,14 @@ namespace Renderer_System
         {
             const Gpu_Scope scope(debug_utils, gpu_timer, command_buffer, "Frustum culling", 0.2f, 0.8f, 1.0f);
 
-            vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, cull_pipeline.Get_handle());
-
             Cull_Push_Constants cull_push{};
             cull_push.object_count = opaque_count;
             cull_push.command_capacity = MAX_OBJECTS;
             cull_push.pass_bit = Render_Pass_Bit::Opaque;
             cull_push.frustum_culling = draw_list.Is_opaque_culled_on_gpu() ? 1u : 0u;
 
-            vkCmdPushConstants(command_buffer, compute_pipeline_layout.Get_handle(), VK_SHADER_STAGE_COMPUTE_BIT,
-                0, sizeof(Cull_Push_Constants), &cull_push);
-
-            vkCmdDispatch(command_buffer, Dispatch_group_count(opaque_count, CULL_GROUP_SIZE), 1, 1);
+            cull_pipeline.Dispatch(command_buffer, compute_pipeline_layout.Get_handle(), cull_push,
+                Dispatch_group_count(opaque_count, CULL_GROUP_SIZE));
         }
 
         // -- Compute results -> consumers --
@@ -242,7 +238,7 @@ namespace Renderer_System
             VkRenderPassBeginInfo render_pass_info{};
             render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
             render_pass_info.renderPass = render_pass.Get_handle();
-            render_pass_info.framebuffer = framebuffers.Get_framebuffer(_image_index);
+            render_pass_info.framebuffer = targets.framebuffers.Get_framebuffer(_image_index);
             render_pass_info.renderArea.offset = { 0, 0 };
             render_pass_info.renderArea.extent = extent;
             render_pass_info.clearValueCount = static_cast<uint32_t>(clear_values.size());
@@ -397,13 +393,20 @@ namespace Renderer_System
 
     void Renderer::Impl::Bind_graphics_pipeline(VkCommandBuffer _command_buffer, uint8_t _pipeline_id, Draw_State& _state)
     {
-        if (_pipeline_id == _state.bound_pipeline_id)
+        // Every id reaching here was validated by Draw_List_Builder, or is
+        // one of the Renderer's own pipelines. The lookup is checked all the
+        // same: binding a null pipeline is invalid usage, and a null handle
+        // must not be mistaken for the "nothing bound yet" of the state.
+        const VkPipeline pipeline = pipeline_registry.Get_by_id(_pipeline_id);
+
+        if (pipeline == VK_NULL_HANDLE)
+            throw std::logic_error("Bind_graphics_pipeline: pipeline id " + std::to_string(_pipeline_id) + " was never built");
+
+        if (pipeline == _state.bound_pipeline)
             return;
 
-        // Every id reaching here was validated by Draw_List_Builder, or is
-        // one of the Renderer's own pipelines.
-        vkCmdBindPipeline(_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_registry.Get_by_id(_pipeline_id));
-        _state.bound_pipeline_id = _pipeline_id;
+        vkCmdBindPipeline(_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        _state.bound_pipeline = pipeline;
         ++_state.bind_count;
     }
 
@@ -434,14 +437,8 @@ namespace Renderer_System
         {
         case Opaque_Draw_Path::Direct:
         {
-            // One draw per object, straight from the pool. The winding is
-            // set only when it changes from one object to the next.
-            for (const Draw_List_Builder::Draw_Record& draw : opaque_draws)
-            {
-                Bind_graphics_pipeline(_command_buffer, draw.pipeline_id, _state);
-                Set_front_face(_command_buffer, draw.mirrored, _state);
-                mesh_registry.Get(draw.mesh_id).Draw(_command_buffer, draw.object_index);
-            }
+            // One draw per object, straight from the pool.
+            Record_direct_draws(_command_buffer, opaque_draws, _state);
             break;
         }
 
@@ -514,7 +511,15 @@ namespace Renderer_System
         // a minimum. The opaque depth occludes the fragments; depth writes
         // were disabled when the subpass began. The winding is set only
         // when it changes, like the pipeline.
-        for (const Draw_List_Builder::Draw_Record& draw : transparent_draws)
+        Record_direct_draws(_command_buffer, transparent_draws, _state);
+    }
+
+    void Renderer::Impl::Record_direct_draws(VkCommandBuffer _command_buffer,
+                                             const std::vector<Draw_List_Builder::Draw_Record>& _draws, Draw_State& _state)
+    {
+        // The pipeline and the winding are set only when they change from
+        // one draw to the next.
+        for (const Draw_List_Builder::Draw_Record& draw : _draws)
         {
             Bind_graphics_pipeline(_command_buffer, draw.pipeline_id, _state);
             Set_front_face(_command_buffer, draw.mirrored, _state);

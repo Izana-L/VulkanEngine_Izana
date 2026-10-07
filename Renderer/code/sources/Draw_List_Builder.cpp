@@ -123,15 +123,23 @@ namespace Renderer_System
 
         uint32_t object_count = 0;
 
-        const auto warn_object_overflow = [&]()
-            {
-                if (!warned_object_overflow)
-                {
-                    std::cerr << "[Renderer] More than " << MAX_OBJECTS << " draws in one frame: the rest are skipped. "
-                        "Raise MAX_OBJECTS in Renderer_Limits.hpp. Further occurrences are not reported.\n";
-                    warned_object_overflow = true;
-                }
-            };
+        // What went wrong in this frame, reported at the end of the build
+        // (see the end of this function for when).
+        bool object_overflow = false;
+        bool gpu_path_fallback = false;
+
+        uint32_t invalid_items = 0;
+
+        struct First_Invalid_Item
+        {
+            uint8_t  pipeline_id = 0;
+            uint32_t subpass = 0;
+            uint32_t mesh_id = 0;
+            uint32_t transform_idx = 0;
+            uint32_t material_index = 0;
+        };
+
+        First_Invalid_Item first_invalid;
 
         // Whether _item can be drawn in _subpass; its pipeline id comes
         // back in _out_pipeline_id. Every reference is validated in every
@@ -140,7 +148,7 @@ namespace Renderer_System
         // material index past the written slots of the material table, a
         // released mesh may already have lost its geometry, and a pipeline
         // of another subpass is invalid in this one. The first invalid item
-        // of the session is reported.
+        // of the frame is kept for the report.
         const auto validate = [&](const Draw_Item& _item, uint32_t _subpass, uint8_t& _out_pipeline_id) -> bool
             {
                 _out_pipeline_id = Get_pipeline_id(_item.sort_key);
@@ -153,16 +161,18 @@ namespace Renderer_System
                     _item.transform_idx < _packet.transform_count &&
                     _item.material_index < _material_count;
 
-                if (!valid && !warned_invalid_item)
+                if (!valid)
                 {
-                    std::cerr << "[Renderer] Draw item skipped: pipeline " << int(_out_pipeline_id)
-                        << " (built for subpass " << _pipelines.Get_subpass(_out_pipeline_id) << ", drawn in subpass "
-                        << _subpass << "), mesh " << _item.mesh_gpu_id << ", transform " << _item.transform_idx
-                        << ", material " << _item.material_index
-                        << " (registered meshes: " << _meshes.Get_count() << ", transforms in packet: "
-                        << _packet.transform_count << ", registered materials: " << _material_count
-                        << "; a released mesh is also skipped). Further occurrences are not reported.\n";
-                    warned_invalid_item = true;
+                    if (invalid_items == 0)
+                    {
+                        first_invalid.pipeline_id = _out_pipeline_id;
+                        first_invalid.subpass = _subpass;
+                        first_invalid.mesh_id = _item.mesh_gpu_id;
+                        first_invalid.transform_idx = _item.transform_idx;
+                        first_invalid.material_index = _item.material_index;
+                    }
+
+                    ++invalid_items;
                 }
 
                 return valid;
@@ -238,15 +248,7 @@ namespace Renderer_System
 
             if (!Build_buckets(drawable, _settings.max_draw_indirect_count))
             {
-                if (!warned_gpu_path_fallback)
-                {
-                    std::cerr << "[Renderer] The GPU draw path needs the opaque items in at most " << MAX_DRAW_BUCKETS
-                        << " groups (one per pipeline and triangle winding), none with more than maxDrawIndirectCount ("
-                        << _settings.max_draw_indirect_count << ") objects; frames that break it use CPU-written indirect "
-                        "commands instead. Further occurrences are not reported.\n";
-                    warned_gpu_path_fallback = true;
-                }
-
+                gpu_path_fallback = true;
                 opaque_path = Opaque_Draw_Path::Cpu_Indirect;
             }
         }
@@ -270,7 +272,7 @@ namespace Renderer_System
             // frame are skipped.
             if (object_count >= MAX_OBJECTS)
             {
-                warn_object_overflow();
+                object_overflow = true;
                 break;
             }
 
@@ -301,7 +303,7 @@ namespace Renderer_System
 
             if (object_count >= MAX_OBJECTS)
             {
-                warn_object_overflow();
+                object_overflow = true;
                 break;
             }
 
@@ -310,6 +312,65 @@ namespace Renderer_System
 
             transparent_draws.push_back({ object_index, item.mesh_gpu_id, pipeline_id, mirrored });
         }
+
+        // -- Report --
+        // What went wrong in this frame is reported when it starts, not on
+        // every frame it lasts: a report is about an episode, never about
+        // the whole session, or a second problem would go unnoticed behind
+        // the first. An episode ends after Episode_Report::REARM_FRAMES
+        // frames without the problem, so one that flickers is reported once,
+        // not at every appearance. The skipped items add that a number
+        // larger than any reported is news within the episode: a mesh
+        // released while the stale items of an earlier one are still being
+        // sent is a new problem.
+        if (invalid_items_report.Update(invalid_items))
+        {
+            std::cerr << "[Renderer] " << invalid_items << " draw item(s) skipped; the first: pipeline " << int(first_invalid.pipeline_id)
+                << " (built for subpass " << _pipelines.Get_subpass(first_invalid.pipeline_id) << ", drawn in subpass "
+                << first_invalid.subpass << "), mesh " << first_invalid.mesh_id << ", transform " << first_invalid.transform_idx
+                << ", material " << first_invalid.material_index
+                << " (registered meshes: " << _meshes.Get_count() << ", transforms in packet: "
+                << _packet.transform_count << ", registered materials: " << _material_count
+                << "; a released mesh is also skipped).\n";
+        }
+
+        if (object_overflow_report.Update(object_overflow ? 1u : 0u))
+        {
+            std::cerr << "[Renderer] More than " << MAX_OBJECTS << " draws in one frame: the rest are skipped. "
+                "Raise MAX_OBJECTS in Renderer_Limits.hpp.\n";
+        }
+
+        if (gpu_path_fallback_report.Update(gpu_path_fallback ? 1u : 0u))
+        {
+            std::cerr << "[Renderer] The GPU draw path needs the opaque items in at most " << MAX_DRAW_BUCKETS
+                << " groups (one per pipeline and triangle winding), none with more than maxDrawIndirectCount ("
+                << _settings.max_draw_indirect_count << ") objects; frames that break it use CPU-written indirect "
+                "commands instead.\n";
+        }
+    }
+
+    bool Draw_List_Builder::Episode_Report::Update(uint32_t _size)
+    {
+        if (_size == 0)
+        {
+            if (clean_frames < REARM_FRAMES)
+                ++clean_frames;
+
+            // The episode is over: its next appearance reports again.
+            if (clean_frames >= REARM_FRAMES)
+                reported_size = 0;
+
+            return false;
+        }
+
+        clean_frames = 0;
+
+        if (_size <= reported_size)
+            return false;
+
+        reported_size = _size;
+
+        return true;
     }
 
     void Draw_List_Builder::Write_cpu_draw_commands(VkDrawIndexedIndirectCommand* _commands, const Mesh_Registry& _meshes) const

@@ -4,6 +4,8 @@
 #include <Gpu_Layouts.hpp>
 
 #include <cstring>
+#include <stdexcept>
+#include <string>
 
 namespace Renderer_System
 {
@@ -13,6 +15,41 @@ namespace Renderer_System
         VkDeviceSize Align_up(VkDeviceSize _value, VkDeviceSize _alignment)
         {
             return (_value + _alignment - 1) / _alignment * _alignment;
+        }
+
+        [[noreturn]] void Reject_mesh(size_t _batch_index, const std::string& _problem)
+        {
+            throw std::invalid_argument("Upload_batch: mesh " + std::to_string(_batch_index) + " of the batch " + _problem);
+        }
+    }
+
+    void Validate_mesh(const CoreTypes::MeshData* _mesh, size_t _batch_index)
+    {
+        // The text of a message is only built when its check fails.
+        if (_mesh == nullptr)
+            Reject_mesh(_batch_index, "is a null MeshData pointer");
+
+        if (_mesh->vertices.empty() || _mesh->indices.empty())
+            Reject_mesh(_batch_index, "has no vertices or no indices");
+
+        if (_mesh->vertices.size() > UINT32_MAX || _mesh->indices.size() > UINT32_MAX)
+            Reject_mesh(_batch_index, "has more than 2^32 - 1 vertices or indices");
+
+        if (_mesh->indices.size() % 3 != 0)
+        {
+            Reject_mesh(_batch_index, "has " + std::to_string(_mesh->indices.size()) +
+                                      " indices, which are not whole triangles (a multiple of 3)");
+        }
+
+        const uint32_t vertex_count = static_cast<uint32_t>(_mesh->vertices.size());
+
+        for (size_t i = 0; i < _mesh->indices.size(); ++i)
+        {
+            if (_mesh->indices[i] >= vertex_count)
+            {
+                Reject_mesh(_batch_index, "has index " + std::to_string(_mesh->indices[i]) + " at position " + std::to_string(i) +
+                                          ", not below its " + std::to_string(vertex_count) + " vertices");
+            }
         }
     }
 

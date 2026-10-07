@@ -1,6 +1,6 @@
 #include <Light_Clusters.hpp>
 #include <Cluster_Grid.hpp>
-#include <Descriptor_Sets.hpp>
+#include <Descriptor_Layouts.hpp>
 #include <Renderer_Limits.hpp>
 #include <Vulkan_Barrier.hpp>
 
@@ -47,21 +47,10 @@ namespace Renderer_System
     {
         assert(_per_pass_set != VK_NULL_HANDLE && "Light_Clusters::Write_descriptor: the compute set 1 is not allocated");
 
-        VkDescriptorBufferInfo aabb_info{};
-        aabb_info.buffer = aabb_buffer.buffer;
-        aabb_info.offset = 0;
-        aabb_info.range = AABB_BUFFER_SIZE;
-
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = _per_pass_set;
-        write.dstBinding = Binding_Per_Pass::Cluster_AABBs;
-        write.dstArrayElement = 0;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        write.descriptorCount = 1;
-        write.pBufferInfo = &aabb_info;
-
-        vkUpdateDescriptorSets(device_handle, 1, &write, 0, nullptr);
+        // The whole buffer: the boxes of every cluster.
+        Vulkan_Descriptor_Utils::Descriptor_Writer writer(Descriptor_Layouts::Compute_Per_Pass);
+        writer.Write_buffer(_per_pass_set, Binding_Per_Pass::Cluster_AABBs, aabb_buffer);
+        writer.Update(device_handle);
     }
 
     bool Light_Clusters::Record_aabb_update(VkCommandBuffer _command_buffer, const MathLib::Matrix4& _projection, float _near_plane)
@@ -105,20 +94,14 @@ namespace Renderer_System
     void Light_Clusters::Record_dispatch(VkCommandBuffer _command_buffer, VkPipelineLayout _compute_layout,
                                          uint32_t _first_local_light, uint32_t _light_count) const
     {
-        vkCmdBindPipeline(_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.Get_handle());
-
         Cluster_Push_Constants push{};
         push.cluster_count = CLUSTER_COUNT;
         push.light_index_capacity = CLUSTER_LIGHT_INDEX_CAPACITY;
         push.first_local_light = _first_local_light;
         push.light_count = _light_count;
 
-        // Stage flags must match the range of the compute pipeline layout
-        // exactly (VK_SHADER_STAGE_COMPUTE_BIT).
-        vkCmdPushConstants(_command_buffer, _compute_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Cluster_Push_Constants), &push);
-
         // One invocation per cluster, rounded up to whole groups.
-        vkCmdDispatch(_command_buffer, Dispatch_group_count(CLUSTER_COUNT, CLUSTER_GROUP_SIZE), 1, 1);
+        pipeline.Dispatch(_command_buffer, _compute_layout, push, Dispatch_group_count(CLUSTER_COUNT, CLUSTER_GROUP_SIZE));
     }
 
 } // namespace Renderer_System

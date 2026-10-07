@@ -1,15 +1,17 @@
 #include "Renderer_Impl.hpp"
 
-#include <MathConstants.hpp>
+#include <Descriptor_Layouts.hpp>
+#include <Vulkan_Descriptor_Utils.hpp>
 #include <Vulkan_Utils.hpp>
 
+#include <Primitive_Builder.hpp>
+
 #include <array>
-#include <cmath>
+#include <cassert>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
 #include <string>
-#include <utility>
 
 // Startup work of the Renderer: descriptor pool and sets, global tables,
 // the procedural pass, the debug meshes and the debug names. Called once
@@ -21,52 +23,8 @@ namespace Renderer_System
     namespace
     {
         // Segments and rings of the unit sphere of the bounding volume view.
-        constexpr uint32_t BOUNDS_SPHERE_SEGMENTS = 16;
-        constexpr uint32_t BOUNDS_SPHERE_RINGS = 8;
-
-        // Unit sphere (radius 1, centered at the origin) as a latitude /
-        // longitude grid. Only positions matter to bounds.vert, which maps
-        // it onto each object's bounding ellipsoid; the other attributes
-        // get neutral values.
-        CoreTypes::MeshData Build_unit_sphere(uint32_t _segments, uint32_t _rings)
-        {
-            CoreTypes::MeshData mesh;
-
-            for (uint32_t ring = 0; ring <= _rings; ++ring)
-            {
-                const float phi = MathLib::Constants::PI * static_cast<float>(ring) / static_cast<float>(_rings);
-
-                for (uint32_t segment = 0; segment <= _segments; ++segment)
-                {
-                    const float theta = MathLib::Constants::TWO_PI * static_cast<float>(segment) / static_cast<float>(_segments);
-
-                    CoreTypes::Vertex_Static_Mesh_CPU vertex{};
-                    vertex.position = { std::sin(phi) * std::cos(theta), std::cos(phi), std::sin(phi) * std::sin(theta) };
-                    vertex.normal = vertex.position;
-                    vertex.tangent = { 1.0f, 0.0f, 0.0f, 1.0f };
-                    vertex.uv = { static_cast<float>(segment) / static_cast<float>(_segments),
-                                  static_cast<float>(ring) / static_cast<float>(_rings) };
-                    vertex.color = { 1.0f, 1.0f, 1.0f, 1.0f };
-
-                    mesh.vertices.push_back(vertex);
-                }
-            }
-
-            const uint32_t stride = _segments + 1;
-
-            for (uint32_t ring = 0; ring < _rings; ++ring)
-            {
-                for (uint32_t segment = 0; segment < _segments; ++segment)
-                {
-                    const uint32_t a = ring * stride + segment;
-                    const uint32_t b = a + stride;
-
-                    mesh.indices.insert(mesh.indices.end(), { a, b, a + 1, a + 1, b, b + 1 });
-                }
-            }
-
-            return mesh;
-        }
+        constexpr uint16_t BOUNDS_SPHERE_SEGMENTS = 16;
+        constexpr uint16_t BOUNDS_SPHERE_RINGS = 8;
     }
 
     // =========================================================
@@ -75,44 +33,26 @@ namespace Renderer_System
 
     void Renderer::Impl::Init_descriptor_pool()
     {
-        // Set 0: one uniform buffer and seven storage buffers (lights,
-        // objects, cluster grid, cluster light indices, cluster counters,
-        // draw commands, draw count) per frame-in-flight. Set 1 of the
-        // compute contract: one storage image for the procedural pass and
-        // one storage buffer for the cluster boxes (per_pass_set). Set 1 of
-        // the graphics contract: two input attachments, the OIT targets
-        // (composite_input_set). Set 2: two storage buffers, the material
-        // and mesh tables (per_material_set). Sets 1 and 2 are shared by
-        // every frame slot.
-        constexpr uint32_t PER_FRAME_STORAGE_BUFFERS = 7;
-        constexpr uint32_t PER_PASS_STORAGE_BUFFERS = 1;
-        constexpr uint32_t PER_MATERIAL_STORAGE_BUFFERS = 2;
-        constexpr uint32_t COMPOSITE_INPUT_ATTACHMENTS = 2;
+        // The pool holds exactly the sets the Renderer allocates, sized from
+        // the tables the layouts are created from (Descriptor_Layouts), so a
+        // binding added to a layout is part of the pool without touching
+        // this function:
+        //   set 0, one per frame slot;
+        //   set 1 of the compute contract (per_pass_set): the storage image
+        //     of the procedural pass and the cluster boxes;
+        //   set 1 of the graphics contract (composite_input_set): the two
+        //     OIT targets as input attachments;
+        //   set 2 (per_material_set): the material and mesh tables.
+        // Sets 1 and 2 are shared by every frame slot. Set 3, the bindless
+        // arrays, has a pool of its own (Bindless_Registry).
+        Vulkan_Descriptor_Utils::Pool_Builder pool_builder;
 
-        std::array<VkDescriptorPoolSize, 4> pool_sizes{};
+        pool_builder.Add_sets(Descriptor_Layouts::Per_Frame, FRAMES_IN_FLIGHT)
+                    .Add_sets(Descriptor_Layouts::Compute_Per_Pass)
+                    .Add_sets(Descriptor_Layouts::Graphics_Per_Pass)
+                    .Add_sets(Descriptor_Layouts::Per_Material);
 
-        pool_sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        pool_sizes[0].descriptorCount = FRAMES_IN_FLIGHT;
-
-        pool_sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        pool_sizes[1].descriptorCount = PER_FRAME_STORAGE_BUFFERS * FRAMES_IN_FLIGHT + PER_PASS_STORAGE_BUFFERS + PER_MATERIAL_STORAGE_BUFFERS;
-
-        pool_sizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        pool_sizes[2].descriptorCount = 1;
-
-        pool_sizes[3].type = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
-        pool_sizes[3].descriptorCount = COMPOSITE_INPUT_ATTACHMENTS;
-
-        VkDescriptorPoolCreateInfo pool_info{};
-        pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        pool_info.poolSizeCount = static_cast<uint32_t>(pool_sizes.size());
-        pool_info.pPoolSizes = pool_sizes.data();
-        // One set 0 per frame slot + the compute set 1 + the graphics set 1
-        // + set 2.
-        pool_info.maxSets = FRAMES_IN_FLIGHT + 3;
-
-        VK_CHECK(vkCreateDescriptorPool(device.Get_logical_device_handle(), &pool_info, nullptr, &descriptor_pool),
-            "Renderer: failed to create descriptor pool");
+        descriptor_pool = pool_builder.Create(device.Get_logical_device_handle(), 0, "Renderer: failed to create descriptor pool");
     }
 
     // =========================================================
@@ -121,15 +61,8 @@ namespace Renderer_System
 
     void Renderer::Impl::Init_composite_input_set()
     {
-        const VkDescriptorSetLayout composite_layout = descriptor_layouts.Get(Descriptor_Set::Per_Pass, Pipeline_Kind::Graphics);
-
-        VkDescriptorSetAllocateInfo alloc_info{};
-        alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        alloc_info.descriptorPool = descriptor_pool;
-        alloc_info.descriptorSetCount = 1;
-        alloc_info.pSetLayouts = &composite_layout;
-
-        VK_CHECK(vkAllocateDescriptorSets(device.Get_logical_device_handle(), &alloc_info, &composite_input_set),
+        composite_input_set = Vulkan_Descriptor_Utils::Allocate_set(device.Get_logical_device_handle(), descriptor_pool,
+            descriptor_layouts.Get(Descriptor_Set::Per_Pass, Pipeline_Kind::Graphics),
             "Init_composite_input_set: failed to allocate the graphics set 1");
 
         Write_composite_input_set();
@@ -142,32 +75,14 @@ namespace Renderer_System
         // SHADER_READ_ONLY_OPTIMAL: the layout the composite subpass reads
         // them in (the input attachment references of Vulkan_Render_Pass).
         // No sampler: subpassLoad reads the texel of the current pixel.
-        std::array<VkDescriptorImageInfo, 2> image_infos{};
+        Vulkan_Descriptor_Utils::Descriptor_Writer writer(Descriptor_Layouts::Graphics_Per_Pass);
 
-        image_infos[0].sampler = VK_NULL_HANDLE;
-        image_infos[0].imageView = oit_resources.Get_accumulation_view();
-        image_infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        writer.Write_image(composite_input_set, Binding_Graphics_Pass::Oit_Accumulation,
+                           targets.oit.Get_accumulation_view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+              .Write_image(composite_input_set, Binding_Graphics_Pass::Oit_Revealage,
+                           targets.oit.Get_revealage_view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-        image_infos[1].sampler = VK_NULL_HANDLE;
-        image_infos[1].imageView = oit_resources.Get_revealage_view();
-        image_infos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-        const std::array<uint32_t, 2> bindings = { Binding_Graphics_Pass::Oit_Accumulation, Binding_Graphics_Pass::Oit_Revealage };
-
-        std::array<VkWriteDescriptorSet, 2> writes{};
-
-        for (size_t i = 0; i < writes.size(); ++i)
-        {
-            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[i].dstSet = composite_input_set;
-            writes[i].dstBinding = bindings[i];
-            writes[i].dstArrayElement = 0;
-            writes[i].descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
-            writes[i].descriptorCount = 1;
-            writes[i].pImageInfo = &image_infos[i];
-        }
-
-        vkUpdateDescriptorSets(device.Get_logical_device_handle(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+        writer.Update(device.Get_logical_device_handle());
     }
 
     // =========================================================
@@ -176,101 +91,36 @@ namespace Renderer_System
 
     void Renderer::Impl::Init_descriptor_sets()
     {
+        const VkDevice dev = device.Get_logical_device_handle();
+
         // Set 0 is shared by both contracts.
-        std::array<VkDescriptorSetLayout, FRAMES_IN_FLIGHT> layouts;
-        layouts.fill(descriptor_layouts.Get(Descriptor_Set::Per_Frame, Pipeline_Kind::Graphics));
-
-        VkDescriptorSetAllocateInfo alloc_info{};
-        alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        alloc_info.descriptorPool = descriptor_pool;
-        alloc_info.descriptorSetCount = FRAMES_IN_FLIGHT;
-        alloc_info.pSetLayouts = layouts.data();
-
-        VK_CHECK(vkAllocateDescriptorSets(device.Get_logical_device_handle(), &alloc_info, descriptor_sets.data()),
-            "Renderer: failed to allocate descriptor sets");
+        Vulkan_Descriptor_Utils::Allocate_sets(dev, descriptor_pool,
+            descriptor_layouts.Get(Descriptor_Set::Per_Frame, Pipeline_Kind::Graphics),
+            descriptor_sets, "Renderer: failed to allocate descriptor sets");
 
         for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; ++i)
         {
-            VkDescriptorBufferInfo ubo_info{};
-            ubo_info.buffer = frames[i].uniform_buffer.buffer;
-            ubo_info.offset = 0;
-            ubo_info.range = sizeof(Frame_UBO);
+            const Frame_Data& frame = frames[i];
 
-            VkDescriptorBufferInfo light_info{};
-            light_info.buffer = frames[i].light_buffer.buffer;
-            light_info.offset = 0;
-            // The range is the whole CAPACITY, not this frame's live lights:
-            // the descriptor is written once at startup and the contents
-            // change by memcpy. Frame_UBO::light_count says how many entries
-            // are valid.
-            light_info.range = sizeof(GPU_Light) * MAX_LIGHTS;
+            // Every descriptor covers the whole buffer, that is, its
+            // CAPACITY, not this frame's live content: the descriptors are
+            // written once at startup and the contents change by memcpy or
+            // by the GPU. Frame_UBO::light_count says how many lights are
+            // valid, and every draw indexes its own object entry through
+            // firstInstance. The sizes are the ones the buffers were created
+            // with (Frame_Data), not restated here.
+            Vulkan_Descriptor_Utils::Descriptor_Writer writer(Descriptor_Layouts::Per_Frame);
 
-            // Same rule as the lights: the whole capacity. Only the entries
-            // written this frame are read, because every draw indexes its own
-            // entry through firstInstance.
-            VkDescriptorBufferInfo object_info{};
-            object_info.buffer = frames[i].object_buffer.buffer;
-            object_info.offset = 0;
-            object_info.range = sizeof(Object_GPU) * MAX_OBJECTS;
+            writer.Write_buffer(descriptor_sets[i], Binding_Per_Frame::Frame_UBO,             frame.uniform_buffer)
+                  .Write_buffer(descriptor_sets[i], Binding_Per_Frame::Lights,                frame.light_buffer)
+                  .Write_buffer(descriptor_sets[i], Binding_Per_Frame::Objects,               frame.object_buffer)
+                  .Write_buffer(descriptor_sets[i], Binding_Per_Frame::Cluster_Grid,          frame.cluster_grid_buffer)
+                  .Write_buffer(descriptor_sets[i], Binding_Per_Frame::Cluster_Light_Indices, frame.cluster_light_index_buffer)
+                  .Write_buffer(descriptor_sets[i], Binding_Per_Frame::Cluster_Counters,      frame.cluster_counter_buffer)
+                  .Write_buffer(descriptor_sets[i], Binding_Per_Frame::Draw_Commands,         frame.gpu_draw_command_buffer)
+                  .Write_buffer(descriptor_sets[i], Binding_Per_Frame::Draw_Count,            frame.gpu_draw_count_buffer);
 
-            // Buffers written by the compute passes of this frame slot,
-            // whole capacity as well.
-            VkDescriptorBufferInfo cluster_grid_info{};
-            cluster_grid_info.buffer = frames[i].cluster_grid_buffer.buffer;
-            cluster_grid_info.offset = 0;
-            cluster_grid_info.range = sizeof(Cluster_Range_GPU) * CLUSTER_COUNT;
-
-            VkDescriptorBufferInfo cluster_indices_info{};
-            cluster_indices_info.buffer = frames[i].cluster_light_index_buffer.buffer;
-            cluster_indices_info.offset = 0;
-            cluster_indices_info.range = sizeof(uint32_t) * CLUSTER_LIGHT_INDEX_CAPACITY;
-
-            VkDescriptorBufferInfo cluster_counters_info{};
-            cluster_counters_info.buffer = frames[i].cluster_counter_buffer.buffer;
-            cluster_counters_info.offset = 0;
-            cluster_counters_info.range = sizeof(Cluster_Counters_GPU);
-
-            VkDescriptorBufferInfo draw_commands_info{};
-            draw_commands_info.buffer = frames[i].gpu_draw_command_buffer.buffer;
-            draw_commands_info.offset = 0;
-            draw_commands_info.range = sizeof(VkDrawIndexedIndirectCommand) * MAX_OBJECTS;
-
-            VkDescriptorBufferInfo draw_count_info{};
-            draw_count_info.buffer = frames[i].gpu_draw_count_buffer.buffer;
-            draw_count_info.offset = 0;
-            draw_count_info.range = sizeof(Draw_Count_GPU);
-
-            // Binding and buffer of every descriptor of set 0, in binding
-            // order; binding 0 is the uniform buffer, the rest are storage
-            // buffers.
-            constexpr size_t PER_FRAME_BINDING_COUNT = 8;
-
-            const std::array<std::pair<uint32_t, const VkDescriptorBufferInfo*>, PER_FRAME_BINDING_COUNT> bindings = { {
-                { Binding_Per_Frame::Frame_UBO,             &ubo_info },
-                { Binding_Per_Frame::Lights,                &light_info },
-                { Binding_Per_Frame::Objects,               &object_info },
-                { Binding_Per_Frame::Cluster_Grid,          &cluster_grid_info },
-                { Binding_Per_Frame::Cluster_Light_Indices, &cluster_indices_info },
-                { Binding_Per_Frame::Cluster_Counters,      &cluster_counters_info },
-                { Binding_Per_Frame::Draw_Commands,         &draw_commands_info },
-                { Binding_Per_Frame::Draw_Count,            &draw_count_info } } };
-
-            std::array<VkWriteDescriptorSet, PER_FRAME_BINDING_COUNT> writes{};
-
-            for (size_t b = 0; b < PER_FRAME_BINDING_COUNT; ++b)
-            {
-                writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[b].dstSet = descriptor_sets[i];
-                writes[b].dstBinding = bindings[b].first;
-                writes[b].dstArrayElement = 0;
-                writes[b].descriptorType = (bindings[b].first == Binding_Per_Frame::Frame_UBO)
-                                           ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                writes[b].descriptorCount = 1;
-                writes[b].pBufferInfo = bindings[b].second;
-            }
-
-            vkUpdateDescriptorSets(device.Get_logical_device_handle(),
-                static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+            writer.Update(dev);
         }
     }
 
@@ -295,27 +145,27 @@ namespace Renderer_System
         // The constructor records the clear that leaves every texel at zero
         // in SHADER_READ_ONLY_OPTIMAL. It is submitted and waited for here,
         // before the first frame, so the slot is valid from its first read.
-        VkCommandBuffer transfer_cmd = VK_NULL_HANDLE;
-
         try
         {
-            transfer_cmd = upload_context.Begin();
-
-            procedural_image.emplace(device, allocator.Get_handle(), transfer_cmd,
-                PROCEDURAL_TEXTURE_SIZE, PROCEDURAL_TEXTURE_SIZE, PROCEDURAL_TEXTURE_FORMAT);
-
-            upload_context.Submit_and_wait(transfer_cmd);
+            upload_context.Run([&](VkCommandBuffer _transfer_cmd)
+                {
+                    procedural_image.emplace(device, allocator.Get_handle(), _transfer_cmd,
+                        PROCEDURAL_TEXTURE_SIZE, PROCEDURAL_TEXTURE_SIZE, PROCEDURAL_TEXTURE_FORMAT);
+                });
         }
         catch (...)
         {
-            // Same recovery as Upload_batch: the clear either never ran or
-            // was waited for, so the image can be destroyed right away.
-            upload_context.Abort(transfer_cmd);
-            procedural_image.reset();
+            // Same recovery as Upload_batch: Run waited for the device and
+            // released the transfer, so the clear either never ran or was
+            // waited for, and the image can be destroyed right away. When
+            // Run could not wait for the device (Settle_failed_transfer),
+            // the clear may still be running: the image stays, and the
+            // constructor's failure path destroys it after its own wait.
+            if (Settle_failed_transfer())
+                procedural_image.reset();
+
             throw;
         }
-
-        upload_context.End(transfer_cmd);
 
         // -- Bindless slot (set 3) --
         // Read by the draws as a sampled image. The declared layout of the
@@ -325,36 +175,18 @@ namespace Renderer_System
 
         // -- Set 1: storage image descriptor --
         // Set 1 of the compute contract (Binding_Per_Pass).
-        const VkDescriptorSetLayout per_pass_layout = descriptor_layouts.Get(Descriptor_Set::Per_Pass, Pipeline_Kind::Compute);
-
-        VkDescriptorSetAllocateInfo alloc_info{};
-        alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        alloc_info.descriptorPool = descriptor_pool;
-        alloc_info.descriptorSetCount = 1;
-        alloc_info.pSetLayouts = &per_pass_layout;
-
-        VK_CHECK(vkAllocateDescriptorSets(dev, &alloc_info, &per_pass_set),
+        per_pass_set = Vulkan_Descriptor_Utils::Allocate_set(dev, descriptor_pool,
+            descriptor_layouts.Get(Descriptor_Set::Per_Pass, Pipeline_Kind::Compute),
             "Init_procedural_pass: failed to allocate the set 1 descriptor set");
 
         // GENERAL: the layout the image is in while the dispatch writes it
         // (between Begin_write and End_write), not the layout it rests in.
-        VkDescriptorImageInfo image_info{};
-        image_info.sampler = VK_NULL_HANDLE;
-        image_info.imageView = procedural_image->Get_image_view();
-        image_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = per_pass_set;
-        write.dstBinding = Binding_Per_Pass::Procedural_Output;
-        write.dstArrayElement = 0;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        write.descriptorCount = 1;
-        write.pImageInfo = &image_info;
-
         // Written once, before any frame is recorded: the only moment the
         // set can be updated without racing a frame in flight.
-        vkUpdateDescriptorSets(dev, 1, &write, 0, nullptr);
+        Vulkan_Descriptor_Utils::Descriptor_Writer writer(Descriptor_Layouts::Compute_Per_Pass);
+
+        writer.Write_image(per_pass_set, Binding_Per_Pass::Procedural_Output, procedural_image->Get_image_view(), VK_IMAGE_LAYOUT_GENERAL);
+        writer.Update(dev);
 
         // The image holds the zeros of its initial clear: the first frame
         // generates its content.
@@ -382,48 +214,18 @@ namespace Renderer_System
 
         // -- Set 2: material table descriptor --
         // Set 2 is shared by both contracts.
-        const VkDescriptorSetLayout per_material_layout = descriptor_layouts.Get(Descriptor_Set::Per_Material, Pipeline_Kind::Graphics);
-
-        VkDescriptorSetAllocateInfo alloc_info{};
-        alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        alloc_info.descriptorPool = descriptor_pool;
-        alloc_info.descriptorSetCount = 1;
-        alloc_info.pSetLayouts = &per_material_layout;
-
-        VK_CHECK(vkAllocateDescriptorSets(dev, &alloc_info, &per_material_set),
+        per_material_set = Vulkan_Descriptor_Utils::Allocate_set(dev, descriptor_pool,
+            descriptor_layouts.Get(Descriptor_Set::Per_Material, Pipeline_Kind::Graphics),
             "Init_global_tables: failed to allocate the set 2 descriptor set");
 
         // Both ranges are the whole CAPACITY: the descriptors are written
         // once and entries are added in place afterwards.
-        VkDescriptorBufferInfo material_info{};
-        material_info.buffer = material_table.Get_buffer();
-        material_info.offset = 0;
-        material_info.range = material_table.Get_buffer_size();
+        Vulkan_Descriptor_Utils::Descriptor_Writer writer(Descriptor_Layouts::Per_Material);
 
-        VkDescriptorBufferInfo mesh_info{};
-        mesh_info.buffer = mesh_table_buffer.buffer;
-        mesh_info.offset = 0;
-        mesh_info.range = sizeof(Mesh_Info_GPU) * MAX_MESHES;
+        writer.Write_buffer(per_material_set, Binding_Per_Material::Materials, material_table.Get_buffer(), material_table.Get_buffer_size())
+              .Write_buffer(per_material_set, Binding_Per_Material::Meshes, mesh_table_buffer);
 
-        std::array<VkWriteDescriptorSet, 2> writes{};
-
-        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[0].dstSet = per_material_set;
-        writes[0].dstBinding = Binding_Per_Material::Materials;
-        writes[0].dstArrayElement = 0;
-        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[0].descriptorCount = 1;
-        writes[0].pBufferInfo = &material_info;
-
-        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[1].dstSet = per_material_set;
-        writes[1].dstBinding = Binding_Per_Material::Meshes;
-        writes[1].dstArrayElement = 0;
-        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[1].descriptorCount = 1;
-        writes[1].pBufferInfo = &mesh_info;
-
-        vkUpdateDescriptorSets(dev, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+        writer.Update(dev);
 
         // -- Default material --
         // A default-constructed Material_Desc is the default material.
@@ -458,7 +260,11 @@ namespace Renderer_System
 
     void Renderer::Impl::Init_debug_meshes()
     {
-        const CoreTypes::MeshData unit_sphere = Build_unit_sphere(BOUNDS_SPHERE_SEGMENTS, BOUNDS_SPHERE_RINGS);
+        // The unit sphere of the bounding volume view: radius 1, centered at
+        // the origin. Only the positions matter to bounds.vert, which maps
+        // it onto each object's bounding ellipsoid; the winding does not
+        // either, since the view is drawn without culling.
+        const CoreTypes::MeshData unit_sphere = ResourceManager::Primitive_Builder::Build_sphere(BOUNDS_SPHERE_SEGMENTS, BOUNDS_SPHERE_RINGS);
 
         bounds_sphere_mesh_id = Upload_mesh(unit_sphere);
 
@@ -528,8 +334,8 @@ namespace Renderer_System
         if (!debug_utils.Is_enabled())
             return;
 
-        debug_utils.Set_name(oit_resources.Get_accumulation_image(), VK_OBJECT_TYPE_IMAGE, "Oit_Accumulation");
-        debug_utils.Set_name(oit_resources.Get_revealage_image(), VK_OBJECT_TYPE_IMAGE, "Oit_Revealage");
+        debug_utils.Set_name(targets.oit.Get_accumulation_image(), VK_OBJECT_TYPE_IMAGE, "Oit_Accumulation");
+        debug_utils.Set_name(targets.oit.Get_revealage_image(), VK_OBJECT_TYPE_IMAGE, "Oit_Revealage");
     }
 
 } // namespace Renderer_System

@@ -60,7 +60,7 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>..\code\headers;$(SolutionDir)..\..\RHI\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(VULKAN_SDK)\Include;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\CoreTypes\code\headers;$(SolutionDir)..\..\ThirdParty\glm;$(SolutionDir)..\..\ThirdParty\vma\include</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\code\headers;$(SolutionDir)..\..\RHI\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(VULKAN_SDK)\Include;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\CoreTypes\code\headers;$(SolutionDir)..\..\ResourceManager\code\headers;$(SolutionDir)..\..\ThirdParty\glm;$(SolutionDir)..\..\ThirdParty\vma\include</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -86,7 +86,7 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>..\code\headers;$(SolutionDir)..\..\RHI\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(VULKAN_SDK)\Include;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\CoreTypes\code\headers;$(SolutionDir)..\..\ThirdParty\glm;$(SolutionDir)..\..\ThirdParty\vma\include</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\code\headers;$(SolutionDir)..\..\RHI\code\headers;$(SolutionDir)..\..\ThirdParty\glfw\include;$(VULKAN_SDK)\Include;$(SolutionDir)..\..\Platform\code\headers;$(SolutionDir)..\..\Math\code\headers;$(SolutionDir)..\..\CoreTypes\code\headers;$(SolutionDir)..\..\ResourceManager\code\headers;$(SolutionDir)..\..\ThirdParty\glm;$(SolutionDir)..\..\ThirdParty\vma\include</AdditionalIncludeDirectories>
       <ShowIncludes>false</ShowIncludes>
     </ClCompile>
     <Link>
@@ -124,7 +124,6 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
     <ClCompile Include="..\code\sources\Renderer_Passes.cpp" />
     <ClCompile Include="..\code\sources\Renderer_Setup.cpp" />
     <ClCompile Include="..\code\sources\Sampler_Cache.cpp" />
-    <ClCompile Include="..\code\sources\Source.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Depth_Resources.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Framebuffer.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_OIT_Resources.cpp" />
@@ -134,6 +133,7 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
     <ClInclude Include="..\code\headers\Bindless_Registry.hpp" />
     <ClInclude Include="..\code\headers\Cluster_Grid.hpp" />
     <ClInclude Include="..\code\headers\Descriptor_Layout_Cache.hpp" />
+    <ClInclude Include="..\code\headers\Descriptor_Layouts.hpp" />
     <ClInclude Include="..\code\headers\Descriptor_Sets.hpp" />
     <ClInclude Include="..\code\headers\Draw_List_Builder.hpp" />
     <ClInclude Include="..\code\headers\Frame_Data.hpp" />
@@ -156,6 +156,7 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
     <ClInclude Include="..\code\headers\RenderPacket.hpp" />
     <ClInclude Include="..\code\headers\Render_Debug_Settings.hpp" />
     <ClInclude Include="..\code\headers\Sampler_Cache.hpp" />
+    <ClInclude Include="..\code\headers\Swapchain_Targets.hpp" />
     <ClInclude Include="..\code\headers\Validation_Mode.hpp" />
     <ClInclude Include="..\code\headers\Vertex_Packing.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Depth_Resources.hpp" />

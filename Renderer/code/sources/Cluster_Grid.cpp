@@ -9,6 +9,8 @@
 #include <cassert>
 #include <cmath>
 #include <limits>
+#include <stdexcept>
+#include <string>
 
 namespace Renderer_System::Cluster_Grid
 {
@@ -39,11 +41,22 @@ namespace Renderer_System::Cluster_Grid
         }
     }
 
+    bool Is_valid_near_plane(float _near_plane)
+    {
+        return std::isfinite(_near_plane) && _near_plane > 0.0f;
+    }
+
     Slice_Mapping Make_slice_mapping(float _near_plane)
     {
+        if (!Is_valid_near_plane(_near_plane))
+        {
+            throw std::invalid_argument("Cluster_Grid::Make_slice_mapping: the near plane (" + std::to_string(_near_plane) +
+                                        ") is not a positive, finite distance");
+        }
+
         Slice_Mapping mapping;
 
-        mapping.near_distance = (std::isfinite(_near_plane) && _near_plane > 0.0f) ? _near_plane : 0.1f;
+        mapping.near_distance = _near_plane;
         mapping.max_distance = std::max(CLUSTER_MAX_DISTANCE, mapping.near_distance * 2.0f);
 
         const float log_ratio = std::log(mapping.max_distance / mapping.near_distance);

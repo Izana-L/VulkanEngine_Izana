@@ -10,9 +10,11 @@
 #include <Window.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
@@ -127,6 +129,28 @@ namespace Renderer_System
         {
             return _result == VK_SUCCESS || _result == VK_SUBOPTIMAL_KHR ||
                    _result == VK_ERROR_OUT_OF_DATE_KHR || _result == VK_ERROR_SURFACE_LOST_KHR;
+        }
+
+        // The present ran out of memory: nothing was queued, render_finished
+        // stays signaled and the acquired image was not presented.
+        bool Is_out_of_memory(VkResult _result)
+        {
+            return _result == VK_ERROR_OUT_OF_HOST_MEMORY || _result == VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        }
+
+        // _value when it is one of the enumerators of E (below E::Count),
+        // otherwise _fallback; the correction is reported, not silent.
+        // _name is the field of Render_Debug_Settings, for the message.
+        template <typename E>
+        E Sanitize_enum(E _value, E _fallback, const char* _name)
+        {
+            if (static_cast<uint32_t>(_value) < static_cast<uint32_t>(E::Count))
+                return _value;
+
+            std::cerr << "[Renderer] Set_debug_settings: " << _name << " has the invalid value " << static_cast<uint32_t>(_value)
+                << "; using " << To_string(_fallback) << ".\n";
+
+            return _fallback;
         }
 
         // =========================================================
@@ -291,10 +315,10 @@ namespace Renderer_System
         // floating-point one chosen with the device.
         render_pass(device, swapchain.Get_image_format(), device.Get_depth_format(),
                     Vulkan_OIT_Resources::ACCUMULATION_FORMAT, Vulkan_OIT_Resources::REVEALAGE_FORMAT),
-        // The depth image must use exactly the format of the render pass.
-        depth_resources(device, allocator.Get_handle(), render_pass.Get_depth_format(), swapchain.Get_extent()),
-        oit_resources(device, allocator.Get_handle(), swapchain.Get_extent()),
-        framebuffers(device, render_pass, swapchain, depth_resources, oit_resources),
+        // Depth buffer, OIT targets and framebuffers, as one set built the
+        // same way after every resize (the depth image takes exactly the
+        // format of the render pass).
+        targets(device, allocator.Get_handle(), render_pass, swapchain),
         bindless_registry(device, BINDLESS_DESIRED_TEXTURES, BINDLESS_DESIRED_SAMPLERS),
         pipeline_cache(device),
         descriptor_layouts(device, bindless_registry.Get_layout()),
@@ -399,7 +423,10 @@ namespace Renderer_System
         {
             // The destructor does not run for an object whose constructor
             // threw; the members are destroyed, the handles owned directly
-            // by this class are not.
+            // by this class are not. What the destructor does first is done
+            // here too: a transfer that failed and could not be waited for
+            // may still be running (Settle_failed_transfer).
+            Wait_for_device_before_release();
             Destroy_owned_handles();
             throw;
         }
@@ -415,11 +442,7 @@ namespace Renderer_System
 
     Renderer::Impl::~Impl()
     {
-        // A device that cannot go idle at shutdown (device lost) is not a
-        // reason to skip the cleanup that is still possible.
-        const VkResult idle = vkDeviceWaitIdle(device.Get_logical_device_handle());
-        if (idle != VK_SUCCESS)
-            std::cerr << "[Renderer] vkDeviceWaitIdle failed at shutdown: " << Vulkan_Utils::Vk_result_to_string(idle) << "\n";
+        Wait_for_device_before_release();
 
         Destroy_owned_handles();
 
@@ -427,6 +450,16 @@ namespace Renderer_System
         // destructors of the members (RAII). Present_Sync retires and
         // destroys the presentation objects, and sampler_cache destroys all
         // cached VkSampler handles.
+    }
+
+    void Renderer::Impl::Wait_for_device_before_release() noexcept
+    {
+        // A device that cannot go idle (device lost) is not a reason to
+        // skip the cleanup that is still possible.
+        const VkResult idle = vkDeviceWaitIdle(device.Get_logical_device_handle());
+
+        if (idle != VK_SUCCESS)
+            std::cerr << "[Renderer] vkDeviceWaitIdle failed before the release: " << Vulkan_Utils::Vk_result_to_string(idle) << "\n";
     }
 
     void Renderer::Impl::Destroy_owned_handles()
@@ -481,6 +514,30 @@ namespace Renderer_System
         }
     }
 
+    bool Renderer::Impl::Settle_failed_transfer() noexcept
+    {
+        if (upload_context.Is_usable())
+            return true;
+
+        // The wait for the device failed after the transfer did: nothing
+        // proves the GPU is done writing what the transfer targeted, and
+        // nothing can submit work safely any more.
+        if (!device_lost)
+        {
+            device_lost = true;
+
+            try
+            {
+                std::cerr << "[Renderer] A failed transfer could not be waited for, so the GPU may still be writing what it targeted: the Renderer is lost.\n";
+            }
+            catch (...)
+            {
+            }
+        }
+
+        return false;
+    }
+
     // =========================================================
     // Progress of the GPU
     // =========================================================
@@ -510,6 +567,20 @@ namespace Renderer_System
         VK_CHECK(vkGetSemaphoreCounterValue(dev, semaphore, &reached), "Renderer: read the frame timeline semaphore");
 
         timeline.Mark_completed(reached);
+
+        // Every wait that learns something about the GPU frees what the
+        // frames now known to be complete were holding: geometry released
+        // before then can go back to the pool.
+        mesh_registry.Free_completed(timeline);
+    }
+
+    void Renderer::Impl::Wait_idle(const char* _what)
+    {
+        VK_CHECK(vkDeviceWaitIdle(device.Get_logical_device_handle()), _what);
+
+        // Every submitted frame has completed: released geometry can go.
+        timeline.Mark_all_complete();
+        mesh_registry.Free_completed(timeline);
     }
 
     // =========================================================
@@ -562,18 +633,17 @@ namespace Renderer_System
         Frame_Data& frame = frames[current_frame];
 
         // -- Wait for this frame slot to be free --
-        // The serial of the slot's last submission: it returns at once for a
-        // slot that never submitted, and for one whose last attempt failed
+        // The serial of the slot's last submission: it does not block for a
+        // slot that never submitted, nor for one whose last attempt failed
         // (a failed submit does not consume a serial). A device loss
         // surfaces here as an exception instead of the loop submitting
-        // forever to a dead device.
+        // forever to a dead device. The geometry released before the frames
+        // that completed goes back to the pool in the same call.
         Wait_for_serial(timeline.Get_slot_serial(current_frame), "Render: wait for the frame slot");
 
         // -- Work of the previous use of this slot --
-        // That frame and every earlier submission have completed. Geometry
-        // released before then can go back to the pool, and the GPU results
-        // of that frame can be read.
-        mesh_registry.Free_completed(timeline);
+        // That frame and every earlier submission have completed: the GPU
+        // results of that frame can be read.
         Read_frame_statistics(current_frame);
 
         // -- CPU work that does not depend on the swapchain image --
@@ -610,9 +680,12 @@ namespace Renderer_System
         // ends.
         const Slot_Advance advance_slot(current_frame, FRAMES_IN_FLIGHT);
 
-        Present_Sync::Image_Sync& sync = present_sync.Get(image_index);
-
         Frame_Effects effects;
+
+        // The presentation objects of the acquired image. Looked up inside
+        // the protected region: an index the set does not have throws, and
+        // the acquire has to be undone then too.
+        Present_Sync::Image_Sync* sync = nullptr;
 
         // -- Protected region: from the acquire to the submit --
         // A frame that fails here never reaches the GPU. Its acquire is
@@ -620,13 +693,15 @@ namespace Renderer_System
         // after the submit) and the exception goes on.
         try
         {
+            sync = &present_sync.Get(image_index);
+
             // Wait for this image's previous present to complete.
             present_sync.Wait_for_previous_present(image_index);
 
             frame.command_pool.Reset_command_buffer(0);
             Record_command_buffer(frame, _packet, image_index, effects);
 
-            Submit_frame(frame, sync.render_finished);
+            Submit_frame(frame, sync->render_finished);
         }
         catch (...)
         {
@@ -651,7 +726,7 @@ namespace Renderer_System
         VkPresentInfoKHR present_info{};
         present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
         present_info.waitSemaphoreCount = 1;
-        present_info.pWaitSemaphores = &sync.render_finished;
+        present_info.pWaitSemaphores = &sync->render_finished;
         present_info.swapchainCount = 1;
         VkSwapchainKHR swapchain_handle = swapchain.Get_handle();
         present_info.pSwapchains = &swapchain_handle;
@@ -662,11 +737,11 @@ namespace Renderer_System
         // (VK_KHR_swapchain_maintenance1; the instance and device halves
         // were both negotiated before the fence was created).
         VkSwapchainPresentFenceInfoKHR present_fence_info{};
-        if (sync.present_fence != VK_NULL_HANDLE)
+        if (sync->present_fence != VK_NULL_HANDLE)
         {
             present_fence_info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_KHR;
             present_fence_info.swapchainCount = 1;
-            present_fence_info.pFences = &sync.present_fence;
+            present_fence_info.pFences = &sync->present_fence;
             present_info.pNext = &present_fence_info;
         }
 
@@ -675,8 +750,8 @@ namespace Renderer_System
         // The fence is signaled only by a present that was queued. Marking
         // it pending before knowing, or after a failure that queued
         // nothing, would make the next wait for this image hang.
-        if (sync.present_fence != VK_NULL_HANDLE && Present_was_queued(present_result))
-            sync.present_pending = true;
+        if (sync->present_fence != VK_NULL_HANDLE && Present_was_queued(present_result))
+            sync->present_pending = true;
 
         present_sync.Flush(false);
 
@@ -685,24 +760,24 @@ namespace Renderer_System
         // of a rejected present is still executed by the queue, so the
         // retirement logic in Recreate_swapchain applies as usual. The
         // recreation itself is the loop's, before the next frame.
-        if (present_result == VK_ERROR_OUT_OF_DATE_KHR ||
-            present_result == VK_SUBOPTIMAL_KHR ||
-            acquire_result == VK_SUBOPTIMAL_KHR)
+        //
+        // Out of memory queued nothing: render_finished stays signaled and
+        // the acquired image was not presented. Recreating the swapchain
+        // releases the image, and after the idle wait of that recreation
+        // Present_Sync::Retire destroys the signaled semaphore safely.
+        if (acquire_result == VK_SUBOPTIMAL_KHR || present_result == VK_SUBOPTIMAL_KHR ||
+            present_result == VK_ERROR_OUT_OF_DATE_KHR || Is_out_of_memory(present_result))
         {
             swapchain_recreation_pending = true;
         }
-        else
-        {
-            // Out of memory queued nothing: render_finished stays signaled
-            // and the acquired image was not presented. Recreating the
-            // swapchain releases the image, and after the idle wait of that
-            // recreation Present_Sync::Retire destroys the signaled
-            // semaphore safely.
-            if (present_result == VK_ERROR_OUT_OF_HOST_MEMORY || present_result == VK_ERROR_OUT_OF_DEVICE_MEMORY)
-                swapchain_recreation_pending = true;
 
+        // The result of the present is checked whatever the acquire said: a
+        // suboptimal acquire is no reason to drop a lost device, a lost
+        // surface or an out of memory. VK_CHECK lets the success codes
+        // through (SUBOPTIMAL), so OUT_OF_DATE, which the recreation above
+        // already answers, is the one error it must not see.
+        if (present_result != VK_ERROR_OUT_OF_DATE_KHR)
             VK_CHECK(present_result, "Render: failed to present");
-        }
     }
 
     // =========================================================
@@ -739,47 +814,67 @@ namespace Renderer_System
     // Submit_frame
     // =========================================================
 
-    void Renderer::Impl::Submit_frame(Frame_Data& _frame, VkSemaphore _render_finished)
+    void Renderer::Impl::Submit_to_timeline(const Timeline_Submit& _submit)
     {
         // The serial this submission signals: the next one. It is consumed
         // only if the submit succeeds, so a failed one leaves the timeline as
         // it was and the next submission signals the same value.
         const uint64_t serial = timeline.Get_submitted_serial() + 1;
 
-        const VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        const VkSemaphore          wait_semaphore = _frame.image_available_semaphore.Get();
-        const VkCommandBuffer      command_buffer = _frame.Get_command_buffer();
-
         // The binary semaphores ignore their value; the timeline one takes
-        // the serial.
-        const uint64_t                    wait_value = 0;
-        const std::array<VkSemaphore, 2>  signal_semaphores = { _render_finished, frame_semaphore.Get() };
-        const std::array<uint64_t, 2>     signal_values = { 0, serial };
+        // the serial. The semaphore of the present, when there is one,
+        // comes first.
+        const uint64_t             wait_value = 0;
+        std::array<VkSemaphore, 2> signal_semaphores{};
+        std::array<uint64_t, 2>    signal_values{};
+        uint32_t                   signal_count = 0;
+
+        if (_submit.signal_semaphore != VK_NULL_HANDLE)
+        {
+            signal_semaphores[signal_count] = _submit.signal_semaphore;
+            signal_values[signal_count] = 0;
+            ++signal_count;
+        }
+
+        signal_semaphores[signal_count] = frame_semaphore.Get();
+        signal_values[signal_count] = serial;
+        ++signal_count;
 
         VkTimelineSemaphoreSubmitInfo timeline_info{};
         timeline_info.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
         timeline_info.waitSemaphoreValueCount = 1;
         timeline_info.pWaitSemaphoreValues = &wait_value;
-        timeline_info.signalSemaphoreValueCount = static_cast<uint32_t>(signal_values.size());
+        timeline_info.signalSemaphoreValueCount = signal_count;
         timeline_info.pSignalSemaphoreValues = signal_values.data();
 
         VkSubmitInfo submit_info{};
         submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         submit_info.pNext = &timeline_info;
         submit_info.waitSemaphoreCount = 1;
-        submit_info.pWaitSemaphores = &wait_semaphore;
-        submit_info.pWaitDstStageMask = &wait_stage;
-        submit_info.commandBufferCount = 1;
-        submit_info.pCommandBuffers = &command_buffer;
-        submit_info.signalSemaphoreCount = static_cast<uint32_t>(signal_semaphores.size());
+        submit_info.pWaitSemaphores = &_submit.wait_semaphore;
+        submit_info.pWaitDstStageMask = &_submit.wait_stage;
+        submit_info.commandBufferCount = _submit.command_buffer != VK_NULL_HANDLE ? 1u : 0u;
+        submit_info.pCommandBuffers = _submit.command_buffer != VK_NULL_HANDLE ? &_submit.command_buffer : nullptr;
+        submit_info.signalSemaphoreCount = signal_count;
         submit_info.pSignalSemaphores = signal_semaphores.data();
 
-        VK_CHECK(vkQueueSubmit(device.Get_graphics_queue(), 1, &submit_info, VK_NULL_HANDLE),
-            "Render: failed to submit command buffer");
+        VK_CHECK(vkQueueSubmit(device.Get_graphics_queue(), 1, &submit_info, VK_NULL_HANDLE), _submit.what);
 
         const uint64_t recorded = timeline.Record_submission(current_frame);
-        assert(recorded == serial && "Submit_frame: the serial recorded is not the one that was signaled");
+        assert(recorded == serial && "Submit_to_timeline: the serial recorded is not the one that was signaled");
         (void)recorded;
+    }
+
+    void Renderer::Impl::Submit_frame(Frame_Data& _frame, VkSemaphore _render_finished)
+    {
+        Timeline_Submit submit;
+        submit.wait_semaphore = _frame.image_available_semaphore.Get();
+        submit.wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        submit.command_buffer = _frame.Get_command_buffer();
+        submit.signal_semaphore = _render_finished;
+        submit.what = "Render: failed to submit command buffer";
+
+        Submit_to_timeline(submit);
     }
 
     // =========================================================
@@ -811,33 +906,12 @@ namespace Renderer_System
             // returns only once the semaphore is reusable. The frame's own
             // submission either failed (nothing was consumed) or never
             // happened, so the wait is still pending here.
-            const uint64_t serial = timeline.Get_submitted_serial() + 1;
+            Timeline_Submit submit;
+            submit.wait_semaphore = _frame.image_available_semaphore.Get();
+            submit.wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+            submit.what = "Recover_acquired_image: failed to consume the acquire semaphore";
 
-            const VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-            const VkSemaphore          wait_semaphore = _frame.image_available_semaphore.Get();
-            const uint64_t             wait_value = 0;
-            const VkSemaphore          signal_semaphore = frame_semaphore.Get();
-
-            VkTimelineSemaphoreSubmitInfo timeline_info{};
-            timeline_info.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
-            timeline_info.waitSemaphoreValueCount = 1;
-            timeline_info.pWaitSemaphoreValues = &wait_value;
-            timeline_info.signalSemaphoreValueCount = 1;
-            timeline_info.pSignalSemaphoreValues = &serial;
-
-            VkSubmitInfo submit_info{};
-            submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-            submit_info.pNext = &timeline_info;
-            submit_info.waitSemaphoreCount = 1;
-            submit_info.pWaitSemaphores = &wait_semaphore;
-            submit_info.pWaitDstStageMask = &wait_stage;
-            submit_info.signalSemaphoreCount = 1;
-            submit_info.pSignalSemaphores = &signal_semaphore;
-
-            VK_CHECK(vkQueueSubmit(device.Get_graphics_queue(), 1, &submit_info, VK_NULL_HANDLE),
-                "Recover_acquired_image: failed to consume the acquire semaphore");
-
-            timeline.Record_submission(current_frame);
+            Submit_to_timeline(submit);
         }
         catch (...)
         {
@@ -927,7 +1001,26 @@ namespace Renderer_System
         uploaded_directional_light_count = directional_count;
 
         // -- Clustered lighting --
-        const Cluster_Grid::Slice_Mapping slices = Cluster_Grid::Make_slice_mapping(_packet.view.near_plane);
+        // The grid is built for the near plane of the packet when it is a
+        // distance (positive, finite). Otherwise no slice can start there:
+        // the grid is built for CLUSTER_FALLBACK_NEAR_DISTANCE instead, and
+        // the packet is reported when the problem starts, not on every frame
+        // it lasts. The value used is kept for the cluster boxes of this
+        // frame (Record_command_buffer), so the uniforms and the boxes
+        // always agree.
+        const bool near_plane_valid = Cluster_Grid::Is_valid_near_plane(_packet.view.near_plane);
+
+        if (!near_plane_valid && !reported_invalid_near_plane)
+        {
+            std::cerr << "[Renderer] The near plane of the packet (" << _packet.view.near_plane
+                << ") is not a positive, finite distance; the cluster grid is built for "
+                << CLUSTER_FALLBACK_NEAR_DISTANCE << " instead.\n";
+        }
+
+        reported_invalid_near_plane = !near_plane_valid;
+        uploaded_cluster_near_plane = near_plane_valid ? _packet.view.near_plane : CLUSTER_FALLBACK_NEAR_DISTANCE;
+
+        const Cluster_Grid::Slice_Mapping slices = Cluster_Grid::Make_slice_mapping(uploaded_cluster_near_plane);
         const VkExtent2D                  extent = swapchain.Get_extent();
 
         ubo.cluster_tiles_x = CLUSTER_TILES_X;
@@ -984,18 +1077,18 @@ namespace Renderer_System
             const VkExtent2D desired_extent = Get_framebuffer_extent(window);
 
             // A surface without area (a minimized window) cannot hold a
-            // swapchain. Checked before anything is torn down: the idle wait
-            // and the retirement of the presentation objects below would
-            // otherwise leave a Renderer that cannot be brought back.
+            // swapchain, and neither can one that stopped offering the
+            // format of the first (Can_recreate throws): the render pass is
+            // built for that format. Checked before anything is torn down:
+            // the idle wait and the retirement of the presentation objects
+            // below would otherwise leave a Renderer that cannot be brought
+            // back, and every retry would pay the wait again.
             if (!swapchain.Can_recreate(desired_extent))
                 return false;
 
-            VK_CHECK(vkDeviceWaitIdle(device.Get_logical_device_handle()),
-                "Recreate_swapchain: wait for device idle");
-
-            // Every submitted frame has completed: released geometry can go.
-            timeline.Mark_all_complete();
-            mesh_registry.Free_completed(timeline);
+            // Every submitted frame has completed afterwards: released
+            // geometry can go.
+            Wait_idle("Recreate_swapchain: wait for device idle");
 
             // vkDeviceWaitIdle covers queue work, not presentation: the
             // per-image objects are retired through their present fences (or
@@ -1014,10 +1107,11 @@ namespace Renderer_System
             // -- New objects, in temporaries --
             // Everything that can fail is created before any member is
             // replaced. If one of these throws, the temporaries release
-            // themselves and the members are untouched.
-            Vulkan_Depth_Resources new_depth(device, allocator.Get_handle(), device.Get_depth_format(), swapchain.Get_extent());
-            Vulkan_OIT_Resources   new_oit(device, allocator.Get_handle(), swapchain.Get_extent());
-            Vulkan_Framebuffer     new_framebuffers(device, render_pass, swapchain, new_depth, new_oit);
+            // themselves and the members are untouched. The targets are
+            // built exactly like the ones of the constructor, which also
+            // checks the format of the new swapchain images against the
+            // render pass.
+            Swapchain_Targets new_targets(device, allocator.Get_handle(), render_pass, swapchain);
 
             // The image count may have changed: one Image_Sync per new image.
             // A throw here leaves a partial set, which the next Retire()
@@ -1025,11 +1119,9 @@ namespace Renderer_System
             present_sync.Create(swapchain.Get_image_count());
 
             // -- Replacement --
-            // Moves cannot throw. The framebuffers go first: they refer to
-            // the views of the other two.
-            framebuffers = std::move(new_framebuffers);
-            oit_resources = std::move(new_oit);
-            depth_resources = std::move(new_depth);
+            // A move cannot throw. The framebuffers of the old set are
+            // released first: they refer to the views of the other two.
+            targets = std::move(new_targets);
 
             // The OIT views changed: the composite reads the new ones. Legal
             // here, after the idle wait: no pending command buffer uses the set.
@@ -1105,18 +1197,18 @@ namespace Renderer_System
         Render_Debug_Settings settings = _settings;
 
         // Values that reach the shaders or select a code path are sanitized:
-        // an unknown enumerator falls back to the default.
-        if (static_cast<uint32_t>(settings.light_culling) >= static_cast<uint32_t>(Light_Culling_Mode::Count))
-            settings.light_culling = Light_Culling_Mode::Clustered;
-
-        if (static_cast<uint32_t>(settings.cluster_view) >= static_cast<uint32_t>(Cluster_Debug_View::Count))
-            settings.cluster_view = Cluster_Debug_View::None;
-
-        if (static_cast<uint32_t>(settings.opaque_path) >= static_cast<uint32_t>(Opaque_Draw_Path::Count))
-            settings.opaque_path = Opaque_Draw_Path::Gpu_Culled;
+        // an unknown enumerator falls back to the default. Every correction
+        // is reported: a value that does not mean what its caller thinks is
+        // a bug on the caller's side.
+        settings.light_culling = Sanitize_enum(settings.light_culling, Light_Culling_Mode::Clustered, "light_culling");
+        settings.cluster_view = Sanitize_enum(settings.cluster_view, Cluster_Debug_View::None, "cluster_view");
+        settings.opaque_path = Sanitize_enum(settings.opaque_path, Opaque_Draw_Path::Gpu_Culled, "opaque_path");
 
         if (settings.heatmap_max_lights == 0)
+        {
+            std::cerr << "[Renderer] Set_debug_settings: heatmap_max_lights is 0, which is not a light count the heatmap can scale to; using 1.\n";
             settings.heatmap_max_lights = 1;
+        }
 
         if (settings.light_culling != debug_settings.light_culling)
             std::cout << "[Renderer] Light culling: " << To_string(settings.light_culling) << ".\n";

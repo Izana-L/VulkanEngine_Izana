@@ -17,6 +17,7 @@ namespace Renderer_System {
         VkFormat _revealage_format)
 
         : render_pass(),
+        color_format(_color_format),
         depth_format(_depth_format) {
 
         const VkDevice device_handle = _device.Get_logical_device_handle();
@@ -285,6 +286,12 @@ namespace Renderer_System {
     VkRenderPass Vulkan_Render_Pass::Get_handle() const {
         assert(render_pass && "Get_handle() called on a moved-from or destroyed Vulkan_Render_Pass");
         return render_pass.Get();
+    }
+
+    // ---------- Get_color_format ----------
+    VkFormat Vulkan_Render_Pass::Get_color_format() const {
+        assert(render_pass && "Get_color_format() called on a moved-from or destroyed Vulkan_Render_Pass");
+        return color_format;
     }
 
     // ---------- Get_depth_format ----------

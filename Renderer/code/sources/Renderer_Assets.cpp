@@ -36,16 +36,11 @@ namespace Renderer_System
             return result;
 
         // Validate the whole batch before touching the GPU, so a bad
-        // element cannot leave half a batch uploaded.
-        for (const CoreTypes::MeshData* mesh_data : _batch.meshes)
-        {
-            if (mesh_data == nullptr)
-                throw std::invalid_argument("Upload_batch: null MeshData pointer");
-            if (mesh_data->vertices.empty() || mesh_data->indices.empty())
-                throw std::invalid_argument("Upload_batch: MeshData has no vertices or no indices");
-            if (mesh_data->vertices.size() > UINT32_MAX || mesh_data->indices.size() > UINT32_MAX)
-                throw std::invalid_argument("Upload_batch: MeshData has more than 2^32 - 1 vertices or indices");
-        }
+        // element cannot leave half a batch uploaded. A mesh is checked down
+        // to its indices: one past the end of its vertices would read the
+        // geometry of its neighbor in the pool.
+        for (size_t i = 0; i < mesh_count; ++i)
+            Validate_mesh(_batch.meshes[i], i);
 
         for (const Texture_Upload& upload : _batch.textures)
         {
@@ -90,22 +85,11 @@ namespace Renderer_System
         // touches what this call added, and the failure path can undo it.
         const size_t first_texture = textures.size();
 
-        uint32_t        first_mesh_id = 0;
-        bool            meshes_registered = false;
-        VkCommandBuffer transfer_cmd = VK_NULL_HANDLE;
+        uint32_t first_mesh_id = 0;
+        bool     meshes_registered = false;
 
         try
         {
-            // -- Geometry ranges --
-            // Allocated before anything is recorded: a full pool rejects
-            // the batch with only the ranges of this batch to give back
-            // (Mesh_Registry::Add_batch returns them itself).
-            if (mesh_count > 0)
-            {
-                first_mesh_id = mesh_registry.Add_batch(_batch.meshes);
-                meshes_registered = true;
-            }
-
             // -- Frames in flight --
             // They read the geometry pool and the mesh table while this
             // batch writes them. The ranges written are new, so no frame
@@ -116,61 +100,85 @@ namespace Renderer_System
             // copies after every earlier read without relying on the ranges
             // being disjoint. Uploads are synchronous anyway, and the copies
             // would queue behind those frames.
+            //
+            // Before the ranges are reserved, not after: the wait also frees
+            // the geometry that the frames just completed were holding
+            // (Wait_for_serial). A pool whose free space is still held by
+            // meshes released a frame or two ago must hand it to this batch,
+            // not reject it for want of a range that the wait would free.
             if (mesh_count > 0)
                 Wait_for_frames_in_flight();
 
-            // -- One command buffer for the whole batch --
-            transfer_cmd = upload_context.Begin();
-
+            // -- Geometry ranges --
+            // Allocated before anything is recorded: a full pool rejects
+            // the batch with only the ranges of this batch to give back
+            // (Mesh_Registry::Add_batch returns them itself).
             if (mesh_count > 0)
             {
-                Record_mesh_copies(upload_context, transfer_cmd, _batch.meshes, mesh_registry, first_mesh_id,
-                                   geometry_pool, mesh_table_buffer.buffer);
+                first_mesh_id = mesh_registry.Add_batch(_batch.meshes);
+                meshes_registered = true;
             }
 
-            // -- Textures --
-            // No barriers are needed BETWEEN assets: each Texture_GPU
-            // barriers its own image, so the recordings touch disjoint
-            // resources. The barriers that do exist (layout transitions,
-            // mip generation) are internal to each Texture_GPU. Their
-            // staging buffers come from the upload context, like the one of
-            // the meshes.
-            for (const Texture_Upload& upload : _batch.textures)
-            {
-                textures.emplace_back(device, allocator.Get_handle(), upload_context, transfer_cmd, *upload.data,
-                                      Vulkan_Image_Utils::To_vk_format(upload.format));
-            }
+            // -- One transfer for the whole batch --
+            // One command buffer, one submit and one wait, and the release of
+            // every staging buffer at the end: the textures' and the
+            // meshes' alike, which the GPU has consumed once the wait
+            // returned. If anything throws, Run waits for the device and
+            // releases them before the exception reaches the handler below.
+            upload_context.Run([&](VkCommandBuffer _transfer_cmd)
+                {
+                    if (mesh_count > 0)
+                    {
+                        Record_mesh_copies(upload_context, _transfer_cmd, _batch.meshes, mesh_registry, first_mesh_id,
+                                           geometry_pool, mesh_table_buffer.buffer);
+                    }
 
-            // -- End, submit, wait: ONCE for the whole batch --
-            upload_context.Submit_and_wait(transfer_cmd);
+                    // -- Textures --
+                    // No barriers are needed BETWEEN assets: each Texture_GPU
+                    // barriers its own image, so the recordings touch
+                    // disjoint resources. The barriers that do exist (layout
+                    // transitions, mip generation) are internal to each
+                    // Texture_GPU. Their staging buffers come from the upload
+                    // context, like the one of the meshes.
+                    for (const Texture_Upload& upload : _batch.textures)
+                    {
+                        textures.emplace_back(device, allocator.Get_handle(), upload_context, _transfer_cmd, *upload.data,
+                                              Vulkan_Image_Utils::To_vk_format(upload.format));
+                    }
+                });
         }
         catch (...)
         {
             // A lost device is final for the whole Renderer.
             Note_current_failure();
 
-            // Nothing of this batch reached the GPU in a usable state: wait
-            // for the device (the transfer either never ran or was waited
-            // for), release the staging and command buffers, give back the
-            // ranges and drop the registry entries added above (Texture_GPU
-            // destructors free their images; the staging buffers were freed
-            // by the upload context).
-            upload_context.Abort(transfer_cmd);
+            // Nothing of this batch reached the GPU in a usable state, and
+            // when the failure came from the transfer the device is idle
+            // (Run waited for it): give back the ranges and drop the
+            // registry entries added above (Texture_GPU destructors free
+            // their images; the staging buffers were freed by the upload
+            // context). A failure before the transfer holds no range that
+            // any frame could read: they were just allocated.
+            //
+            // Unless Run could not wait for the device: the transfer may
+            // still be writing those ranges and images. Settle_failed_
+            // transfer says so and declares the Renderer lost; they are
+            // released with it, by its destructor.
+            if (Settle_failed_transfer())
+            {
+                if (meshes_registered)
+                    mesh_registry.Discard_batch(first_mesh_id);
 
-            if (meshes_registered)
-                mesh_registry.Discard_batch(first_mesh_id);
-
-            textures.erase(textures.begin() + static_cast<std::ptrdiff_t>(first_texture), textures.end());
+                textures.erase(textures.begin() + static_cast<std::ptrdiff_t>(first_texture), textures.end());
+            }
 
             throw;
         }
 
         // -- Post-upload --
-        // The transfer has completed (Submit_and_wait returned), so the GPU
-        // has consumed every staging buffer in the batch, the textures' and
-        // the meshes' alike, and they can all be freed now.
-        upload_context.End(transfer_cmd);
-
+        // The transfer has completed (Run returned), so the GPU has consumed
+        // every staging buffer in the batch and the upload context released
+        // them.
         for (size_t i = 0; i < mesh_count; ++i)
             result.mesh_gpu_ids.push_back(first_mesh_id + static_cast<uint32_t>(i));
 
@@ -185,8 +193,9 @@ namespace Renderer_System
             // Cannot throw, which keeps the strong guarantee although it
             // runs after the submit: the free slots were checked before
             // recording, the registry reserves storage for every slot at
-            // construction, the view of a constructed Texture_GPU is never
-            // null, and result.texture_bindless_indices was reserved above.
+            // construction and writes the descriptor without allocating,
+            // the view of a constructed Texture_GPU is never null, and
+            // result.texture_bindless_indices was reserved above.
             result.texture_bindless_indices.push_back(bindless_registry.Register_texture(textures[i].Get_image_view()));
         }
 
@@ -242,8 +251,24 @@ namespace Renderer_System
             return;
         }
 
-        // An unknown or already released id is ignored.
-        mesh_registry.Release(_gpu_id, timeline);
+        // Releasing is idempotent: an id that was never handed out, or that
+        // was released before, changes nothing. It is reported all the same:
+        // a caller that releases an id twice, or one it never got, holds a
+        // stale id, and would otherwise never learn it.
+        switch (mesh_registry.Release(_gpu_id, timeline))
+        {
+        case Mesh_Registry::Release_Result::Released:
+            break;
+
+        case Mesh_Registry::Release_Result::Unknown_Id:
+            std::cerr << "[Renderer] Release_mesh: mesh " << _gpu_id << " was never uploaded (" << mesh_registry.Get_count()
+                << " ids handed out); nothing was released.\n";
+            break;
+
+        case Mesh_Registry::Release_Result::Already_Released:
+            std::cerr << "[Renderer] Release_mesh: mesh " << _gpu_id << " was already released; nothing was released.\n";
+            break;
+        }
     }
 
     void Renderer::Impl::Wait_for_frames_in_flight()
@@ -252,12 +277,10 @@ namespace Renderer_System
             return;
 
         // The last submission completing means all of them did: the serials
-        // of the timeline semaphore are monotonic.
+        // of the timeline semaphore are monotonic. Every submitted frame has
+        // completed afterwards, and the geometry released before them goes
+        // back to the pool in the same call (Wait_for_serial).
         Wait_for_serial(timeline.Get_submitted_serial(), "Wait_for_frames_in_flight: wait for the last frame submission");
-
-        // Every submitted frame has completed: released geometry can go.
-        timeline.Mark_all_complete();
-        mesh_registry.Free_completed(timeline);
     }
 
     uint32_t Renderer::Impl::Register_material(const Material_Desc& _desc)

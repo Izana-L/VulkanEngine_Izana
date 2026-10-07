@@ -23,7 +23,7 @@ namespace Renderer_System
             VkFormat          _format,
             VkImageTiling     _tiling,
             VkImageUsageFlags _usage,
-            bool              _dedicated)
+            Image_Memory      _memory)
         {
             // Enforced in every build, before anything is created: the
             // size, the format and the usage are checked against what the
@@ -71,13 +71,43 @@ namespace Renderer_System
             image_info.samples = VK_SAMPLE_COUNT_1_BIT;
 
             // ---------- Memory allocation ----------
+            Image_Allocation out{};
+
+            if (_memory == Image_Memory::Lazy_Or_Dedicated)
+            {
+                // Lazily allocated memory first: on tile-based GPUs a
+                // transient attachment then never gets backing memory at
+                // all.
+                VmaAllocationCreateInfo lazy_info{};
+                lazy_info.usage = VMA_MEMORY_USAGE_GPU_LAZILY_ALLOCATED;
+
+                const VkResult lazy_result = vmaCreateImage(_allocator, &image_info, &lazy_info,
+                                                            &out.image, &out.allocation, nullptr);
+
+                if (lazy_result == VK_SUCCESS)
+                {
+                    out.lazily_allocated = true;
+                    return out;
+                }
+
+                // The output of the failed call is not used.
+                out = Image_Allocation{};
+
+                // Only "this device has no lazily allocated memory type"
+                // (desktop GPUs) falls through to the dedicated allocation
+                // below. Out of memory or a lost device is reported as
+                // such: retrying it as if the memory type did not exist
+                // would hide the first error behind whatever the second
+                // attempt says.
+                if (lazy_result != VK_ERROR_FEATURE_NOT_PRESENT)
+                    VK_CHECK(lazy_result, "Failed to create image (lazily allocated memory)");
+            }
+
             VmaAllocationCreateInfo alloc_info{};
             alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
 
-            if (_dedicated)
+            if (_memory != Image_Memory::Device_Local)
                 alloc_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
-
-            Image_Allocation out{};
 
             // Creates the image, queries its requirements, allocates and
             // binds. Nothing leaks if any of those steps fails.
@@ -98,8 +128,7 @@ namespace Renderer_System
         {
             if (_image.image != VK_NULL_HANDLE) {
                 vmaDestroyImage(_allocator, _image.image, _image.allocation);
-                _image.image = VK_NULL_HANDLE;
-                _image.allocation = VK_NULL_HANDLE;
+                _image = Image_Allocation{};
             }
         }
 

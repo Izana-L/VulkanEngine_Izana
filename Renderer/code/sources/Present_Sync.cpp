@@ -1,9 +1,10 @@
 #include <Present_Sync.hpp>
 #include <Vulkan_Utils.hpp>
 
-#include <cassert>
 #include <cstddef>
 #include <iostream>
+#include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace Renderer_System
@@ -37,7 +38,10 @@ namespace Renderer_System
 
     void Present_Sync::Create(uint32_t _image_count)
     {
-        assert(image_sync.empty() && "Present_Sync::Create: the previous set must be retired first");
+        // Creating over a live set would overwrite its handles and leak
+        // them: the previous set is retired first (Retire).
+        if (!image_sync.empty())
+            throw std::logic_error("Present_Sync::Create: the previous set must be retired first");
 
         VkDevice dev = device.Get_logical_device_handle();
         const bool use_present_fences = device.Is_swapchain_maintenance1_enabled();
@@ -76,7 +80,11 @@ namespace Renderer_System
 
     Present_Sync::Image_Sync& Present_Sync::Get(uint32_t _image_index)
     {
-        assert(_image_index < image_sync.size() && "Present_Sync::Get: image index out of range");
+        if (_image_index >= image_sync.size())
+        {
+            throw std::out_of_range("Present_Sync::Get: image index " + std::to_string(_image_index) + " out of range (" +
+                                    std::to_string(image_sync.size()) + " swapchain images)");
+        }
 
         return image_sync[_image_index];
     }

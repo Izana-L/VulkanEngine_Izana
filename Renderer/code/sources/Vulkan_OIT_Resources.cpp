@@ -41,15 +41,9 @@ namespace Renderer_System
     }
 
     Vulkan_OIT_Resources::Vulkan_OIT_Resources(VkDevice _device, VmaAllocator _allocator, VkExtent2D _extent)
-        : device_handle(_device),
-        allocator(_allocator),
-        current_extent(_extent),
-        accumulation(Create_target(_device, _allocator, _extent, ACCUMULATION_FORMAT)),
+        : accumulation(Create_target(_device, _allocator, _extent, ACCUMULATION_FORMAT)),
         revealage(Create_target(_device, _allocator, _extent, REVEALAGE_FORMAT))
     {
-        assert(allocator != VK_NULL_HANDLE && "Vulkan_Allocator must be fully constructed before creating the OIT targets");
-        assert(_extent.width > 0 && _extent.height > 0 && "OIT target extent must be greater than zero");
-
         const double pixels = static_cast<double>(_extent.width) * static_cast<double>(_extent.height);
 
         std::cout << "[Vulkan_OIT_Resources] OIT targets created: " << _extent.width << "x" << _extent.height
@@ -61,76 +55,24 @@ namespace Renderer_System
     Vulkan_OIT_Resources::Target Vulkan_OIT_Resources::Create_target(VkDevice _device, VmaAllocator _allocator,
                                                                      VkExtent2D _extent, VkFormat _format)
     {
-        assert(_allocator != VK_NULL_HANDLE && "Vulkan_Allocator must be fully constructed before creating the OIT targets");
-        assert(_extent.width > 0 && _extent.height > 0 && "OIT target extent must be greater than zero");
-
-        // The targets are created with vmaCreateImage directly (lazily
-        // allocated memory), not through Vulkan_Image_Utils::Create_image,
-        // so the check that the device can make an image of this size and
-        // usage is made here, in every build, before anything is created.
-        Vulkan_Image_Utils::Require_image_support(_allocator, _format, VK_IMAGE_TILING_OPTIMAL, OIT_TARGET_USAGE,
-                                                  _extent.width, _extent.height, 1, "Vulkan_OIT_Resources");
-
-        VkImageCreateInfo image_info{};
-        image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        image_info.imageType = VK_IMAGE_TYPE_2D;
-        image_info.extent = { _extent.width, _extent.height, 1 };
-        image_info.mipLevels = 1;
-        image_info.arrayLayers = 1;
-        image_info.format = _format;
-        image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
-        image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        image_info.usage = OIT_TARGET_USAGE;
-        image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        image_info.samples = VK_SAMPLE_COUNT_1_BIT;
-
-        Vulkan_Image_Utils::Image_Allocation created{};
-
-        // Lazily allocated memory: on tile-based GPUs a transient
-        // attachment then never gets backing memory at all. Desktop GPUs
-        // expose no such memory type and VMA reports
-        // VK_ERROR_FEATURE_NOT_PRESENT, in which case the target gets a
-        // dedicated device-local allocation, as the depth buffer does.
-        VmaAllocationCreateInfo lazy_info{};
-        lazy_info.usage = VMA_MEMORY_USAGE_GPU_LAZILY_ALLOCATED;
-
-        const bool lazily_allocated = vmaCreateImage(_allocator, &image_info, &lazy_info,
-                                                     &created.image, &created.allocation, nullptr) == VK_SUCCESS;
-
-        if (!lazily_allocated)
-        {
-            // The output of the failed call is not used.
-            created = {};
-
-            VmaAllocationCreateInfo device_info{};
-            device_info.usage = VMA_MEMORY_USAGE_AUTO;
-            device_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
-
-            VK_CHECK(vmaCreateImage(_allocator, &image_info, &device_info, &created.image, &created.allocation, nullptr),
-                "Vulkan_OIT_Resources: failed to create an OIT target");
-        }
+        // Create_image checks, in every build and before anything is
+        // created, that the allocator exists and that the device can make
+        // an image of this size, format and usage. The memory is lazily
+        // allocated where the device has such a memory type (a transient
+        // attachment then never gets backing memory on a tile-based GPU),
+        // dedicated device-local memory otherwise, as for the depth buffer.
+        const Vulkan_Image_Utils::Image_Allocation created = Vulkan_Image_Utils::Create_image(
+            _allocator, _extent.width, _extent.height, 1, _format, VK_IMAGE_TILING_OPTIMAL, OIT_TARGET_USAGE,
+            Vulkan_Image_Utils::Image_Memory::Lazy_Or_Dedicated);
 
         // From here on the image is owned: if the view cannot be created,
         // the wrapper frees the image while the exception propagates.
         Target target;
         target.image = Unique_Image(_allocator, created);
-        target.lazily_allocated = lazily_allocated;
+        target.lazily_allocated = created.lazily_allocated;
         target.view = Create_unique_image_view(_device, target.image.Get(), _format, VK_IMAGE_ASPECT_COLOR_BIT, 1);
 
         return target;
-    }
-
-    // ---------- Recreate ----------
-    void Vulkan_OIT_Resources::Recreate(VkExtent2D _new_extent)
-    {
-        assert(accumulation.image && "Recreate() called on a moved-from Vulkan_OIT_Resources");
-        assert(_new_extent.width > 0 && _new_extent.height > 0 && "Recreate() called with a zero extent");
-
-        // The replacement pair is complete before anything is released: if
-        // its creation throws, the current targets are still in place.
-        Vulkan_OIT_Resources replacement(device_handle, allocator, _new_extent);
-
-        *this = std::move(replacement);
     }
 
     // ---------- Getters ----------

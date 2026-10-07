@@ -6,6 +6,7 @@
 #include <Vulkan_Handles.hpp>
 
 #include <string>
+#include <type_traits>
 
 namespace Renderer_System
 {
@@ -59,6 +60,30 @@ namespace Renderer_System
         // Bound with vkCmdBindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE)
         // before vkCmdDispatch.
         VkPipeline Get_handle() const;
+
+        // Records a whole compute pass: binds the pipeline, sets its push
+        // constants and dispatches _group_count_x * _group_count_y *
+        // _group_count_z workgroups, the sequence every compute pass of the
+        // engine records. The descriptor sets are bound by the caller, at
+        // VK_PIPELINE_BIND_POINT_COMPUTE, against _pipeline_layout.
+        //
+        // _push_constants is copied at offset 0 to the compute stage range
+        // of _pipeline_layout, which must hold sizeof(Push_Constants) bytes
+        // for VK_SHADER_STAGE_COMPUTE_BIT exactly (the stage flags of the
+        // range and of the call must match). Must be recorded outside a
+        // render pass.
+        template <typename Push_Constants>
+        void Dispatch(VkCommandBuffer _command_buffer, VkPipelineLayout _pipeline_layout,
+                      const Push_Constants& _push_constants,
+                      uint32_t _group_count_x, uint32_t _group_count_y = 1, uint32_t _group_count_z = 1) const
+        {
+            static_assert(std::is_trivially_copyable_v<Push_Constants>, "push constants are copied byte by byte");
+
+            vkCmdBindPipeline(_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, Get_handle());
+            vkCmdPushConstants(_command_buffer, _pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT,
+                               0, sizeof(Push_Constants), &_push_constants);
+            vkCmdDispatch(_command_buffer, _group_count_x, _group_count_y, _group_count_z);
+        }
     };
 
 } // namespace Renderer_System

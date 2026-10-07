@@ -23,6 +23,38 @@ namespace Renderer_System
         {
             VkImage       image = VK_NULL_HANDLE;
             VmaAllocation allocation = VK_NULL_HANDLE;
+
+            // True when the memory is lazily allocated (Image_Memory::
+            // Lazy_Or_Dedicated and the device has such a memory type).
+            bool          lazily_allocated = false;
+        };
+
+        // Where the memory of an image comes from. Every choice is
+        // DEVICE_LOCAL; they differ in how it is allocated.
+        enum class Image_Memory
+        {
+            // Whatever VMA_MEMORY_USAGE_AUTO picks for the usage,
+            // sub-allocated from a shared block.
+            Device_Local,
+
+            // A dedicated allocation of its own: for render targets that
+            // live as long as the swapchain and are recreated with it.
+            Dedicated,
+
+            // Lazily allocated memory when the device has a memory type for
+            // it, a dedicated allocation otherwise. A tile-based GPU never
+            // gives a transient attachment any backing memory in the first
+            // case; desktop GPUs expose no lazily allocated memory type and
+            // take the second. Only meaningful for an image used as a
+            // transient attachment (VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT);
+            // Image_Allocation::lazily_allocated tells which one was used.
+            //
+            // The fallback happens only when the device has no usable
+            // lazily allocated memory type (VMA reports
+            // VK_ERROR_FEATURE_NOT_PRESENT). Any other failure, out of
+            // memory or a lost device, is a real failure and is thrown,
+            // not mistaken for "no lazy memory".
+            Lazy_Or_Dedicated
         };
 
         // Creates a VkImage and sub-allocates its memory through VMA in one
@@ -39,6 +71,7 @@ namespace Renderer_System
         // _usage: what the image will be used for (e.g. TRANSFER_DST_BIT |
         //   SAMPLED_BIT for a standard texture, plus TRANSFER_SRC_BIT if mips
         //   will be generated via blit from this image to itself)
+        // _memory: how the memory is allocated (Image_Memory).
         //
         // The memory properties parameter is gone: every image created here
         // is DEVICE_LOCAL, which VMA_MEMORY_USAGE_AUTO derives from _usage.
@@ -55,7 +88,7 @@ namespace Renderer_System
             VkFormat          _format,
             VkImageTiling     _tiling,
             VkImageUsageFlags _usage,
-            bool              _dedicated = false
+            Image_Memory      _memory = Image_Memory::Device_Local
         );
 
         // Frees the image and its allocation. Does NOT touch image views —

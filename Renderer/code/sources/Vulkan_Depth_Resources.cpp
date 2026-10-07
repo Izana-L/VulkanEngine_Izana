@@ -26,30 +26,19 @@ namespace Renderer_System {
 
             return Vulkan_Image_Utils::Create_image(_allocator, _extent.width, _extent.height, 1,
                                                     _depth_format, VK_IMAGE_TILING_OPTIMAL,
-                                                    VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, true);
+                                                    VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                                                    Vulkan_Image_Utils::Image_Memory::Dedicated);
         }
     }
 
-    // ---------- Constructors ----------
+    // ---------- Constructor ----------
     Vulkan_Depth_Resources::Vulkan_Depth_Resources(
         const Vulkan_Device& _device,
         VmaAllocator _allocator,
         VkFormat _depth_format,
         VkExtent2D _extent)
 
-        : Vulkan_Depth_Resources(_device.Get_logical_device_handle(), _allocator, _depth_format, _extent) {
-    }
-
-    Vulkan_Depth_Resources::Vulkan_Depth_Resources(
-        VkDevice _device,
-        VmaAllocator _allocator,
-        VkFormat _depth_format,
-        VkExtent2D _extent)
-
-        : device_handle(_device),
-        allocator(_allocator),
-        depth_format(_depth_format),
-        current_extent(_extent),
+        : depth_format(_depth_format),
         depth_image(_allocator, Create_depth_image(_allocator, _depth_format, _extent)),
 
         // ---------- Image view creation ----------
@@ -63,25 +52,11 @@ namespace Renderer_System {
         // stencilStoreOp in the render pass, barriers on the image with
         // both aspects, and a separate STENCIL view if the stencil is ever
         // sampled.
-        depth_image_view(Create_unique_image_view(_device, depth_image.Get(),
+        depth_image_view(Create_unique_image_view(_device.Get_logical_device_handle(), depth_image.Get(),
                                                   _depth_format, VK_IMAGE_ASPECT_DEPTH_BIT, 1)) {
-
-        assert(device_handle != VK_NULL_HANDLE && "Vulkan_Device must be fully constructed before creating depth resources");
 
         std::cout << "[Vulkan_Depth_Resources] Depth resources created: "
             << _extent.width << "x" << _extent.height << "\n";
-    }
-
-    // ---------- Recreate ----------
-    void Vulkan_Depth_Resources::Recreate(VkExtent2D _new_extent) {
-        assert(depth_image && "Recreate() called on a moved-from Vulkan_Depth_Resources");
-        assert(_new_extent.width > 0 && _new_extent.height > 0 && "Recreate() called with a zero extent");
-
-        // The replacement is complete before anything is released: if its
-        // creation throws, the current image and view are still in place.
-        Vulkan_Depth_Resources replacement(device_handle, allocator, depth_format, _new_extent);
-
-        *this = std::move(replacement);
     }
 
     // ---------- Get_image_view ----------

@@ -142,15 +142,18 @@ namespace Renderer_System
         // Draw_Item::mesh_gpu_id references.
         //
         // Throws std::invalid_argument if _mesh_data has no vertices or no
-        // indices, and std::runtime_error if the mesh table (MAX_MESHES)
-        // or the Geometry_Pool is full.
+        // indices, if its indices are not whole triangles (a multiple of
+        // three), or if any index is not below its vertex count, and
+        // std::runtime_error if the mesh table (MAX_MESHES) or the
+        // Geometry_Pool is full.
         uint32_t Upload_mesh(const CoreTypes::MeshData& _mesh_data);
 
         // Stops drawing mesh _gpu_id and returns its geometry to the pool
         // once no frame in flight can read it any more. The id is not
         // reused: Draw_Items that still reference it are skipped with a
         // warning. Releasing an id twice, or an id that was never handed
-        // out, does nothing.
+        // out, changes nothing and is reported on std::cerr: it means the
+        // caller holds a stale id.
         void Release_mesh(uint32_t _gpu_id);
 
         // Uploads a texture (with a full mip chain) to the GPU, registers
@@ -203,10 +206,14 @@ namespace Renderer_System
         // the submit has completed, registering the textures in the
         // bindless array cannot fail.
         //
-        // Throws std::invalid_argument for a null or empty element, and
-        // std::runtime_error if the bindless texture array does not have a
-        // free slot for every texture of the batch, or the mesh table or
-        // the geometry pool cannot hold its meshes.
+        // Throws std::invalid_argument for a null or empty element, for a
+        // mesh whose indices are not whole triangles or reach past its
+        // vertices, and std::runtime_error if the bindless texture array
+        // does not have a free slot for every texture of the batch, or the
+        // mesh table or the geometry pool cannot hold its meshes. The
+        // geometry of meshes released a frame or two ago counts as free: the
+        // upload waits for the frames that may still read it before it
+        // reserves its ranges.
         Upload_Batch_Result Upload_batch(const Upload_Batch& _batch);
 
         // =========================================================
@@ -257,9 +264,10 @@ namespace Renderer_System
         const Render_Debug_Settings& Get_debug_settings() const;
 
         // Applies new switches from the next frame on and logs every value
-        // that changed. Out-of-range enumerators are replaced by their
-        // defaults. Enabling freeze_culling freezes the frustum of the next
-        // frame.
+        // that changed. Out-of-range enumerators (and a heatmap scale of
+        // zero) are replaced by their defaults, and each replacement is
+        // reported on std::cerr. Enabling freeze_culling freezes the frustum
+        // of the next frame.
         void Set_debug_settings(const Render_Debug_Settings& _settings);
 
         // =========================================================
@@ -309,11 +317,13 @@ namespace Renderer_System
         // Device loss
         // =========================================================
 
-        // True when the device was lost (VK_ERROR_DEVICE_LOST) or a failed
-        // frame could not be undone. Final: Render, the uploads and the
-        // swapchain recreation throw at once, without waiting for the GPU,
-        // and the Renderer can only be destroyed. Checked by the engine
-        // loop after a failure to decide whether to go on.
+        // True when the device was lost (VK_ERROR_DEVICE_LOST), a failed
+        // frame could not be undone, or a failed upload could not be waited
+        // for (the GPU may still be writing what it targeted). Final:
+        // Render, the uploads and the swapchain recreation throw at once,
+        // without waiting for the GPU, and the Renderer can only be
+        // destroyed. Checked by the engine loop after a failure to decide
+        // whether to go on.
         bool Is_lost() const;
 
     private:

@@ -7,11 +7,27 @@
 #include <Mesh_Registry.hpp>
 #include <MeshData.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
 namespace Renderer_System
 {
+
+    // Throws std::invalid_argument unless _mesh is geometry the pool and the
+    // draws can use safely. Run on every mesh of a batch before anything
+    // touches the GPU (Renderer::Upload_batch), so a bad element cannot
+    // leave half a batch uploaded. _batch_index is the position of the mesh
+    // in the batch, for the message. Checks that:
+    //   - the pointer is not null, and the mesh has vertices and indices;
+    //   - neither count exceeds 2^32 - 1;
+    //   - the indices form whole triangles (a multiple of three: the
+    //     pipelines draw triangle lists);
+    //   - every index is below the vertex count. The indices are local to
+    //     the mesh and rebased by vertexOffset, so an index past the end
+    //     would read the vertices of whatever mesh sits next in the pool, or
+    //     past the pool, with no error from the driver.
+    void Validate_mesh(const CoreTypes::MeshData* _mesh, size_t _batch_index);
 
     // Records the copies that place _meshes into the Geometry_Pool and the
     // GPU mesh table, and the barrier that makes them visible, into

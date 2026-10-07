@@ -3,9 +3,11 @@
 #include <vulkan/vulkan.h>
 
 #include <Vulkan_Device.hpp>
+#include <Vulkan_Descriptor_Utils.hpp>
 #include <Descriptor_Sets.hpp>
 
 #include <array>
+#include <span>
 
 namespace Renderer_System
 {
@@ -21,6 +23,9 @@ namespace Renderer_System
     // stage (passes that read materials, e.g. GPU culling), and the mesh
     // table, visible to the compute stage (culling) and the vertex stage
     // (bounding volume debug draw).
+    //
+    // The layouts are built from the tables of Descriptor_Layouts.hpp,
+    // which are also what the descriptor pool is sized from.
     //
     // The storage buffers each stage can see across sets 0-2 are counted
     // while the layouts are built; exceeding Required_Storage_Buffers, the
@@ -55,7 +60,8 @@ namespace Renderer_System
 
         // Layout of set _set of the _kind contract, to allocate sets of it
         // (vkAllocateDescriptorSets). Sets 0, 2 and 3 return the same
-        // layout for both kinds.
+        // layout for both kinds. Throws std::out_of_range for a set number
+        // past Descriptor_Set::Count (in every build: it indexes an array).
         VkDescriptorSetLayout Get(uint32_t _set, Pipeline_Kind _kind) const;
 
         // The four layouts of the _kind contract, in set order, for
@@ -64,10 +70,11 @@ namespace Renderer_System
 
     private:
 
-        VkDescriptorSetLayout Create_per_frame_layout();
-        VkDescriptorSetLayout Create_per_pass_layout();
-        VkDescriptorSetLayout Create_graphics_pass_layout();
-        VkDescriptorSetLayout Create_per_material_layout();
+        // Creates the layout of one table of Descriptor_Layouts and counts
+        // its storage buffers toward the budget. _what names the layout in
+        // the message of the exception thrown on failure.
+        VkDescriptorSetLayout Create_layout(std::span<const Vulkan_Descriptor_Utils::Layout_Binding> _bindings,
+                                            const char* _what);
 
         // Destroys every layout this cache created (not the borrowed
         // bindless one). Safe on a partially built cache.
@@ -75,7 +82,7 @@ namespace Renderer_System
 
         // Adds the storage buffer bindings of one set layout (sets 0-2) to
         // the counters.
-        void Record_bindings(const VkDescriptorSetLayoutBinding* _bindings, uint32_t _count);
+        void Record_bindings(std::span<const Vulkan_Descriptor_Utils::Layout_Binding> _bindings);
 
         // Throws std::logic_error if the counters exceed
         // Required_Storage_Buffers.

@@ -32,11 +32,12 @@ namespace Renderer_System
     // therefore has nothing to release afterwards.
     //
     // Typical usage (mirrors Renderer::Upload_batch):
-    //   VkCommandBuffer cmd = upload.Begin();
-    //   textures.emplace_back(device, allocator, upload, cmd, image_data, format);
-    //   upload.Submit_and_wait(cmd);
-    //   upload.End(cmd);       // frees the staging buffers
-    // and, when anything throws in between, upload.Abort(cmd).
+    //   upload.Run([&](VkCommandBuffer cmd)
+    //   {
+    //       textures.emplace_back(device, allocator, upload, cmd, image_data, format);
+    //   });
+    // Run submits and waits, then frees the staging buffers (End), and
+    // undoes the transfer (Abort) when anything throws in between.
     //
     // RAII: move-only, no copy. The image and its view are owned by
     // Unique_Image / Unique_Image_View: destruction and moves are theirs.

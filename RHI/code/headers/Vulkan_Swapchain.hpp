@@ -8,6 +8,7 @@
 
 #include <vector>
 #include <cstdint>
+#include <optional>
 
 namespace Renderer_System
 {
@@ -49,7 +50,11 @@ namespace Renderer_System
         bool prefer_mailbox;
         Queue_Family_Indices queue_family_indices;
 
+        // The color format and color space chosen when the swapchain was
+        // first created. A recreation asks for exactly this pair (see
+        // Recreate), so what was built against the format stays valid.
         VkFormat image_format;
+        VkColorSpaceKHR image_color_space;
         VkExtent2D extent;
         VkPresentModeKHR selected_present_mode;
 
@@ -96,33 +101,52 @@ namespace Renderer_System
         // the current swapchain go before the swapchain does.
         Vulkan_Swapchain& operator=(Vulkan_Swapchain&& _other) noexcept;
 
-        // True when a swapchain can be built now for _desired_extent: the
-        // surface has area. On some platforms (Windows) the surface reports
-        // a 0x0 current extent while the window is minimized. Reads the
-        // surface capabilities and changes nothing.
+        // Everything Recreate needs from the surface, checked without
+        // touching anything, so a caller can ask before it tears down what
+        // depends on the current swapchain (the Renderer asks before it
+        // waits for the device to go idle).
+        //
+        // Returns true when a swapchain can be built now for
+        // _desired_extent: the surface has area (on some platforms, Windows,
+        // it reports a 0x0 current extent while the window is minimized)
+        // and still offers the format and color space of the first
+        // swapchain, which every swapchain after it keeps (see Recreate).
+        // Returns false when the surface has no area: a state that passes.
+        // Throws std::runtime_error when the surface does not offer that
+        // format and color space: it will not until the surface changes
+        // again (the window moved back to another monitor).
         bool Can_recreate(VkExtent2D _desired_extent) const;
 
         // Replaces the swapchain with a new one for _desired_extent (the
         // framebuffer size in pixels), passing the current one as
         // oldSwapchain, and destroys the old swapchain and its image views.
-        // Returns false, leaving the current swapchain untouched, when the
-        // surface has no area (Can_recreate).
+        // Returns false when the surface has no area, and throws when it no
+        // longer offers the format of the first swapchain (both are
+        // Can_recreate); neither touches anything, the current swapchain
+        // stays as it is.
         //
         // Never waits: not for the device, not for window events. The
         // caller guarantees that no pending work uses the current images
         // (Renderer::Recreate_swapchain waits for the device to go idle and
         // retires the presentation objects first).
         //
-        // Not a strong guarantee: passing oldSwapchain retires it even if
-        // the creation fails. In that case an exception is thrown, the
-        // object keeps the retired swapchain, and the next Recreate call
-        // destroys it and creates the new one from scratch.
+        // The new swapchain has exactly the format and color space of the
+        // first one. The render pass, the pipelines and the framebuffers
+        // are built against that format and cannot draw into another, and
+        // the surface is free to list other formats later (the window
+        // moved to another monitor).
+        //
+        // Otherwise not a strong guarantee: passing oldSwapchain retires it
+        // even if the creation fails. In that case an exception is thrown,
+        // the object keeps the retired swapchain, and the next Recreate
+        // call destroys it and creates the new one from scratch.
         bool Recreate(VkExtent2D _desired_extent);
 
         VkSwapchainKHR Get_handle() const;
 
         // The format chosen for the swapchain images - needed later by
         // Vulkan_Render_Pass to configure the color attachment correctly.
+        // It never changes: Recreate keeps it.
         VkFormat Get_image_format() const;
 
         // The actual resolution of the swapchain images - needed by
@@ -149,7 +173,9 @@ namespace Renderer_System
     private:
         // The constructor that does the work. _old_swapchain is passed to
         // the creation as oldSwapchain (VK_NULL_HANDLE for the first
-        // swapchain). The public constructor and Recreate() both use it.
+        // swapchain). _required_format: the exact format and color space
+        // the swapchain must have, or none to choose (the first swapchain).
+        // The public constructor and Recreate() both use it.
         Vulkan_Swapchain(
             VkDevice _device,
             VkPhysicalDevice _physical_device,
@@ -158,13 +184,15 @@ namespace Renderer_System
             uint32_t _preferred_image_count,
             bool _prefer_mailbox,
             VkExtent2D _desired_extent,
-            VkSwapchainKHR _old_swapchain
+            VkSwapchainKHR _old_swapchain,
+            std::optional<VkSurfaceFormatKHR> _required_format
         );
 
         // Builds the swapchain itself, with _old_swapchain as its
-        // oldSwapchain, and fills the images and the format, extent and
-        // present mode members.
-        void Create_swapchain(VkExtent2D _desired_extent, VkSwapchainKHR _old_swapchain);
+        // oldSwapchain, and fills the images and the format, color space,
+        // extent and present mode members.
+        void Create_swapchain(VkExtent2D _desired_extent, VkSwapchainKHR _old_swapchain,
+                              std::optional<VkSurfaceFormatKHR> _required_format);
 
         // Creates one VkImageView per swapchain image - image views are
         // required to actually use the raw VkImage as a render target.
@@ -184,7 +212,12 @@ namespace Renderer_System
         // instead of falling back to a format that would show wrong colors
         // without any error; Vulkan_Device only selects a GPU whose
         // surface offers one.
-        VkSurfaceFormatKHR Choose_surface_format(const std::vector<VkSurfaceFormatKHR>& _available_formats) const;
+        //
+        // _required_format: when set, nothing is chosen: the exact pair is
+        // returned if the surface offers it, and std::runtime_error is
+        // thrown if it does not.
+        VkSurfaceFormatKHR Choose_surface_format(const std::vector<VkSurfaceFormatKHR>& _available_formats,
+                                                 std::optional<VkSurfaceFormatKHR> _required_format) const;
 
         // Picks the present mode: MAILBOX if available and preferred,
         // otherwise FIFO (guaranteed to always be supported by the spec).

@@ -82,6 +82,11 @@ namespace Renderer_System
     static constexpr float    CLUSTER_MAX_DISTANCE = 200.0f;
     static constexpr float    CLUSTER_LAST_SLICE_FAR_DISTANCE = 1.0e5f;
 
+    // Near distance the grid is built for when the packet's near plane is
+    // not a positive, finite distance (the Renderer reports it and uses this
+    // one: Renderer::Write_frame_uniforms).
+    static constexpr float    CLUSTER_FALLBACK_NEAR_DISTANCE = 0.1f;
+
     // Capacity of the compacted light index list, sized for an average of
     // CLUSTER_AVERAGE_LIGHTS lights per cluster (4 bytes per entry, one
     // list per frame in flight). When a frame needs more, the clusters that

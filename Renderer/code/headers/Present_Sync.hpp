@@ -62,7 +62,8 @@ namespace Renderer_System
         Present_Sync& operator=(Present_Sync&&) = delete;
 
         // Creates one Image_Sync per image of the CURRENT swapchain,
-        // replacing the live set, which must have been retired first.
+        // replacing the live set, which must have been retired first:
+        // std::logic_error otherwise, before anything is touched.
         void Create(uint32_t _image_count);
 
         // Moves the live Image_Sync objects out of service: the ones whose
@@ -75,7 +76,9 @@ namespace Renderer_System
         // present fence and destroys everything.
         void Flush(bool _force);
 
-        // The objects of swapchain image _image_index.
+        // The objects of swapchain image _image_index. Throws
+        // std::out_of_range for an index past the set (in every build: it
+        // indexes an array).
         Image_Sync& Get(uint32_t _image_index);
 
         // Blocks until the previous present of the image completed, then

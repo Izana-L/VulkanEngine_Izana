@@ -1,8 +1,9 @@
 #pragma once
 
 #include <algorithm>
-#include <cassert>
 #include <cstdint>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace Renderer_System
@@ -32,19 +33,23 @@ namespace Renderer_System
     {
     public:
 
-        // _slot_count: number of frame slots (frames in flight).
+        // _slot_count: number of frame slots (frames in flight). Throws
+        // std::invalid_argument for zero.
         explicit Frame_Timeline(uint32_t _slot_count)
             : slot_serials(_slot_count, 0)
         {
-            assert(_slot_count > 0 && "Frame_Timeline needs at least one slot");
+            if (_slot_count == 0)
+                throw std::invalid_argument("Frame_Timeline needs at least one slot");
         }
 
         // Registers a submission made from _slot and returns its serial.
         // Called only after the submission succeeded: a frame that was
-        // never submitted has no serial and nothing waits for it.
+        // never submitted has no serial and nothing waits for it. Throws
+        // std::out_of_range for a slot that does not exist, before
+        // consuming a serial (in every build: the slot indexes an array).
         uint64_t Record_submission(uint32_t _slot)
         {
-            assert(_slot < slot_serials.size() && "Frame_Timeline: slot out of range");
+            Require_slot(_slot);
 
             slot_serials[_slot] = ++submitted;
             return slot_serials[_slot];
@@ -82,9 +87,10 @@ namespace Renderer_System
         uint64_t Get_completed_serial() const { return completed; }
 
         // Serial last submitted from _slot (0 if the slot never submitted).
+        // Throws std::out_of_range for a slot that does not exist.
         uint64_t Get_slot_serial(uint32_t _slot) const
         {
-            assert(_slot < slot_serials.size() && "Frame_Timeline: slot out of range");
+            Require_slot(_slot);
 
             return slot_serials[_slot];
         }
@@ -92,6 +98,13 @@ namespace Renderer_System
         uint32_t Get_slot_count() const { return static_cast<uint32_t>(slot_serials.size()); }
 
     private:
+
+        void Require_slot(uint32_t _slot) const
+        {
+            if (_slot >= slot_serials.size())
+                throw std::out_of_range("Frame_Timeline: slot " + std::to_string(_slot) + " out of range (" +
+                                        std::to_string(slot_serials.size()) + " slots)");
+        }
 
         uint64_t              submitted = 0;
         uint64_t              completed = 0;

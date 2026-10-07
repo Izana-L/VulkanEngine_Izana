@@ -20,7 +20,14 @@ namespace Renderer_System
 
     const Mesh_GPU& Mesh_Registry::Get(uint32_t _id) const
     {
-        assert(_id < meshes.size() && "Mesh_Registry::Get: id was never handed out");
+        // An id past the table would read memory that is not a record. The
+        // message is only built when the check fails: this runs for every
+        // draw of every frame.
+        if (_id >= meshes.size())
+        {
+            throw std::out_of_range("Mesh_Registry::Get: id " + std::to_string(_id) + " was never handed out (" +
+                                    std::to_string(meshes.size()) + " ids so far)");
+        }
 
         return meshes[_id];
     }
@@ -78,10 +85,13 @@ namespace Renderer_System
         meshes.erase(meshes.begin() + static_cast<std::ptrdiff_t>(_first_id), meshes.end());
     }
 
-    bool Mesh_Registry::Release(uint32_t _id, const Frame_Timeline& _timeline)
+    Mesh_Registry::Release_Result Mesh_Registry::Release(uint32_t _id, const Frame_Timeline& _timeline)
     {
-        if (!Is_drawable(_id))
-            return false;
+        if (_id >= meshes.size())
+            return Release_Result::Unknown_Id;
+
+        if (meshes[_id].released)
+            return Release_Result::Already_Released;
 
         // Frames recorded from now on skip the mesh. Every frame submitted
         // so far may still draw it, so its range waits for the last of them.
@@ -91,7 +101,7 @@ namespace Renderer_System
         // Freed at once when every submitted frame has already completed.
         Free_completed(_timeline);
 
-        return true;
+        return Release_Result::Released;
     }
 
     void Mesh_Registry::Free_completed(const Frame_Timeline& _timeline)

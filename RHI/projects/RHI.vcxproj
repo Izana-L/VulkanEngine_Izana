@@ -102,6 +102,7 @@
     <ClInclude Include="..\code\headers\Vulkan_Command_Pool.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Compute_Pipeline.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Debug_Utils.hpp" />
+    <ClInclude Include="..\code\headers\Vulkan_Descriptor_Utils.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Device.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Handles.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Image_Utils.hpp" />
@@ -124,6 +125,7 @@
     <ClCompile Include="..\code\sources\Vulkan_Command_Pool.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Compute_Pipeline.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Debug_Utils.cpp" />
+    <ClCompile Include="..\code\sources\Vulkan_Descriptor_Utils.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Device.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Image_Utils.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Instance.cpp" />

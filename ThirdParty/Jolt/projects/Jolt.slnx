@@ -1,0 +1,9 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="Jolt.vcxproj" Id="7b1e3c52-9d4a-4f6e-8a21-5c0d9e7f3a14">
+    <Build Solution="*|x86" Project="false" />
+  </Project>
+</Solution>

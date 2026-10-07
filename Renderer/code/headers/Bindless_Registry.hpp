@@ -3,7 +3,9 @@
 #include <vulkan/vulkan.h>
 
 #include <Vulkan_Device.hpp>
+#include <Vulkan_Descriptor_Utils.hpp>
 
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <vector>
@@ -250,6 +252,12 @@ namespace Renderer_System
         VkDevice device_handle;
         uint32_t max_textures;
         uint32_t max_samplers;
+
+        // The two bindings of the set, with the effective array sizes: the
+        // one description the layout, the pool and the writes of this
+        // registry come from. Filled once the sizes are known, in the
+        // constructor.
+        std::array<Vulkan_Descriptor_Utils::Layout_Binding, 2> layout_bindings{};
 
         // View written in every slot used so far, by index; VK_NULL_HANDLE
         // marks a released slot. Its size is the number of slots ever used,

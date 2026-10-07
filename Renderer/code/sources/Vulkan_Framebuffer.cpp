@@ -5,8 +5,24 @@
 #include <iostream>
 #include <array>
 #include <cassert>
+#include <string>
 
 namespace Renderer_System {
+
+    namespace
+    {
+        // Throws unless _actual is the format the render pass declares for
+        // the attachment named _attachment.
+        void Require_attachment_format(VkFormat _actual, VkFormat _expected, const char* _attachment)
+        {
+            if (_actual == _expected)
+                return;
+
+            throw std::runtime_error(std::string("Vulkan_Framebuffer: the ") + _attachment + " attachment has format " +
+                                     Vulkan_Utils::Vk_format_to_string(_actual) + ", but the render pass was created for " +
+                                     Vulkan_Utils::Vk_format_to_string(_expected));
+        }
+    }
 
     // ---------- Constructor ----------
     Vulkan_Framebuffer::Vulkan_Framebuffer(
@@ -16,10 +32,9 @@ namespace Renderer_System {
         const Vulkan_Depth_Resources& _depth_resources,
         const Vulkan_OIT_Resources& _oit_resources)
 
-        : device_handle(_device.Get_logical_device_handle()),
-        framebuffers(Create(_device.Get_logical_device_handle(), _render_pass, _swapchain, _depth_resources, _oit_resources)) {
+        : framebuffers(Create(_device.Get_logical_device_handle(), _render_pass, _swapchain, _depth_resources, _oit_resources)) {
 
-        assert(device_handle != VK_NULL_HANDLE && "Vulkan_Device must be fully constructed before creating framebuffers");
+        assert(_device.Get_logical_device_handle() != VK_NULL_HANDLE && "Vulkan_Device must be fully constructed before creating framebuffers");
     }
 
     // ---------- Create ----------
@@ -29,6 +44,11 @@ namespace Renderer_System {
         const Vulkan_Swapchain& _swapchain,
         const Vulkan_Depth_Resources& _depth_resources,
         const Vulkan_OIT_Resources& _oit_resources) {
+
+        // Before anything is created: the views must be of the formats the
+        // render pass was built with.
+        Require_attachment_format(_swapchain.Get_image_format(), _render_pass.Get_color_format(), "color (swapchain)");
+        Require_attachment_format(_depth_resources.Get_format(), _render_pass.Get_depth_format(), "depth");
 
         const uint32_t image_count = _swapchain.Get_image_count();
         VkExtent2D extent = _swapchain.Get_extent();
@@ -98,24 +118,6 @@ namespace Renderer_System {
             << extent.width << "x" << extent.height << "\n";
 
         return created;
-    }
-
-    // ---------- Recreate ----------
-    void Vulkan_Framebuffer::Recreate(
-        const Vulkan_Render_Pass& _render_pass,
-        const Vulkan_Swapchain& _swapchain,
-        const Vulkan_Depth_Resources& _depth_resources,
-        const Vulkan_OIT_Resources& _oit_resources) {
-
-        assert(!framebuffers.empty() && "Recreate() called on a moved-from or destroyed Vulkan_Framebuffer");
-
-        // The new set is complete before the current one is released: the
-        // assignment below cannot throw.
-        std::vector<Unique_Framebuffer> replacement = Create(device_handle, _render_pass, _swapchain, _depth_resources, _oit_resources);
-
-        framebuffers = std::move(replacement);
-
-        std::cout << "[Vulkan_Framebuffer] Framebuffers recreated.\n";
     }
 
     // ---------- Get_framebuffer ----------

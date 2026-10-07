@@ -51,9 +51,6 @@
     <ClCompile Include="..\code\sources\Geometry_Pool.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\code\sources\Source.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="..\code\sources\Vulkan_OIT_Resources.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -113,6 +110,9 @@
     <ClInclude Include="..\code\headers\Sampler_Cache.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\code\headers\Swapchain_Targets.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="..\code\headers\Bindless_Registry.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -126,6 +126,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\code\headers\Descriptor_Layout_Cache.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code\headers\Descriptor_Layouts.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\code\headers\Cluster_Grid.hpp">

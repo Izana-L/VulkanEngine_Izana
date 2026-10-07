@@ -1,10 +1,33 @@
 #include <Upload_Context.hpp>
 #include <Vulkan_Utils.hpp>
 
+#include <iostream>
 #include <stdexcept>
+#include <string>
 
 namespace Renderer_System
 {
+
+    namespace
+    {
+        // The message of the exception being handled, for the report that
+        // replaces it. Only valid inside a catch block.
+        std::string Describe_current_exception()
+        {
+            try
+            {
+                throw;
+            }
+            catch (const std::exception& error)
+            {
+                return error.what();
+            }
+            catch (...)
+            {
+                return "unknown exception";
+            }
+        }
+    }
 
     Upload_Context::Upload_Context(const Vulkan_Device& _device, VmaAllocator _allocator)
         : device(_device),
@@ -31,6 +54,9 @@ namespace Renderer_System
 
     VkCommandBuffer Upload_Context::Begin()
     {
+        if (unusable)
+            throw std::runtime_error("Upload_Context: a failed transfer could not be waited for, so its resources may still be in use; no further transfer is accepted");
+
         VkCommandBuffer command_buffer = command_pool.Allocate_primary();
 
         try
@@ -96,15 +122,55 @@ namespace Renderer_System
         command_pool.Free(_command_buffer);
     }
 
-    void Upload_Context::Abort(VkCommandBuffer _command_buffer) noexcept
+    VkResult Upload_Context::Abort(VkCommandBuffer _command_buffer) noexcept
     {
         // The submission either never ran or was waited for by
         // Submit_and_wait before it threw; the idle wait also covers a
         // failure between the two.
-        vkDeviceWaitIdle(device.Get_logical_device_handle());
+        const VkResult idle = vkDeviceWaitIdle(device.Get_logical_device_handle());
+
+        if (idle != VK_SUCCESS)
+        {
+            try
+            {
+                std::cerr << "[Upload_Context] The wait for the device after a failed transfer failed: "
+                          << Vulkan_Utils::Vk_result_to_string(idle) << "\n";
+            }
+            catch (...)
+            {
+            }
+
+            // A lost device executes nothing any more, so what the transfer
+            // used can be released. For any other failure nothing proves the
+            // GPU is done with the staging buffers and the command buffer:
+            // they stay allocated until the context is destroyed (after the
+            // Renderer waited for the device), and no other transfer may
+            // start in the meantime.
+            if (idle != VK_ERROR_DEVICE_LOST)
+            {
+                unusable = true;
+                return idle;
+            }
+        }
 
         Destroy_staging_buffers();
         command_pool.Free(_command_buffer);
+
+        return idle;
+    }
+
+    void Upload_Context::Abort_after_failure(VkCommandBuffer _command_buffer)
+    {
+        const VkResult idle = Abort(_command_buffer);
+
+        // The original exception goes on in every other case. A lost device
+        // replaces it, so what it said is kept in the message.
+        if (idle == VK_ERROR_DEVICE_LOST)
+        {
+            throw Vulkan_Utils::Vulkan_Error(idle,
+                "Upload_Context: the device was lost while a failed transfer was undone; the transfer had failed with: " +
+                Describe_current_exception());
+        }
     }
 
 } // namespace Renderer_System

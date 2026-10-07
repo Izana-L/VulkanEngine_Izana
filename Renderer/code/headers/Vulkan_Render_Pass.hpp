@@ -90,6 +90,7 @@ namespace Renderer_System {
     class Vulkan_Render_Pass
     {
         Unique_Render_Pass render_pass;
+        VkFormat color_format;
         VkFormat depth_format;
 
     public:
@@ -119,6 +120,12 @@ namespace Renderer_System {
         // compatible with this render pass) and Vulkan_Framebuffer (to
         // create framebuffers that match this render pass's attachments).
         VkRenderPass Get_handle() const;
+
+        // The color format this render pass was created with: the format
+        // of the swapchain images it renders into. A framebuffer is only
+        // valid with views of exactly this format (Vulkan_Framebuffer
+        // checks it), and so is every pipeline built against the pass.
+        VkFormat Get_color_format() const;
 
         // The depth format this render pass was created with - needed by
         // whoever creates the actual depth image/view to make sure it

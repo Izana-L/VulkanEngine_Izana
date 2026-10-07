@@ -38,6 +38,20 @@ namespace Renderer_System
     {
     public:
 
+        // What Release did with an id.
+        enum class Release_Result
+        {
+            // The mesh stopped being drawable and its range is queued for
+            // release.
+            Released,
+
+            // The id was never handed out.
+            Unknown_Id,
+
+            // The mesh was released before.
+            Already_Released
+        };
+
         // _capacity: number of ids the registry can hand out (the size of
         // the GPU mesh table).
         Mesh_Registry(Geometry_Allocator& _allocator, uint32_t _capacity);
@@ -63,8 +77,10 @@ namespace Renderer_System
             return _id < meshes.size() && !meshes[_id].released;
         }
 
-        // The record of _id; _id must have been handed out. A released
-        // mesh keeps its record, but its range may already be freed.
+        // The record of _id; _id must have been handed out, otherwise
+        // std::out_of_range is thrown (in every build: the id indexes the
+        // table). A released mesh keeps its record, but its range may
+        // already be freed.
         const Mesh_GPU& Get(uint32_t _id) const;
 
         // Registers _meshes, in order, with consecutive ids, and returns
@@ -86,10 +102,10 @@ namespace Renderer_System
 
         // Stops _id from being drawable and queues its range for release
         // after the last frame submitted so far (the tag). Ranges whose
-        // frames have completed are freed at once. Returns false, changing
-        // nothing, for an id that was never handed out or is already
+        // frames have completed are freed at once. Changes nothing, and
+        // says why, for an id that was never handed out or is already
         // released.
-        bool Release(uint32_t _id, const Frame_Timeline& _timeline);
+        Release_Result Release(uint32_t _id, const Frame_Timeline& _timeline);
 
         // Returns to the allocator the ranges of released meshes whose
         // frames have completed.

@@ -27,10 +27,18 @@ namespace Renderer_System
     // It also decides which opaque path can draw the frame, and keeps the
     // culling frustum, which can be frozen for debugging.
     //
-    // The lists and the warning flags persist between frames so their
-    // capacity is reused; a frame rebuilds them from scratch. Every
-    // reference of a draw item (pipeline, mesh, transform, material) is
-    // validated in every build, before its entry is written.
+    // The lists persist between frames so their capacity is reused; a frame
+    // rebuilds them from scratch. Every reference of a draw item (pipeline,
+    // mesh, transform, material) is validated in every build, before its
+    // entry is written.
+    //
+    // What a frame skips or falls back from is reported, never silently
+    // dropped, but not on every frame it lasts: a problem is reported when
+    // it starts (the skipped items: also whenever their number grows beyond
+    // what was reported), and reported again if it comes back after
+    // Episode_Report::REARM_FRAMES frames without it. A problem that
+    // flickers is one episode, not one report per appearance. The builder
+    // keeps one Episode_Report per problem for that.
     //
     // Triangle winding: a model matrix whose upper 3x3 has a negative
     // determinant (a negative scale on an odd number of axes, a reflection)
@@ -134,8 +142,8 @@ namespace Renderer_System
         // transform or material that does not exist, a released mesh, or a
         // pipeline built for another subpass than the one their list is
         // drawn in (opaque items: Render_Subpass::Opaque, transparent items:
-        // Render_Subpass::Transparent). The first invalid item is reported
-        // once.
+        // Render_Subpass::Transparent). The skipped items are reported with
+        // the first of them (see the class comment for when).
         //
         // The opaque list is built from the validated items only, and the
         // path is decided from that list: an invalid item cannot influence
@@ -143,14 +151,14 @@ namespace Renderer_System
         // in at most MAX_DRAW_BUCKETS buckets (one per pipeline and
         // winding) and no bucket holds more than
         // _settings.max_draw_indirect_count objects; otherwise the frame
-        // uses Cpu_Indirect, and the first fallback is reported once.
+        // uses Cpu_Indirect, and the fallback is reported when it starts.
         // Get_opaque_path() returns the outcome.
         //
         // Every kept item gets the next entry of the object buffer. Opaque
         // items take indices [0, opaque) and transparent items continue
         // from there, which is what lets the culling pass process
-        // [0, opaque) only. Items beyond MAX_OBJECTS are skipped, with a
-        // single warning.
+        // [0, opaque) only. Items beyond MAX_OBJECTS are skipped, and the
+        // overflow is reported when it starts.
         //
         // _settings.frustum_culling: items whose bounding ellipsoid (mesh
         // bounding sphere placed by the model matrix) lies outside the
@@ -230,10 +238,34 @@ namespace Renderer_System
         Frustum         frozen_frustum;
         bool                       capture_frozen_frustum = false;
 
-        // Each warning is reported once.
-        bool                       warned_invalid_item = false;
-        bool                       warned_object_overflow = false;
-        bool                       warned_gpu_path_fallback = false;
+        // When a problem of the frames is reported (see the class comment):
+        // once per episode, and again within it when it grows beyond what
+        // was reported.
+        class Episode_Report
+        {
+        public:
+
+            // Frames without the problem after which its next appearance is
+            // a new episode (two seconds at 60 frames per second). Counted
+            // in frames, not in time, so it does not depend on a clock.
+            static constexpr uint32_t REARM_FRAMES = 120;
+
+            // Called once per frame with the size of the problem in it (0:
+            // the frame is clean). True when it has to be reported now: the
+            // size is larger than any reported in this episode.
+            bool Update(uint32_t _size);
+
+        private:
+
+            uint32_t reported_size = 0;   // largest size reported in the episode
+            uint32_t clean_frames = 0;    // consecutive frames without the problem
+        };
+
+        // Sizes: the number of invalid items skipped; 1 while the object
+        // buffer overflows; 1 while the GPU path falls back.
+        Episode_Report             invalid_items_report;
+        Episode_Report             object_overflow_report;
+        Episode_Report             gpu_path_fallback_report;
     };
 
 } // namespace Renderer_System
