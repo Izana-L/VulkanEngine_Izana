@@ -37,12 +37,12 @@ namespace EngineCore
     //   1. Finds the active camera (lowest render_order Camera_Component
     //      with is_active=true) and builds the RenderView from its WORLD
     //      transform, plus the clear color, the near plane distance and the
-    //      world space culling planes (CoreTypes::Frustum), built from the
+    //      world space culling planes (Frustum), built from the
     //      camera parameters and the same basis as the view matrix.
     //   2. Iterates entities with Transform_Component + Mesh_Component,
     //      resolves Asset_Handle -> gpu_id, reads the optional
-    //      Material_Component (its material table slot, and the tint alpha
-    //      that routes each item to the opaque or the transparent list)
+    //      Material_Component (its material table slot, and its alpha mode,
+    //      which routes each item to the opaque or the transparent list)
     //      and fills the transforms. Textures are not resolved here: the
     //      Engine did it once, when it registered the material.
     //   3. Iterates entities with Transform_Component + Light_Component,
@@ -89,6 +89,12 @@ namespace EngineCore
         // exist has been reported; such materials fall back to the default
         // preset silently afterwards.
         bool warned_invalid_sampler = false;
+
+        // Set once a light with invalid fields, or of an unknown type, has
+        // been reported; the extract keeps sanitizing (or skipping) them
+        // silently afterwards.
+        bool warned_invalid_light = false;
+        bool warned_unknown_light_type = false;
     };
 
 } // namespace EngineCore

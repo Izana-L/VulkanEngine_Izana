@@ -122,9 +122,22 @@ namespace MathLib
         }
 
 
-        // Checks whether the matrix is singular (determinant ~0, no inverse exists)
+        // Checks whether the matrix is singular (no inverse exists).
+        // The determinant alone cannot decide this: it grows and shrinks with the
+        // SIZE of the matrix (Scale(0.01, 0.01) has det 1e-4 and is perfectly
+        // invertible), so an absolute threshold on it flags valid small matrices.
+        // Instead each column is normalized to unit length first; the determinant
+        // of that matrix is the Hadamard ratio, in [0, 1]: 1 when the columns are
+        // perpendicular, 0 when they are linearly dependent, whatever their size.
+        // "epsilon" is a threshold on that ratio. A zero column, or a matrix with
+        // NaN/inf components, counts as singular.
         inline bool Is_singular(const Matrix2& m, float epsilon = Constants::EPSILON_SMALL) {
-            return std::abs(Determinant(m)) < epsilon;
+            const float len0 = glm::length(m[0]);
+            const float len1 = glm::length(m[1]);
+            if (!(len0 > 0.0f) || !(len1 > 0.0f)) return true; // also catches NaN
+
+            const float ratio = std::abs(Determinant(Matrix2(m[0] / len0, m[1] / len1)));
+            return !(ratio >= epsilon); // written this way so NaN counts as singular
         }
 
         // Checks if the matrix is orthogonal: rows and columns are all unit-length

@@ -173,8 +173,7 @@ namespace Renderer_System
         {
             const Gpu_Scope scope(debug_utils, gpu_timer, command_buffer, "Light clusters", 1.0f, 0.9f, 0.2f);
 
-            light_clusters.Record_dispatch(command_buffer, compute_pipeline_layout.Get_handle(),
-                                           uploaded_directional_light_count, uploaded_light_count);
+            light_clusters.Record_dispatch(command_buffer);
         }
 
         // -- Frustum culling and draw generation --

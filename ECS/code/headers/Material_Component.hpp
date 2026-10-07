@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Alpha_Mode.hpp>
 #include <Asset_Handle.hpp>
 #include <Sampler_Preset.hpp>
 #include <Vector.hpp>
@@ -70,8 +71,21 @@ namespace ECS
         // =========================================================
 
         // Base color tint. Multiplies the albedo texture sample (or used directly
-        // if no albedo texture). RGBA — alpha is reserved for future transparency.
+        // if no albedo texture). RGBA: the alpha is multiplied with the alpha of
+        // the vertex color and of the texture, and what the product is used for
+        // is decided by alpha_mode, not by its value.
         MathLib::Vector4 base_color_factor = { 1.0f, 1.0f, 1.0f, 1.0f };
+
+        // How the alpha is used (CoreTypes::Alpha_Mode):
+        //   Opaque - ignored: the surface is solid. The default. A tint with
+        //            alpha below one does NOT make the material translucent
+        //            by itself (Gpu_Assets::Create_material reports it);
+        //   Mask   - fragments with alpha below alpha_cutoff are discarded;
+        //   Blend  - translucent: drawn by the transparent pass, blended.
+        CoreTypes::Alpha_Mode alpha_mode = CoreTypes::Alpha_Mode::Opaque;
+
+        // Alpha_Mode::Mask threshold, in [0, 1]. Ignored by the other modes.
+        float alpha_cutoff = 0.5f;
 
         // Metallic multiplier [0..1]. 0 = dielectric, 1 = full metal.
         float metallic_factor = 1.0f;

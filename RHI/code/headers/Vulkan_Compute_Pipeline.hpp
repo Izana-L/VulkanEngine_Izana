@@ -84,6 +84,17 @@ namespace Renderer_System
                                0, sizeof(Push_Constants), &_push_constants);
             vkCmdDispatch(_command_buffer, _group_count_x, _group_count_y, _group_count_z);
         }
+
+        // Same as Dispatch for a shader that declares no push constants:
+        // binds the pipeline and dispatches. The descriptor sets are bound
+        // by the caller, as for Dispatch. Must be recorded outside a render
+        // pass.
+        void Dispatch_groups(VkCommandBuffer _command_buffer,
+                             uint32_t _group_count_x, uint32_t _group_count_y = 1, uint32_t _group_count_z = 1) const
+        {
+            vkCmdBindPipeline(_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, Get_handle());
+            vkCmdDispatch(_command_buffer, _group_count_x, _group_count_y, _group_count_z);
+        }
     };
 
 } // namespace Renderer_System

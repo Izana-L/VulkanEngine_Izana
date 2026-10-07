@@ -11,7 +11,8 @@
 //   scene_data.glsl   - material table;
 //   bindless.glsl     - Sample_bindless, with GL_EXT_nonuniform_qualifier
 //                       enabled by the including shader;
-//   cluster_data.glsl - cluster grid and light index list.
+//   cluster_data.glsl - cluster grid and light index list;
+//   safe_math.glsl    - Safe_normalize.
 // Fragment stage only: the cluster of a fragment comes from gl_FragCoord.
 
 // Flat provisional ambient: replaced by IBL once PBR exists.
@@ -32,12 +33,15 @@ const float DEBUG_VIEW_OPACITY = 0.8;
 // default texture, which leaves the tint unchanged. Sample_bindless
 // applies nonuniformEXT: the material, and so the texture index, may
 // differ between invocations of one subgroup once draws are merged.
-// Alpha < 1 is what routes an item to the transparent pass.
-vec4 Material_base_color(uint _material_index, vec4 _vertex_color, vec2 _uv)
+//
+// The alpha is the product of the three alphas. What it is used for is the
+// material's alpha mode (Material::alpha_mode): the opaque pass ignores it
+// or tests it against alpha_cutoff (mesh.frag), and only the BLEND mode,
+// which the Extractor routes to the transparent pass, blends with it
+// (mesh_oit.frag).
+vec4 Material_base_color(Material _material, vec4 _vertex_color, vec2 _uv)
 {
-    const Material material = material_buffer.materials[_material_index];
-
-    return _vertex_color * material.base_color * Sample_bindless(material.albedo_texture_index, material.albedo_sampler_index, _uv);
+    return _vertex_color * _material.base_color * Sample_bindless(_material.albedo_texture_index, _material.albedo_sampler_index, _uv);
 }
 
 // Distance of a world space point along the view direction (-z in view
@@ -47,6 +51,20 @@ vec4 Material_base_color(uint _material_index, vec4 _vertex_color, vec2 _uv)
 float View_depth(vec3 _world_position)
 {
     return -(frame.view * vec4(_world_position, 1.0)).z;
+}
+
+// Unit vector from a world space point TOWARDS the eye. With a perspective
+// camera it differs per point; with an orthographic one every view ray is
+// parallel, so it is the same for the whole image: the direction to the
+// camera, the third row of the rotation of the view matrix (-forward).
+// The two projections are told apart by projection[3][3]: 0 for the
+// infinite reverse-Z perspective (w_clip = -z), 1 for the orthographic one.
+vec3 View_vector(vec3 _world_position)
+{
+    if (frame.projection[3][3] != 0.0)
+        return vec3(frame.view[0][2], frame.view[1][2], frame.view[2][2]);
+
+    return Safe_normalize(frame.camera_position - _world_position);
 }
 
 // Adds the diffuse and specular contribution of one light to the
@@ -63,7 +81,7 @@ void Accumulate_light(Light light, vec3 N, vec3 V, vec3 _world_position, inout v
     {
         // Directional: the packet stores the direction the light POINTS
         // TO, and the vector TOWARDS the light is needed here.
-        L = normalize(-light.position_or_direction);
+        L = Safe_normalize(-light.position_or_direction);
     }
     else
     {
@@ -80,13 +98,18 @@ void Accumulate_light(Light light, vec3 N, vec3 V, vec3 _world_position, inout v
 
         if (light.type == LIGHT_TYPE_SPOT)
         {
-            // Spot cone: angle between the cone axis and the fragment.
-            // inner = full intensity, outer = 0.
-            float cos_angle = dot(normalize(light.spot_direction), -L);
-            float cos_inner = cos(light.inner_angle);
-            float cos_outer = cos(light.outer_angle);
+            // Spot cone: cosine of the angle between the cone axis and the
+            // fragment, through the ramp the CPU precomputed for the light
+            // (Light in frame_set.glsl): 1 inside the inner cone, 0 outside
+            // the outer one, smooth in between. The smoothstep polynomial
+            // is applied to the clamped ramp instead of calling
+            // smoothstep(cos_outer, cos_inner, x), which is undefined when
+            // the edges are equal or reversed, and no cos() runs per
+            // fragment.
+            const float cos_angle = dot(Safe_normalize(light.spot_direction), -L);
+            const float ramp      = clamp(cos_angle * light.spot_scale + light.spot_offset, 0.0, 1.0);
 
-            attenuation *= smoothstep(cos_outer, cos_inner, cos_angle);
+            attenuation *= ramp * ramp * (3.0 - 2.0 * ramp);
         }
     }
 
@@ -98,7 +121,7 @@ void Accumulate_light(Light light, vec3 N, vec3 V, vec3 _world_position, inout v
 
     if (n_dot_l > 0.0)
     {
-        vec3  H = normalize(L + V);
+        vec3  H = Safe_normalize(L + V);
         float n_dot_h = max(dot(N, H), 0.0);
         specular += radiance * SPECULAR_STRENGTH * pow(n_dot_h, SPECULAR_POWER);
     }
@@ -130,13 +153,15 @@ vec3 Id_color(uint id)
 // over it.
 //   _base_color     - Material_base_color(...).rgb;
 //   _world_position - interpolated world position of the fragment;
-//   _world_normal   - interpolated world normal (normalized here);
+//   _world_normal   - interpolated world normal (normalized here; a zero
+//                     normal gets no direct light instead of turning the
+//                     fragment into NaN);
 //   _frag_coord     - gl_FragCoord.xy, selects the screen tile;
 //   _view_depth     - View_depth(_world_position), selects the slice.
 vec3 Shade_surface(vec3 _base_color, vec3 _world_position, vec3 _world_normal, vec2 _frag_coord, float _view_depth)
 {
-    const vec3 N = normalize(_world_normal);
-    const vec3 V = normalize(frame.camera_position - _world_position);
+    const vec3 N = Safe_normalize(_world_normal);
+    const vec3 V = View_vector(_world_position);
 
     // Cluster of the fragment: screen tile from the fragment coordinates,
     // depth slice from the view space distance.

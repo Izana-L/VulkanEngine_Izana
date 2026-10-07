@@ -81,12 +81,16 @@ namespace MathLib
 
     // Wraps a value to stay within [min, max), looping around at the edges.
     // Useful for angles (keeping rotation within 0-360) or cyclic UV coordinates.
+    // The result never reaches max: a tiny negative input (e.g. -1e-10 in [0, 1))
+    // would round up to exactly max in float, so in that case the largest float
+    // below max is returned.
     inline float Wrap(float value, float min, float max) {
         float range = max - min;
         if (range <= 0.0f) return min;
         float result = std::fmod(value - min, range);
         if (result < 0.0f) result += range;
-        return result + min;
+        result += min;
+        return (result >= max) ? std::nextafter(max, min) : result;
     }
     // =========================================================
     // Sign and basic math
@@ -146,9 +150,14 @@ namespace MathLib
     // Inverse of Lerp: given a value between a and b, returns what t produced it.
     // Useful for converting a measured value back into a normalized 0-1 range.
     // Example: InverseLerp(0, 100, 25) -> 0.25
+    // A zero-width range (a == b) has no unique answer, so it returns 0. There is
+    // no "too narrow" threshold: a valid but tiny range still works
+    // (InverseLerp(0, 5e-5, 2.5e-5) == 0.5), since the right size of a range
+    // depends on the units the caller works in.
     inline float InverseLerp(float a, float b, float value) {
-        if (Approximately(a, b)) return 0.0f;
-        return (value - a) / (b - a);
+        const float range = b - a;
+        if (std::abs(range) <= Constants::FLOAT_MIN) return 0.0f;
+        return (value - a) / range;
     }
 
     // Remaps a value from one range to another.
@@ -326,10 +335,14 @@ namespace MathLib
         return value != 0 && (value & (value - 1)) == 0;
     }
 
-    // Rounds up to the next power of two.
+    // Rounds up to the next power of two (a power of two maps to itself, 0 maps to 1).
     // Useful for allocating GPU resources that require power-of-two sizes.
+    // Values above 2^31 have no result that fits in 32 bits: 0 is returned for
+    // them instead of silently wrapping around. 0 is never a valid result
+    // otherwise, so callers can test for it.
     inline unsigned int NextPowerOfTwo(unsigned int value) {
         if (value == 0) return 1;
+        if (value > 0x80000000u) return 0; // 2^32 does not fit
         value--;
         value |= value >> 1;
         value |= value >> 2;

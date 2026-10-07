@@ -210,16 +210,20 @@ namespace EngineCore
                 item.mesh_gpu_id = gpu_id;
                 item.material_index = Renderer_System::Default_Material;
 
-                // Alpha of the material tint: what routes the item to the
-                // opaque or the transparent pass below.
-                float base_alpha = 1.0f;
+                // Alpha mode of the material: what routes the item to the
+                // opaque or the transparent pass below. The mode is an
+                // authoring decision, not a guess from the value of the
+                // tint alpha: Mask materials stay in the opaque pass (their
+                // fragments are discarded by the shader), and only Blend
+                // ones are blended.
+                bool blended = false;
 
                 if (const ECS::Material_Component* material = _world.Try_get_component<ECS::Material_Component>(entity))
                 {
                     if (material->gpu_material_id != ECS::Material_Component::INVALID_GPU_MATERIAL_ID)
                         item.material_index = material->gpu_material_id;
 
-                    base_alpha = material->base_color_factor.a;
+                    blended = material->alpha_mode == CoreTypes::Alpha_Mode::Blend;
                 }
 
                 // Store the world matrix and record its index.
@@ -230,12 +234,12 @@ namespace EngineCore
                 // the same space the matrix that draws the item lives in.
                 const float depth = MathLib::Vec3::Dot(transform.World_position() - cam_pos, cam_forward);
 
-                // Alpha below one routes the item to the transparent pass:
+                // A Blend material routes the item to the transparent pass:
                 // accumulated by the weighted blended OIT, depth tested
                 // without writes. The composite does not depend on the
                 // draw order, so the key groups the item like an opaque one
                 // (pipeline, material, mesh, then front-to-back).
-                const bool transparent = base_alpha < 1.0f;
+                const bool transparent = blended;
 
                 // Objects whose transform inverts the winding are drawn with
                 // the opposite front face: the key keeps them together, right
@@ -279,15 +283,28 @@ namespace EngineCore
 
         _world.Query<ECS::Light_Component, ECS::Transform_Component>(
             [&](ECS::Entity                    /*entity*/,
-                const ECS::Light_Component& light_comp,
+                const ECS::Light_Component& raw_light,
                 const ECS::Transform_Component& transform)
             {
+                // The fields of a light are public and can change after its
+                // factory validated them, so the values are checked here,
+                // where they become GPU data: an invalid light is reported
+                // once and replaced by its sanitized copy (non-finite or
+                // negative values back to the defaults, a spot cone forced
+                // into 0 <= inner < outer <= a hemisphere).
+                if (!raw_light.Is_valid() && !warned_invalid_light)
+                {
+                    std::cerr << "[Extractor] A light has an invalid " << raw_light.Invalid_field()
+                        << "; its sanitized values are used. Further occurrences are not reported.\n";
+                    warned_invalid_light = true;
+                }
+
+                const ECS::Light_Component light_comp = raw_light.Sanitized();
+
                 Renderer_System::GPU_Light gpu_light{};
                 gpu_light.color = light_comp.color;
                 gpu_light.intensity = light_comp.intensity;
                 gpu_light.range = light_comp.range;
-                gpu_light.inner_angle = light_comp.inner_angle;
-                gpu_light.outer_angle = light_comp.outer_angle;
 
                 // World-space direction and position: a light under a
                 // rotating parent must follow it.
@@ -300,19 +317,39 @@ namespace EngineCore
                     // The direction the light POINTS TO. The shader negates
                     // it to get its L vector.
                     gpu_light.position_or_direction = world_forward;
-                    gpu_light.type = 0;
+                    gpu_light.type = Renderer_System::Light_Type::Directional;
                     break;
 
                 case ECS::Light_Component::Type::Point:
                     gpu_light.position_or_direction = world_position;
-                    gpu_light.type = 1;
+                    gpu_light.type = Renderer_System::Light_Type::Point;
                     break;
 
                 case ECS::Light_Component::Type::Spot:
+                {
                     gpu_light.position_or_direction = world_position;
                     gpu_light.spot_direction = world_forward;
-                    gpu_light.type = 2;
+                    gpu_light.type = Renderer_System::Light_Type::Spot;
+
+                    // The cone as the ramp the shader evaluates, from the
+                    // sanitized angles.
+                    const Renderer_System::Spot_Cone cone = Renderer_System::Make_spot_cone(light_comp.inner_angle, light_comp.outer_angle);
+                    gpu_light.spot_scale = cone.scale;
+                    gpu_light.spot_offset = cone.offset;
                     break;
+                }
+
+                default:
+                    // A type this extract does not know would otherwise
+                    // keep the default of GPU_Light, a directional light,
+                    // and light the whole scene. It is left out instead.
+                    if (!warned_unknown_light_type)
+                    {
+                        std::cerr << "[Extractor] A light has an unknown type (" << static_cast<int>(light_comp.type)
+                            << "); it is not rendered. Further occurrences are not reported.\n";
+                        warned_unknown_light_type = true;
+                    }
+                    return;
                 }
 
                 _out_packet.lights.push_back(gpu_light);
@@ -324,7 +361,7 @@ namespace EngineCore
         // lights and never a sun.
         const auto first_local = std::stable_partition(
             _out_packet.lights.begin(), _out_packet.lights.end(),
-            [](const Renderer_System::GPU_Light& _light) { return _light.type == 0; });
+            [](const Renderer_System::GPU_Light& _light) { return _light.type == Renderer_System::Light_Type::Directional; });
 
         _out_packet.directional_light_count =
             static_cast<uint32_t>(first_local - _out_packet.lights.begin());

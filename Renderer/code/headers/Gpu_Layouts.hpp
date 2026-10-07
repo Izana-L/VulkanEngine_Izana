@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Alpha_Mode.hpp>
 #include <Renderer_Limits.hpp>
 
 #include <Matrix.hpp>
@@ -7,6 +8,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
+#include <string>
 
 namespace Renderer_System
 {
@@ -138,22 +141,13 @@ namespace Renderer_System
     static_assert(offsetof(Procedural_Push_Constants, time) == 8, "Procedural_Push_Constants breaks the layout of procedural.comp");
     static_assert(sizeof(Procedural_Push_Constants) <= COMPUTE_PUSH_CONSTANT_SIZE, "Procedural_Push_Constants exceeds the compute push constant range");
 
-    // Mirror of `Cluster_Push_Constants` in cluster_lights.comp. 16 bytes.
-    // The pass tests lights [first_local_light, light_count): the
-    // directional lights at the start of the buffer are not clustered.
-    struct Cluster_Push_Constants
-    {
-        uint32_t cluster_count;           // invocations beyond it return at once
-        uint32_t light_index_capacity;    // entries of the light index list
-        uint32_t first_local_light;       // = Frame_UBO::directional_light_count
-        uint32_t light_count;             // = Frame_UBO::light_count
-    };
-    static_assert(sizeof(Cluster_Push_Constants) == 16, "Cluster_Push_Constants breaks the layout of cluster_lights.comp");
-    static_assert(offsetof(Cluster_Push_Constants, cluster_count) == 0, "Cluster_Push_Constants breaks the layout of cluster_lights.comp");
-    static_assert(offsetof(Cluster_Push_Constants, light_index_capacity) == 4, "Cluster_Push_Constants breaks the layout of cluster_lights.comp");
-    static_assert(offsetof(Cluster_Push_Constants, first_local_light) == 8, "Cluster_Push_Constants breaks the layout of cluster_lights.comp");
-    static_assert(offsetof(Cluster_Push_Constants, light_count) == 12, "Cluster_Push_Constants breaks the layout of cluster_lights.comp");
-    static_assert(sizeof(Cluster_Push_Constants) <= COMPUTE_PUSH_CONSTANT_SIZE, "Cluster_Push_Constants exceeds the compute push constant range");
+    // cluster_lights.comp has no push constants: the lights to test
+    // ([Frame_UBO::directional_light_count, Frame_UBO::light_count): the
+    // directional lights at the start of the buffer are not clustered), the
+    // cluster count (the product of Frame_UBO::cluster_tiles_x, _y and
+    // _slices) and the capacity of the light index list (the length of its
+    // buffer) all come from the frame's uniform block and its buffers, so
+    // each number has one source.
 
     // Mirror of `Cull_Push_Constants` in cull_objects.comp. 16 bytes.
     // The pass reads objects [0, object_count): the opaque objects, which
@@ -162,7 +156,7 @@ namespace Renderer_System
     {
         uint32_t object_count;       // invocations beyond it return at once
         uint32_t command_capacity;   // entries of the draw command buffer
-        uint32_t pass_bit;           // CoreTypes::Render_Pass_Bit an object needs to be drawn
+        uint32_t pass_bit;           // Render_Pass_Bit an object needs to be drawn
         uint32_t frustum_culling;    // 0: every active object gets a command (compaction only)
     };
     static_assert(sizeof(Cull_Push_Constants) == 16, "Cull_Push_Constants breaks the layout of cull_objects.comp");
@@ -177,7 +171,7 @@ namespace Renderer_System
     // are built from too.
     namespace Object_Flag
     {
-        // Bits 0-7: the CoreTypes::Render_Pass_Bit mask of the draw item.
+        // Bits 0-7: the Render_Pass_Bit mask of the draw item.
         inline constexpr uint32_t Pass_Mask = GPU_OBJECT_FLAG_PASS_MASK;
 
         // The entry describes an object to draw this frame. The culling
@@ -237,14 +231,34 @@ namespace Renderer_System
     struct Material_GPU
     {
         MathLib::Vector4 base_color;             // tint multiplied with vertex color and albedo sample
-        uint32_t         albedo_texture_index;   // bindless texture slot; untextured = CoreTypes::Default_Texture::White
+        uint32_t         albedo_texture_index;   // bindless texture slot; untextured = Default_Texture::White
         uint32_t         albedo_sampler_index;   // slot in the bindless sampler array (a CoreTypes::Sampler_Preset value)
-        uint32_t         _padding0;
-        uint32_t         _padding1;
+        uint32_t         alpha_mode;             // GPU_ALPHA_MODE_* (Alpha_Mode below)
+        float            alpha_cutoff;           // GPU_ALPHA_MODE_MASK threshold, in [0, 1]
     };
     static_assert(sizeof(Material_GPU) == 32, "Material_GPU breaks the std430 layout of scene_data.glsl");
     static_assert(offsetof(Material_GPU, albedo_texture_index) == 16, "Material_GPU breaks the std430 layout of scene_data.glsl");
     static_assert(offsetof(Material_GPU, albedo_sampler_index) == 20, "Material_GPU breaks the std430 layout of scene_data.glsl");
+    static_assert(offsetof(Material_GPU, alpha_mode) == 24, "Material_GPU breaks the std430 layout of scene_data.glsl");
+    static_assert(offsetof(Material_GPU, alpha_cutoff) == 28, "Material_GPU breaks the std430 layout of scene_data.glsl");
+
+    // Value of Material_GPU::alpha_mode for a mode of the engine: the
+    // GPU_ALPHA_MODE_* macros the shaders read (gpu_shared.h). An explicit
+    // mapping, not a cast: the two enumerations do not have to share their
+    // values, and a mode added to one of them without the other is an error
+    // here instead of a wrong number on the GPU.
+    inline uint32_t To_gpu_alpha_mode(CoreTypes::Alpha_Mode _mode)
+    {
+        switch (_mode)
+        {
+        case CoreTypes::Alpha_Mode::Opaque: return GPU_ALPHA_MODE_OPAQUE;
+        case CoreTypes::Alpha_Mode::Mask:   return GPU_ALPHA_MODE_MASK;
+        case CoreTypes::Alpha_Mode::Blend:  return GPU_ALPHA_MODE_BLEND;
+        case CoreTypes::Alpha_Mode::Count:  break;
+        }
+
+        throw std::invalid_argument("To_gpu_alpha_mode: " + std::to_string(static_cast<uint32_t>(_mode)) + " is not an Alpha_Mode");
+    }
 
     // Mirror of `Mesh_Info` in mesh_table.glsl (std430). One entry per mesh
     // gpu id in the mesh table (set 2, Binding_Per_Material::Meshes),
@@ -298,20 +312,25 @@ namespace Renderer_System
     static_assert(sizeof(Cluster_Counters_GPU) == 16, "Cluster_Counters_GPU breaks the std430 layout of cluster_data.glsl");
 
     // Mirror of `Draw_Count` in cull_objects.comp: the count buffers of
-    // vkCmdDrawIndexedIndirectCount, one counter per draw bucket, and the
-    // total. Reset to zero at the start of every frame, before the culling
-    // pass. The draw of bucket b reads its count at
-    // offsetof(Draw_Count_GPU, bucket_draw_count) + b * sizeof(uint32_t).
+    // vkCmdDrawIndexedIndirectCount, one counter per draw bucket, the total,
+    // and the objects the pass could not give a command to. Reset to zero at
+    // the start of every frame, before the culling pass. The draw of bucket
+    // b reads its count at
+    // offsetof(Draw_Count_GPU, bucket_draw_count) + b * sizeof(uint32_t),
+    // with the capacity of the bucket as its maximum: a counter beyond the
+    // capacity (only when dropped_draw_count is not zero) never makes the
+    // draw read a command that was not written.
     struct Draw_Count_GPU
     {
         uint32_t total_draw_count;                        // commands written in all buckets: the objects the culling pass kept
-        uint32_t _padding0;
+        uint32_t dropped_draw_count;                      // objects that passed the culling but got no command: bucket out of range or full
         uint32_t _padding1;
         uint32_t _padding2;
         uint32_t bucket_draw_count[MAX_DRAW_BUCKETS];     // commands written in each bucket
     };
     static_assert(sizeof(Draw_Count_GPU) == 16 + 4 * MAX_DRAW_BUCKETS, "Draw_Count_GPU breaks the std430 layout of cull_objects.comp");
     static_assert(offsetof(Draw_Count_GPU, bucket_draw_count) == 16, "Draw_Count_GPU breaks the std430 layout of cull_objects.comp");
+    static_assert(offsetof(Draw_Count_GPU, dropped_draw_count) == 4, "Draw_Count_GPU breaks the std430 layout of cull_objects.comp");
 
     // CPU-side copy of the GPU counters of one frame, filled by transfer
     // copies at the end of the compute work and read once the last
@@ -321,9 +340,15 @@ namespace Renderer_System
         uint32_t cluster_light_references;   // Cluster_Counters_GPU::light_index_count
         uint32_t cluster_lights_dropped;     // Cluster_Counters_GPU::dropped_light_count
         uint32_t gpu_opaque_draws;           // Draw_Count_GPU::total_draw_count
-        uint32_t _padding0;
+        uint32_t gpu_draws_dropped;          // Draw_Count_GPU::dropped_draw_count
     };
     static_assert(sizeof(Frame_Stats_GPU) == 16, "Frame_Stats_GPU layout changed: update Frame_Statistics::Record_readback");
     static_assert(offsetof(Frame_Stats_GPU, gpu_opaque_draws) == 8, "Frame_Stats_GPU layout changed: update Frame_Statistics::Record_readback");
+
+    // The two draw counters are copied as one range: they are adjacent in
+    // Draw_Count_GPU and in Frame_Stats_GPU, in the same order.
+    static_assert(offsetof(Draw_Count_GPU, dropped_draw_count) - offsetof(Draw_Count_GPU, total_draw_count)
+                  == offsetof(Frame_Stats_GPU, gpu_draws_dropped) - offsetof(Frame_Stats_GPU, gpu_opaque_draws),
+                  "Frame_Stats_GPU layout changed: update Frame_Statistics::Record_readback");
 
 } // namespace Renderer_System

@@ -1,6 +1,10 @@
 #include <Vulkan_Render_Pass.hpp>
 #include <Vulkan_Utils.hpp>
 
+// The fragment output locations and input attachment indices the shaders
+// declare (mesh_oit.frag, oit_composite.frag).
+#include "../../shaders/common/gpu_shared.h"
+
 #include <stdexcept>
 #include <iostream>
 #include <array>
@@ -116,17 +120,27 @@ namespace Renderer_System {
         const VkAttachmentReference depth_read_reference{ Render_Pass_Attachment::Depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
 
         // Outputs of the transparent subpass, in fragment output location
-        // order: location 0 = accumulation, location 1 = revealage
-        // (mesh_oit.frag).
-        const std::array<VkAttachmentReference, 2> oit_outputs = { {
-            { Render_Pass_Attachment::Oit_Accumulation, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL },
-            { Render_Pass_Attachment::Oit_Revealage,    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL } } };
+        // order. The locations of mesh_oit.frag are the GPU_OIT_OUTPUT_*
+        // macros of gpu_shared.h, and each reference is stored at the index
+        // of its location.
+        static_assert(GPU_OIT_OUTPUT_ACCUMULATION < 2 && GPU_OIT_OUTPUT_REVEALAGE < 2
+                      && GPU_OIT_OUTPUT_ACCUMULATION != GPU_OIT_OUTPUT_REVEALAGE,
+                      "The OIT fragment outputs are the locations 0 and 1");
 
-        // Inputs of the composite subpass, in input_attachment_index order:
-        // 0 = accumulation, 1 = revealage (oit_composite.frag).
-        const std::array<VkAttachmentReference, 2> oit_inputs = { {
-            { Render_Pass_Attachment::Oit_Accumulation, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
-            { Render_Pass_Attachment::Oit_Revealage,    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL } } };
+        std::array<VkAttachmentReference, 2> oit_outputs{};
+        oit_outputs[GPU_OIT_OUTPUT_ACCUMULATION] = { Render_Pass_Attachment::Oit_Accumulation, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+        oit_outputs[GPU_OIT_OUTPUT_REVEALAGE] = { Render_Pass_Attachment::Oit_Revealage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+
+        // Inputs of the composite subpass, in input_attachment_index order.
+        // The indices of oit_composite.frag are the GPU_OIT_INPUT_* macros,
+        // and each reference is stored at the index of its attachment.
+        static_assert(GPU_OIT_INPUT_ACCUMULATION < 2 && GPU_OIT_INPUT_REVEALAGE < 2
+                      && GPU_OIT_INPUT_ACCUMULATION != GPU_OIT_INPUT_REVEALAGE,
+                      "The OIT input attachments are the indices 0 and 1");
+
+        std::array<VkAttachmentReference, 2> oit_inputs{};
+        oit_inputs[GPU_OIT_INPUT_ACCUMULATION] = { Render_Pass_Attachment::Oit_Accumulation, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        oit_inputs[GPU_OIT_INPUT_REVEALAGE] = { Render_Pass_Attachment::Oit_Revealage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
 
         // Written by subpass 0 and blended over by subpass 2: its contents
         // must survive subpass 1, which does not use it.

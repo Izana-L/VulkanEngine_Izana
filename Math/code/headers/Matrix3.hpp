@@ -152,8 +152,26 @@ namespace MathLib
         // CRITICAL for correct lighting: when a mesh has non-uniform scale,
         // normals cannot be transformed by the same matrix as positions —
         // they must use this matrix instead, otherwise lighting breaks visually.
+        //
+        // Built from cofactors (the cross products of the columns) instead of an
+        // explicit inverse: inverse-transpose = cofactors / determinant. Unlike
+        // glm::inverse this never divides 0 by 0: if an axis is scaled to 0 (e.g.
+        // an object animating in from scale 0) the matrix is singular and the
+        // result is the cofactor matrix itself, which is finite and still points
+        // the right way: a mesh flattened onto a plane sends every normal to
+        // +-the plane normal. Its length is then not that of the (nonexistent)
+        // true inverse-transpose, so normals must be re-normalized after the
+        // transform, as they already are for any non-uniform scale.
+        // A mirroring matrix (determinant < 0) keeps its orientation.
         inline Matrix3 Normal_matrix(const Matrix3& m) {
-            return glm::transpose(glm::inverse(m));
+            const Vector3 cofactor0 = glm::cross(m[1], m[2]);
+            const Matrix3 cofactors(cofactor0, glm::cross(m[2], m[0]), glm::cross(m[0], m[1]));
+            const float det = glm::dot(m[0], cofactor0);
+
+            if (std::abs(det) > Constants::FLOAT_MIN)
+                return cofactors * (1.0f / det);
+
+            return (det < 0.0f) ? -cofactors : cofactors;
         }
 
         // Checks if the matrix is approximately equal to identity
@@ -170,9 +188,23 @@ namespace MathLib
         }
 
 
-        // Checks if the matrix is singular (no inverse exists)
+        // Checks if the matrix is singular (no inverse exists).
+        // The determinant alone cannot decide this: it grows and shrinks with the
+        // SIZE of the matrix (Scale_uniform(0.04) has det 6.4e-5 and is perfectly
+        // invertible), so an absolute threshold on it flags valid small matrices.
+        // Instead each column is normalized to unit length first; the determinant
+        // of that matrix is the Hadamard ratio, in [0, 1]: 1 when the columns are
+        // mutually perpendicular, 0 when they are linearly dependent, whatever
+        // their size. "epsilon" is a threshold on that ratio. A zero column, or a
+        // matrix with NaN/inf components, counts as singular.
         inline bool Is_singular(const Matrix3& m, float epsilon = Constants::EPSILON_SMALL) {
-            return std::abs(Determinant(m)) < epsilon;
+            const float len0 = glm::length(m[0]);
+            const float len1 = glm::length(m[1]);
+            const float len2 = glm::length(m[2]);
+            if (!(len0 > 0.0f) || !(len1 > 0.0f) || !(len2 > 0.0f)) return true; // also catches NaN
+
+            const float ratio = std::abs(Determinant(Matrix3(m[0] / len0, m[1] / len1, m[2] / len2)));
+            return !(ratio >= epsilon); // written this way so NaN counts as singular
         }
 
         // Checks if the matrix is orthogonal (pure rotation, no scale or shear).

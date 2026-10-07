@@ -2,6 +2,9 @@
 
 #include <vulkan/vulkan.h>
 
+// The attribute locations the shaders declare (mesh_vertex_input.glsl).
+#include "../../shaders/common/gpu_shared.h"
+
 #include <Vertex.hpp>
 
 #include <array>
@@ -88,24 +91,31 @@ namespace Renderer_System::Vulkan_Vertex_Layout
             return attribute;
         }
 
-        // The five attributes every lit mesh vertex shares, in the location
-        // order mesh.vert declares them. Written once for both the static
-        // and the skinned vertex, which have the same member names:
-        //   location 0 - position (vec3, R32G32B32_SFLOAT)
-        //   location 1 - normal   (vec3, A2B10G10R10_SNORM_PACK32)
-        //   location 2 - tangent  (vec4, A2B10G10R10_SNORM_PACK32: xyz = direction, w = bitangent sign)
-        //   location 3 - uv       (vec2, R32G32_SFLOAT)
-        //   location 4 - color    (vec4, R8G8B8A8_UNORM, per-vertex tint)
+        // The five attributes every lit mesh vertex shares, at the locations
+        // mesh_vertex_input.glsl declares them at: both sides take them from
+        // the GPU_VERTEX_LOCATION_* macros of gpu_shared.h. Written once for
+        // both the static and the skinned vertex, which have the same member
+        // names:
+        //   position (vec3, R32G32B32_SFLOAT)
+        //   normal   (vec3, A2B10G10R10_SNORM_PACK32)
+        //   tangent  (vec4, A2B10G10R10_SNORM_PACK32: xyz = direction, w = bitangent sign)
+        //   uv       (vec2, R32G32_SFLOAT)
+        //   color    (vec4, R8G8B8A8_UNORM, per-vertex tint)
+        // An attribute is stored at the index of its location, so the array
+        // is in location order whatever the values of the macros are.
         template< typename VERTEX_TYPE, size_t COUNT >
         inline void Fill_lit_mesh_attributes(std::array< VkVertexInputAttributeDescription, COUNT >& _attributes)
         {
             static_assert(COUNT >= 5, "A lit mesh vertex has at least five attributes");
+            static_assert(GPU_VERTEX_LOCATION_POSITION < 5 && GPU_VERTEX_LOCATION_NORMAL < 5 && GPU_VERTEX_LOCATION_TANGENT < 5
+                          && GPU_VERTEX_LOCATION_UV < 5 && GPU_VERTEX_LOCATION_COLOR < 5,
+                          "The lit mesh attribute locations must be 0 to 4: the skinned vertex adds locations 5 and 6");
 
-            _attributes[0] = Make_attribute(0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(VERTEX_TYPE, position));
-            _attributes[1] = Make_attribute(1, NORMAL_TANGENT_FORMAT, offsetof(VERTEX_TYPE, normal));
-            _attributes[2] = Make_attribute(2, NORMAL_TANGENT_FORMAT, offsetof(VERTEX_TYPE, tangent));
-            _attributes[3] = Make_attribute(3, VK_FORMAT_R32G32_SFLOAT, offsetof(VERTEX_TYPE, uv));
-            _attributes[4] = Make_attribute(4, VK_FORMAT_R8G8B8A8_UNORM, offsetof(VERTEX_TYPE, color));
+            _attributes[GPU_VERTEX_LOCATION_POSITION] = Make_attribute(GPU_VERTEX_LOCATION_POSITION, VK_FORMAT_R32G32B32_SFLOAT, offsetof(VERTEX_TYPE, position));
+            _attributes[GPU_VERTEX_LOCATION_NORMAL] = Make_attribute(GPU_VERTEX_LOCATION_NORMAL, NORMAL_TANGENT_FORMAT, offsetof(VERTEX_TYPE, normal));
+            _attributes[GPU_VERTEX_LOCATION_TANGENT] = Make_attribute(GPU_VERTEX_LOCATION_TANGENT, NORMAL_TANGENT_FORMAT, offsetof(VERTEX_TYPE, tangent));
+            _attributes[GPU_VERTEX_LOCATION_UV] = Make_attribute(GPU_VERTEX_LOCATION_UV, VK_FORMAT_R32G32_SFLOAT, offsetof(VERTEX_TYPE, uv));
+            _attributes[GPU_VERTEX_LOCATION_COLOR] = Make_attribute(GPU_VERTEX_LOCATION_COLOR, VK_FORMAT_R8G8B8A8_UNORM, offsetof(VERTEX_TYPE, color));
         }
     }
 

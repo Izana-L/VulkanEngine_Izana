@@ -370,12 +370,6 @@ namespace Renderer_System
 
         Render_Debug_Settings   debug_settings;
 
-        // Lights written to the light buffer this frame, and how many of
-        // them (the first ones) are directional: the range the cluster
-        // pass distributes is [directional, count).
-        uint32_t                uploaded_light_count = 0;
-        uint32_t                uploaded_directional_light_count = 0;
-
         // Near distance the cluster grid of this frame is built for: the
         // packet's near plane, or CLUSTER_FALLBACK_NEAR_DISTANCE when that
         // is not a positive, finite distance (reported by

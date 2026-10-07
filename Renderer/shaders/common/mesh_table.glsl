@@ -4,6 +4,9 @@
 // Set and binding numbers shared with C++.
 #include "gpu_shared.h"
 
+// Bounding_ellipsoid_center, Bounding_ellipsoid_extent, Ellipsoid_in_frustum.
+#include "bounding_math.glsl"
+
 // Mesh table: set 2, binding 1 (Binding_Per_Material::Meshes). One entry
 // per mesh gpu id, written when the mesh is uploaded, indexed by
 // Object::mesh_index. Visible to the vertex and compute stages only.
@@ -27,44 +30,8 @@ layout(set = GPU_SET_PER_MATERIAL, binding = GPU_BINDING_MESHES, std430) readonl
     Mesh_Info meshes[];
 } mesh_table;
 
-// ── Bounding ellipsoid ────────────────────────────────────────
-// The bounding sphere of a mesh (Mesh_Info::bounding_sphere, mesh space)
-// placed by a model matrix is an ellipsoid. The culling tests it directly,
-// plane by plane, instead of enclosing it in a world space sphere: a
-// sphere scaled by the longest column of the 3x3 only bounds T * R * S
-// matrices, and a rotated child under a non-uniformly scaled parent has
-// shear (Transform_System composes world = parent world * local), which
-// can make that radius up to 1 / sqrt(3) of the real extent.
-//
-// With M the upper 3x3 of the model (columns M0, M1, M2), (c, rho) the
-// local sphere and (n, w) a plane with its normal pointing inside:
-//   d = dot(n, M * c + t) + w     signed distance of the center,
-//   r = rho * |M^T n|             half-width of the ellipsoid along n,
-//                                 M^T n = (M0.n, M1.n, M2.n),
-// and the ellipsoid lies entirely outside when d < -r. Exact for any
-// affine matrix (non-uniform scale, shear, reflections), tighter than any
-// world sphere around the ellipsoid, and independent of the normal's
-// length, since d and r scale alike.
-//
-// Mirrored by CoreTypes::Frustum::Intersects_ellipsoid (RenderPacket.hpp)
-// for the CPU culling of the transparent items: both evaluate the same
-// formula.
-
-// World space center of the bounding ellipsoid.
-vec3 Bounding_ellipsoid_center(mat4 _model, vec4 _local_sphere)
-{
-    return (_model * vec4(_local_sphere.xyz, 1.0)).xyz;
-}
-
-// Half-width of the bounding ellipsoid measured along _normal:
-// _local_radius * |M^T _normal|.
-float Bounding_ellipsoid_extent(mat4 _model, float _local_radius, vec3 _normal)
-{
-    const vec3 transposed_normal = vec3(dot(_model[0].xyz, _normal),
-                                        dot(_model[1].xyz, _normal),
-                                        dot(_model[2].xyz, _normal));
-
-    return _local_radius * length(transposed_normal);
-}
+// The bounding ellipsoid of a mesh under a model matrix, and the frustum
+// test the culling applies to it, are in bounding_math.glsl, a set of pure
+// functions shared with the shader self-test.
 
 #endif

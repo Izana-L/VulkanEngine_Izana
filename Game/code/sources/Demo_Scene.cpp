@@ -236,9 +236,10 @@ namespace Game
             assets.Create_material(palette[i]);
         }
 
-        // Alpha below one routes the items to the transparent pass.
+        // The Blend alpha mode routes the items to the transparent pass.
         ECS::Material_Component glass_material;
         glass_material.base_color_factor = { 0.55f, 0.8f, 1.0f, 0.45f };
+        glass_material.alpha_mode = CoreTypes::Alpha_Mode::Blend;
         assets.Create_material(glass_material);
 
         // ── Object grid ────────────────────────────────────────
@@ -325,12 +326,13 @@ namespace Game
 
         // Colors far apart: with equal layers the order does not change the
         // result, and the single glass material of the grid hides any
-        // order error. Alpha below one routes every item to the
+        // order error. The Blend alpha mode routes every item to the
         // transparent pass.
         const auto make_glass = [&](const MathLib::Vector3& _color)
             {
                 ECS::Material_Component material;
                 material.base_color_factor = MathLib::Vector4(_color, TEST_OIT_ALPHA);
+                material.alpha_mode = CoreTypes::Alpha_Mode::Blend;
                 assets.Create_material(material);
                 return material;
             };

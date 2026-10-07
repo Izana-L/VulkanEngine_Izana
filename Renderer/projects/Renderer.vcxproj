@@ -124,6 +124,7 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
     <ClCompile Include="..\code\sources\Renderer_Passes.cpp" />
     <ClCompile Include="..\code\sources\Renderer_Setup.cpp" />
     <ClCompile Include="..\code\sources\Sampler_Cache.cpp" />
+    <ClCompile Include="..\code\sources\Shader_Self_Test.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Depth_Resources.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Framebuffer.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_OIT_Resources.cpp" />
@@ -156,6 +157,7 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
     <ClInclude Include="..\code\headers\RenderPacket.hpp" />
     <ClInclude Include="..\code\headers\Render_Debug_Settings.hpp" />
     <ClInclude Include="..\code\headers\Sampler_Cache.hpp" />
+    <ClInclude Include="..\code\headers\Shader_Self_Test.hpp" />
     <ClInclude Include="..\code\headers\Swapchain_Targets.hpp" />
     <ClInclude Include="..\code\headers\Validation_Mode.hpp" />
     <ClInclude Include="..\code\headers\Vertex_Packing.hpp" />

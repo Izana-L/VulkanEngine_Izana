@@ -8,7 +8,8 @@
 
 #include "common/scene_data.glsl"
 
-layout(location = 0) flat in uint frag_flags;
+// Input from bounds.vert
+#include "common/bounds_varyings.glsl"
 
 layout(location = 0) out vec4 out_color;
 

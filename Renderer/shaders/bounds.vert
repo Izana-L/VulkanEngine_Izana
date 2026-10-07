@@ -21,17 +21,13 @@
 
 // Vertex inputs - matches CoreTypes::Vertex_Static_Mesh, the layout every
 // graphics pipeline declares. Only the position is read; the other four
-// are declared so that every attribute of the pipeline is consumed by the
-// shader interface, which keeps the validation layer from reporting
-// attributes that are not consumed.
-layout(location = 0) in vec3 in_position;
-layout(location = 1) in vec3 in_normal;
-layout(location = 2) in vec4 in_tangent;
-layout(location = 3) in vec2 in_uv;
-layout(location = 4) in vec4 in_color;
+// are declared by the shared file, which keeps every attribute of the
+// pipeline consumed by the shader interface.
+#include "common/mesh_vertex_input.glsl"
 
-// flat: the flags of the object reach every fragment unchanged.
-layout(location = 0) flat out uint frag_flags;
+// Output to bounds.frag
+#define BOUNDS_VARYINGS_OUTPUT
+#include "common/bounds_varyings.glsl"
 
 void main()
 {
