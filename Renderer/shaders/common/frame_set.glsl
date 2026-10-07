@@ -12,15 +12,18 @@
 // Fields and their consumers:
 //   view               - mesh.frag (view depth of the fragment),
 //                        cluster_lights.comp (lights to view space)
-//   projection         - none today; kept for the passes that need it
-//                        apart (position reconstruction from depth)
+//   projection         - mesh.frag, through View_vector (shading.glsl):
+//                        projection[3][3] tells an orthographic camera (1)
+//                        from the infinite perspective one (0); kept as well
+//                        for the passes that need it apart (position
+//                        reconstruction from depth)
 //   view_projection    - mesh.vert, bounds.vert
 //   camera_position    - view-dependent lighting terms (mesh.frag)
-//   light_count        - mesh.frag, cluster_lights.comp (through its push
-//                        constants)
-//   cluster_grid       - mesh.frag: tiles X, tiles Y, slices, and in w the
-//                        number of directional lights, stored first in the
-//                        light buffer and never clustered
+//   light_count        - mesh.frag, cluster_lights.comp
+//   cluster_grid       - mesh.frag, cluster_lights.comp: tiles X, tiles Y,
+//                        slices, and in w the number of directional lights,
+//                        stored first in the light buffer and never
+//                        clustered
 //   cluster_params     - mesh.frag: render width and height in pixels, and
 //                        the scale and bias of the depth slice mapping
 //                        slice = floor(log(view_depth) * scale + bias)
@@ -75,7 +78,16 @@ const uint CLUSTER_VIEW_LIGHT_HEATMAP = GPU_CLUSTER_VIEW_LIGHT_HEATMAP;
 const uint CLUSTER_VIEW_DEPTH_SLICES  = GPU_CLUSTER_VIEW_DEPTH_SLICES;
 const uint CLUSTER_VIEW_CLUSTERS      = GPU_CLUSTER_VIEW_CLUSTERS;
 
-// EXACT mirror of CoreTypes::GPU_Light (RenderPacket.hpp), std430.
+// EXACT mirror of Renderer_System::GPU_Light (RenderPacket.hpp), std430.
+//
+// A spot light carries its cone as the two coefficients of a linear ramp of
+// the cosine of the angle to the axis, computed on the CPU
+// (Renderer_System::Make_spot_cone):
+//   spot_scale  = 1 / max(cos(inner) - cos(outer), SPOT_MIN_COS_GAP)
+//   spot_offset = -cos(outer) * spot_scale
+// so clamp(cos_angle * spot_scale + spot_offset, 0, 1) is 1 inside the inner
+// cone and 0 outside the outer one, and the ramp is well defined whatever
+// the angles are (smoothstep with equal or reversed edges is undefined).
 struct Light
 {
     vec3  position_or_direction;
@@ -83,16 +95,18 @@ struct Light
     vec3  color;
     float range;
     vec3  spot_direction;
-    float inner_angle;
-    float outer_angle;
-    int   type;                 // 0 = directional, 1 = point, 2 = spot
+    float spot_scale;
+    float spot_offset;
+    int   type;                 // LIGHT_TYPE_*
     float _pad0;
     float _pad1;
 };
 
-const int LIGHT_TYPE_DIRECTIONAL = 0;
-const int LIGHT_TYPE_POINT       = 1;
-const int LIGHT_TYPE_SPOT        = 2;
+// Values of Light::type: Renderer_System::Light_Type, built from the same
+// macros (gpu_shared.h).
+const int LIGHT_TYPE_DIRECTIONAL = GPU_LIGHT_TYPE_DIRECTIONAL;
+const int LIGHT_TYPE_POINT       = GPU_LIGHT_TYPE_POINT;
+const int LIGHT_TYPE_SPOT        = GPU_LIGHT_TYPE_SPOT;
 
 // Unsized array: what an SSBO allows and a UBO does not. Raising the
 // buffer capacity (MAX_LIGHTS in Renderer_Limits.hpp) does not touch this file.

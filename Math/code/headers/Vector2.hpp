@@ -119,9 +119,14 @@ namespace MathLib
 
         // Returns a vector with the same direction but length 1.
         // Used everywhere direction matters but magnitude doesn't (e.g. surface normals).
+        // A zero-length vector has no direction, so it is returned as ZERO
+        // instead of NaN (glm::normalize divides 0 by 0). There is no absolute
+        // "small" threshold: only a squared length below FLOAT_MIN (|v| < ~1e-19,
+        // where it underflows) counts as zero. NaN input still gives NaN.
         inline Vector2 Normalize(const Vector2& v)
         {
-            return glm::normalize(v);
+            const float len_sq = Length_squared(v);
+            return (len_sq <= Constants::FLOAT_MIN) ? Zero() : v * (1.0f / std::sqrt(len_sq));
         }
 
         // Checks if a vector already has length ~1 (within a small tolerance)
@@ -147,12 +152,15 @@ namespace MathLib
             return Vector2(std::cos(radians), std::sin(radians));
         }
 
-        // Returns the angle (in radians) between two vectors, ignoring their length
+        // Returns the unsigned angle (in radians, in [0, PI]) between two vectors,
+        // ignoring their length.
+        // Computed as atan2(|a x b|, a . b) rather than acos(a . b): acos is
+        // ill-conditioned near 0 and PI, while atan2 keeps its precision at every
+        // angle. It also needs no normalization, so a zero-length vector gives 0
+        // instead of NaN.
         inline float Angle_between(const Vector2& a, const Vector2& b)
         {
-            float dot = Dot(Normalize(a), Normalize(b));
-            dot = glm::clamp(dot, -1.0f, 1.0f); // avoid NaN from floating point errors in acos
-            return std::acos(dot);
+            return std::atan2(std::abs(Cross(a, b)), Dot(a, b));
         }
 
         // Rotates a vector by the given angle (in radians), counter-clockwise
@@ -209,20 +217,30 @@ namespace MathLib
 
         // Spherical interpolation: blends angle and length separately so the
         // result curves smoothly between directions instead of cutting straight across.
+        // The angle travelled is the SIGNED SHORTEST one between the two directions,
+        // so it never takes the long way around (a direction just below +PI and one
+        // just above -PI are close neighbours, not 340 degrees apart).
+        // A zero-length vector has no direction, so it falls back to Lerp.
         inline Vector2 Slerp(const Vector2& a, const Vector2& b, float t)
         {
+            const float lenA = Length(a);
+            if (Length_squared(a) <= Constants::FLOAT_MIN || Length_squared(b) <= Constants::FLOAT_MIN)
+                return Lerp(a, b, t);
 
-            float angle = glm::mix(Angle(a), Angle(b), t);
-            float len = glm::mix(Length(a), Length(b), t);
+            const float len = glm::mix(lenA, Length(b), t);
+            const float delta = std::atan2(Cross(a, b), Dot(a, b)); // signed shortest angle, in (-PI, PI]
 
-            return From_angle(angle) * len;
+            return Rotate(a / lenA, delta * t) * len;
         }
 
         // Eased interpolation: same path as Lerp, but with a smooth acceleration
         // and deceleration curve instead of constant speed.
+        // t is clamped to [0, 1], like GLSL smoothstep: the curve overshoots
+        // wildly outside that range (t=2 would give -4).
         inline Vector2 Smooth_step(const Vector2& a, const Vector2& b, float t)
         {
-            float smoothT = t * t * (3.0f - 2.0f * t); // classic smoothstep curve
+            float clampedT = glm::clamp(t, 0.0f, 1.0f);
+            float smoothT = clampedT * clampedT * (3.0f - 2.0f * clampedT); // classic smoothstep curve
             return Lerp(a, b, smoothT);
         }
 
@@ -243,10 +261,13 @@ namespace MathLib
         // Projects v onto the direction of "onto": returns the component of v
         // that points in the same direction as "onto".
         // Used for: sliding movement along a surface, shadow calculations.
+        // The result does not depend on the length of "onto", so there is no
+        // "too short" threshold: only a (numerically) zero-length "onto", which
+        // has no direction to project on, returns zero.
         inline Vector2 Project(const Vector2& v, const Vector2& onto)
         {
             float ontoLenSq = Length_squared(onto);
-            if (ontoLenSq < Constants::EPSILON_SMALL) return Zero(); // avoid division by ~zero
+            if (ontoLenSq <= Constants::FLOAT_MIN) return Zero(); // avoid division by zero
             return onto * (Dot(v, onto) / ontoLenSq);
         }
 

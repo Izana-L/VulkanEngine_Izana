@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Alpha_Mode.hpp>
 #include <RenderPacket.hpp>
 #include <Sampler_Preset.hpp>
 #include <Vector.hpp>
@@ -23,11 +24,19 @@ namespace Renderer_System
         uint32_t                  albedo_texture_index = Default_Texture::White;
         CoreTypes::Sampler_Preset sampler = CoreTypes::Sampler_Preset::Linear_Repeat;
 
+        // How the alpha of the base color is used, and with Mask the
+        // threshold under which a fragment is discarded (in [0, 1]; ignored
+        // by the other modes).
+        CoreTypes::Alpha_Mode     alpha_mode = CoreTypes::Alpha_Mode::Opaque;
+        float                     alpha_cutoff = 0.5f;
+
         bool operator==(const Material_Desc& _other) const
         {
             return base_color == _other.base_color
                 && albedo_texture_index == _other.albedo_texture_index
-                && sampler == _other.sampler;
+                && sampler == _other.sampler
+                && alpha_mode == _other.alpha_mode
+                && alpha_cutoff == _other.alpha_cutoff;
         }
     };
 

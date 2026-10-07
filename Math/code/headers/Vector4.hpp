@@ -117,8 +117,30 @@ namespace MathLib
         // In homogeneous coordinates this is NOT the same as the perspective divide
         // (which only divides xyz by w). Use this only when treating Vector4 as a
         // raw 4D direction.
+        // A zero-length vector has no direction, so it is returned as ZERO
+        // instead of NaN (glm::normalize divides 0 by 0). There is no absolute
+        // "small" threshold: only a squared length below FLOAT_MIN (|v| < ~1e-19,
+        // where it underflows) counts as zero. NaN input still gives NaN.
         inline Vector4 Normalize(const Vector4& v) {
-            return glm::normalize(v);
+            const float len_sq = Length_squared(v);
+            return (len_sq <= Constants::FLOAT_MIN) ? Zero() : v * (1.0f / std::sqrt(len_sq));
+        }
+
+        // Returns a unit vector perpendicular to v (v does not need to be normalized).
+        // There are infinitely many in 4D; this one is arbitrary but deterministic
+        // and well conditioned: the axis v is LEAST aligned with is made
+        // perpendicular to v (Gram-Schmidt). Returns zero for a zero-length v.
+        inline Vector4 Any_perpendicular(const Vector4& v) {
+            const Vector4 n = Normalize(v);
+            const Vector4 a = glm::abs(n);
+
+            Vector4 axis = UnitX();
+            float smallest = a.x;
+            if (a.y < smallest) { axis = UnitY(); smallest = a.y; }
+            if (a.z < smallest) { axis = UnitZ(); smallest = a.z; }
+            if (a.w < smallest) { axis = UnitW(); }
+
+            return Normalize(axis - n * Dot(axis, n));
         }
 
         // Checks if the vector already has length ~1 (within a small tolerance)
@@ -136,10 +158,30 @@ namespace MathLib
         // a clip-space Vector4 — it divides by w to get NDC (Normalized Device Coords).
         // You rarely need this manually, but it's useful when reading back GPU results
         // or implementing software rasterization.
-        inline Vector4 Perspective_divide(const Vector4& v) {
-            if (std::abs(v.w) < 0.0001f) return v; // avoid division by ~zero
+        //
+        // A point with w == 0 lies on the camera plane and has no finite NDC
+        // position (the GPU would produce inf). There is no absolute "too small"
+        // threshold on w, since its scale depends on the world units; only a
+        // numerically zero w is refused. In that case v is returned UNCHANGED, so
+        // a successful divide is recognizable by w == 1. Use Try_perspective_divide
+        // when the caller needs to know explicitly.
+        // NOTE: a negative w means the point is BEHIND the camera; the divide
+        // flips it, so clip against the near plane before dividing.
+        inline bool Try_perspective_divide(const Vector4& v, Vector4& out) {
+            if (!(std::abs(v.w) > Constants::FLOAT_MIN)) // also rejects NaN
+            {
+                out = v;
+                return false;
+            }
             float invW = 1.0f / v.w;
-            return Vector4(v.x * invW, v.y * invW, v.z * invW, 1.0f);
+            out = Vector4(v.x * invW, v.y * invW, v.z * invW, 1.0f);
+            return true;
+        }
+
+        inline Vector4 Perspective_divide(const Vector4& v) {
+            Vector4 result;
+            Try_perspective_divide(v, result);
+            return result;
         }
 
         // Extracts only the XYZ components as a 3D vector, discarding W.
@@ -210,26 +252,59 @@ namespace MathLib
         // Less common for Vector4 than for quaternions or Vector3 directions,
         // but useful when the w component also needs to be interpolated smoothly
         // along with the direction (e.g. some shader parameter blending).
+        //
+        // Degenerate inputs are handled instead of producing NaN:
+        //   - a zero-length vector has no direction -> falls back to Lerp
+        //   - same direction (any lengths)          -> the direction is kept, only the length is blended
+        //   - opposite directions                   -> every plane through both is a valid arc,
+        //                                              so an arbitrary perpendicular is used
         inline Vector4 Slerp(const Vector4& a, const Vector4& b, float t) {
-            float lenA = Length(a);
-            float lenB = Length(b);
-            Vector4 normA = Normalize(a);
-            Vector4 normB = Normalize(b);
+            if (Length_squared(a) <= Constants::FLOAT_MIN || Length_squared(b) <= Constants::FLOAT_MIN)
+                return Lerp(a, b, t);
 
-            float dot = glm::clamp(Dot(normA, normB), -1.0f, 1.0f);
-            float theta = std::acos(dot) * t;
+            const Vector4 normA = Normalize(a);
+            const Vector4 normB = Normalize(b);
+            const float len = glm::mix(Length(a), Length(b), t);
 
-            Vector4 relative = Normalize(normB - normA * dot);
-            Vector4 dir = normA * std::cos(theta) + relative * std::sin(theta);
+            const float dot = glm::clamp(Dot(normA, normB), -1.0f, 1.0f);
 
-            float len = glm::mix(lenA, lenB, t);
+            // Part of normB perpendicular to normA: its length is sin(theta) and its
+            // direction is the one the arc leaves normA in. For nearly parallel or
+            // opposite vectors this subtraction cancels almost everything and leaves a
+            // small component along normA, which would make the result drift away from
+            // unit length: removing it once more keeps the vector truly perpendicular.
+            Vector4 perpendicular = normB - normA * dot;
+            perpendicular -= normA * Dot(perpendicular, normA);
+            const float sin_theta = Length(perpendicular);
+
+            Vector4 dir;
+            if (sin_theta > Constants::EPSILON_SMALL)
+            {
+                const float theta = std::atan2(sin_theta, dot) * t; // angle to rotate by, scaled by t
+                dir = normA * std::cos(theta) + (perpendicular / sin_theta) * std::sin(theta);
+            }
+            else if (dot > 0.0f)
+            {
+                // Same direction: no arc to follow, and normalized lerp is exact at this size.
+                dir = Normalize(glm::mix(normA, normB, t));
+            }
+            else
+            {
+                // Opposite directions: half a turn through an arbitrary perpendicular.
+                const float angle = Constants::PI * t;
+                dir = normA * std::cos(angle) + Any_perpendicular(normA) * std::sin(angle);
+            }
+
             return dir * len;
         }
 
         // Eased interpolation: same path as Lerp but with smooth ease-in/ease-out.
         // Useful for color transitions and UI animations that need to feel less abrupt.
+        // t is clamped to [0, 1], like GLSL smoothstep: the curve overshoots
+        // wildly outside that range (t=2 would give -4).
         inline Vector4 Smooth_step(const Vector4& a, const Vector4& b, float t) {
-            float smoothT = t * t * (3.0f - 2.0f * t);
+            float clampedT = glm::clamp(t, 0.0f, 1.0f);
+            float smoothT = clampedT * clampedT * (3.0f - 2.0f * clampedT);
             return Lerp(a, b, smoothT);
         }
 
@@ -245,10 +320,13 @@ namespace MathLib
             return glm::reflect(v, normal);
         }
 
-        // Projects v onto the direction of "onto"
+        // Projects v onto the direction of "onto".
+        // The result does not depend on the length of "onto", so there is no
+        // "too short" threshold: only a (numerically) zero-length "onto", which
+        // has no direction to project on, returns zero.
         inline Vector4 Project(const Vector4& v, const Vector4& onto) {
             float ontoLenSq = Length_squared(onto);
-            if (ontoLenSq < Constants::EPSILON_SMALL) return Zero();
+            if (ontoLenSq <= Constants::FLOAT_MIN) return Zero();
             return onto * (Dot(v, onto) / ontoLenSq);
         }
 

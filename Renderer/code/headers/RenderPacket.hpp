@@ -1,13 +1,19 @@
 #pragma once
 
+// The values the shaders also read (pass bits, light types): the constants
+// below are built from these macros, one definition for C++ and GLSL.
+#include "../../shaders/common/gpu_shared.h"
+
 #include <Vector.hpp>
 #include <Matrix.hpp>
 #include <Sampler_Preset.hpp>
 #include <Vector.hpp>
 #include <Vector3.hpp>
 #include <MathConstants.hpp>
+#include <algorithm>
 #include <array>
 #include <bit>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
@@ -137,11 +143,16 @@ namespace Renderer_System
     // the bit of the pass it is recording before drawing an item, so an
     // item routed to a list it does not belong to is skipped rather than
     // drawn in every pass alike.
+    //
+    // The values are the GPU_RENDER_PASS_* macros of gpu_shared.h, which
+    // the RENDER_PASS_* constants of scene_data.glsl are built from too:
+    // the pass mask of an object travels to the shaders unchanged
+    // (Object_GPU::flags).
     namespace Render_Pass_Bit
     {
-        inline constexpr uint8_t Opaque = 1u << 0;
-        inline constexpr uint8_t Transparent = 1u << 1;
-        inline constexpr uint8_t All = 0xFFu;
+        inline constexpr uint8_t Opaque = GPU_RENDER_PASS_OPAQUE;
+        inline constexpr uint8_t Transparent = GPU_RENDER_PASS_TRANSPARENT;
+        inline constexpr uint8_t All = GPU_OBJECT_FLAG_PASS_MASK;
     }
 
     // Bindless texture slots reserved for the default textures. The
@@ -235,21 +246,64 @@ namespace Renderer_System
         uint64_t         sort_key = 0;
     };
 
-     // =========================================================
-     // GPU_Light
-     // =========================================================
+    // =========================================================
+    // GPU_Light
+    // =========================================================
 
-     // One entry of the light storage buffer, in its final GPU form. The
-     // Extractor fills it and the Renderer copies the packet's array into
-     // the mapped buffer as it is: there is no second struct in between.
-     //
-     // EXACT mirror of `Light` in Renderer/shaders/common/frame_set.glsl
-     // (std430, 64 bytes). A field added here is added there, in the same
-     // position; the static_asserts below pin the offsets the shader reads.
-     //
-     // Directional lights: position_or_direction = direction the light POINTS TO (normalized).
-     // Point/spot lights:  position_or_direction = world position.
-     // The shader selects behavior via `type`.
+    // Kind of light, as the shaders read it (GPU_Light::type, Light::type
+    // of frame_set.glsl). The values are the GPU_LIGHT_TYPE_* macros of
+    // gpu_shared.h, which the LIGHT_TYPE_* constants of frame_set.glsl are
+    // built from too.
+    enum class Light_Type : int32_t
+    {
+        Directional = GPU_LIGHT_TYPE_DIRECTIONAL,
+        Point = GPU_LIGHT_TYPE_POINT,
+        Spot = GPU_LIGHT_TYPE_SPOT
+    };
+
+    // Smallest gap kept between the cosines of the inner and the outer
+    // angle of a spot cone, which bounds the slope of its ramp: a cone whose
+    // angles are equal, reversed, or so close that their cosines round to
+    // the same float becomes a hard edge instead of an undefined value.
+    inline constexpr float SPOT_MIN_COS_GAP = 1.0e-4f;
+
+    // Coefficients of the ramp of a spot cone: for the cosine c of the angle
+    // between the cone axis and the direction to the fragment,
+    //   clamp(c * scale + offset, 0, 1)
+    // is 1 inside the inner cone and 0 outside the outer one (mesh shading
+    // applies the smoothstep polynomial to it). _inner_angle and
+    // _outer_angle are half-angles in radians. Computed once per light on
+    // the CPU: the shader no longer evaluates two cosines per fragment, and
+    // no value of the angles can make the ramp undefined.
+    struct Spot_Cone
+    {
+        float scale = 0.0f;
+        float offset = 0.0f;
+    };
+
+    inline Spot_Cone Make_spot_cone(float _inner_angle, float _outer_angle)
+    {
+        const float cos_inner = std::cos(_inner_angle);
+        const float cos_outer = std::cos(_outer_angle);
+
+        Spot_Cone cone;
+        cone.scale = 1.0f / std::max(cos_inner - cos_outer, SPOT_MIN_COS_GAP);
+        cone.offset = -cos_outer * cone.scale;
+        return cone;
+    }
+
+    // One entry of the light storage buffer, in its final GPU form. The
+    // Extractor fills it and the Renderer copies the packet's array into
+    // the mapped buffer as it is: there is no second struct in between.
+    //
+    // EXACT mirror of `Light` in Renderer/shaders/common/frame_set.glsl
+    // (std430, 64 bytes). A field added here is added there, in the same
+    // position; the static_asserts below pin the offsets the shader reads.
+    //
+    // Directional lights: position_or_direction = direction the light POINTS TO (normalized).
+    // Point/spot lights:  position_or_direction = world position.
+    // The shader selects behavior via `type`. Spot lights carry their cone
+    // as the ramp of Make_spot_cone.
     struct GPU_Light
     {
         MathLib::Vector3 position_or_direction;
@@ -257,9 +311,9 @@ namespace Renderer_System
         MathLib::Vector3 color;
         float            range = 0.0f;
         MathLib::Vector3 spot_direction = { 0.0f, 0.0f, -1.0f };
-        float            inner_angle = 0.0f;
-        float            outer_angle = 0.0f;
-        int32_t          type = 0;            // 0=directional, 1=point, 2=spot
+        float            spot_scale = 0.0f;      // Spot_Cone::scale
+        float            spot_offset = 0.0f;     // Spot_Cone::offset
+        Light_Type       type = Light_Type::Directional;
         float            _padding0 = 0.0f;
         float            _padding1 = 0.0f;
     };
@@ -270,9 +324,10 @@ namespace Renderer_System
     static_assert(offsetof(GPU_Light, color) == 16, "GPU_Light breaks the std430 layout of frame_set.glsl");
     static_assert(offsetof(GPU_Light, range) == 28, "GPU_Light breaks the std430 layout of frame_set.glsl");
     static_assert(offsetof(GPU_Light, spot_direction) == 32, "GPU_Light breaks the std430 layout of frame_set.glsl");
-    static_assert(offsetof(GPU_Light, inner_angle) == 44, "GPU_Light breaks the std430 layout of frame_set.glsl");
-    static_assert(offsetof(GPU_Light, outer_angle) == 48, "GPU_Light breaks the std430 layout of frame_set.glsl");
+    static_assert(offsetof(GPU_Light, spot_scale) == 44, "GPU_Light breaks the std430 layout of frame_set.glsl");
+    static_assert(offsetof(GPU_Light, spot_offset) == 48, "GPU_Light breaks the std430 layout of frame_set.glsl");
     static_assert(offsetof(GPU_Light, type) == 52, "GPU_Light breaks the std430 layout of frame_set.glsl");
+    static_assert(sizeof(Light_Type) == sizeof(int32_t), "Light_Type is the int `type` of the shader's Light");
     static_assert(std::is_trivially_copyable_v<GPU_Light>, "GPU_Light is copied with memcpy");
 
     // =========================================================
@@ -392,4 +447,4 @@ namespace Renderer_System
     static_assert(Depth_to_sortable_bits(0.0f) < Depth_to_sortable_bits(2.0f));
     static_assert(Depth_to_sortable_bits(2.0f) < Depth_to_sortable_bits(100.0f));
 
-} // namespace CoreTypes
+} // namespace Renderer_System

@@ -4,6 +4,8 @@
 #include <Resource_Manager.hpp>
 #include <Material_Component.hpp>
 
+#include <iostream>
+
 namespace EngineCore
 {
 
@@ -83,6 +85,19 @@ namespace EngineCore
         Renderer_System::Material_Desc desc;
         desc.base_color = _material.base_color_factor;
         desc.sampler = _material.sampler;
+        desc.alpha_mode = _material.alpha_mode;
+        desc.alpha_cutoff = _material.alpha_cutoff;
+
+        // The tint alpha only has an effect through the alpha mode. A
+        // material that is translucent by its tint but opaque by its mode
+        // is almost certainly a mistake (the mode used to be inferred from
+        // the alpha), so it is said instead of drawing it solid in silence.
+        if (_material.alpha_mode == CoreTypes::Alpha_Mode::Opaque && _material.base_color_factor.a < 1.0f)
+        {
+            std::cerr << "[Gpu_Assets] A material has a base color alpha of " << _material.base_color_factor.a
+                << " but the alpha mode Opaque, which ignores it: set Alpha_Mode::Blend to draw it translucent, "
+                "or Alpha_Mode::Mask to cut it out.\n";
+        }
 
         // Albedo not assigned: White (the Material_Desc default). Assigned
         // but with no GPU index (never uploaded, or a stale handle): Error,

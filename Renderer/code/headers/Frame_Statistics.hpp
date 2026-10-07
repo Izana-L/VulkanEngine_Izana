@@ -22,7 +22,8 @@ namespace Renderer_System
     // the frame slot that produced them completed (its serial was waited
     // on), so the CPU never stalls for them:
     //   - the GPU counters of the frame (Frame_Stats_GPU): cluster light
-    //     references, dropped lights, objects the culling pass kept;
+    //     references, dropped lights, objects the culling pass kept and
+    //     objects it had to drop;
     //   - the timestamps of its named scopes (Gpu_Frame_Timings).
     // Each frame is paired with the Frame_Record of what the CPU recorded
     // for it.
@@ -178,6 +179,9 @@ namespace Renderer_System
 
         // The cluster light index list overflowed; reported once.
         bool                                      warned_cluster_overflow = false;
+
+        // The culling pass dropped objects it had kept; reported once.
+        bool                                      warned_dropped_draws = false;
     };
 
 } // namespace Renderer_System

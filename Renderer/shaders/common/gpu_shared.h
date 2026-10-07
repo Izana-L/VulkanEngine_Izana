@@ -65,6 +65,11 @@
 #define GPU_BINDING_BINDLESS_TEXTURES      0
 #define GPU_BINDING_BINDLESS_SAMPLERS      1
 
+// Set 0 of the shader self-test (Shader_Self_Test.hpp), which has a pipeline
+// layout of its own: the test cases it reads and the results it writes
+#define GPU_BINDING_SELFTEST_INPUT         0
+#define GPU_BINDING_SELFTEST_OUTPUT        1
+
 // =========================================================
 // Limits (Renderer_Limits.hpp)
 // =========================================================
@@ -76,6 +81,10 @@
 // Planes of the culling frustum (Renderer_System::FRUSTUM_PLANE_COUNT): left,
 // right, bottom, top and near. The array size of Frame_UBO::frustum_planes.
 #define GPU_FRUSTUM_PLANE_COUNT     5
+
+// Test cases of each kind the shader self-test runs (selftest.comp,
+// Shader_Self_Test.cpp): the size of the arrays of its two buffers.
+#define GPU_SELFTEST_MAX_CASES      128
 
 // =========================================================
 // Workgroup sizes
@@ -93,6 +102,9 @@
 
 // Procedural.comp: one invocation per texel, in square groups of this side.
 #define GPU_PROCEDURAL_GROUP_SIZE   8
+
+// selftest.comp: one invocation per test case.
+#define GPU_SELFTEST_GROUP_SIZE     64
 
 // =========================================================
 // Enums
@@ -115,9 +127,61 @@
 #define GPU_OBJECT_FLAG_BUCKET_SHIFT    10u       // bits 10-17: draw bucket
 #define GPU_OBJECT_FLAG_BUCKET_MASK     0xFFu
 
-// Render pass bits (CoreTypes::Render_Pass_Bit). CoreTypes does not include
-// this file; Renderer.cpp asserts that both agree.
+// Render pass bits (Renderer_System::Render_Pass_Bit, RenderPacket.hpp, which
+// builds its constants from these macros).
 #define GPU_RENDER_PASS_OPAQUE          1u
 #define GPU_RENDER_PASS_TRANSPARENT     2u
+
+// GPU_Light::type / Light::type (Renderer_System::Light_Type)
+#define GPU_LIGHT_TYPE_DIRECTIONAL      0
+#define GPU_LIGHT_TYPE_POINT            1
+#define GPU_LIGHT_TYPE_SPOT             2
+
+// Material_GPU::alpha_mode (Renderer_System::Alpha_Mode). The mode decides
+// how the alpha of the base color is used and which pass draws the object:
+//   OPAQUE - the alpha is ignored; opaque pass;
+//   MASK   - the fragments below Material_GPU::alpha_cutoff are discarded;
+//            opaque pass;
+//   BLEND  - weighted blended transparency; transparent pass.
+#define GPU_ALPHA_MODE_OPAQUE           0u
+#define GPU_ALPHA_MODE_MASK             1u
+#define GPU_ALPHA_MODE_BLEND            2u
+
+// =========================================================
+// Shader interfaces
+// =========================================================
+//
+// Locations and attachment indices of the stage interfaces. Each one is
+// declared once here and read by the GLSL that declares the interface
+// (mesh_vertex_input.glsl, mesh_varyings.glsl, the fragment outputs) and by
+// the C++ that describes the other end (Vulkan_Vertex_Layout.hpp,
+// Vulkan_Render_Pass.cpp), so the two ends cannot drift apart.
+
+// Vertex attributes of the lit mesh vertex (CoreTypes::Vertex_Static_Mesh)
+#define GPU_VERTEX_LOCATION_POSITION        0
+#define GPU_VERTEX_LOCATION_NORMAL          1
+#define GPU_VERTEX_LOCATION_TANGENT         2
+#define GPU_VERTEX_LOCATION_UV              3
+#define GPU_VERTEX_LOCATION_COLOR           4
+
+// Varyings from mesh.vert to mesh.frag and mesh_oit.frag
+#define GPU_VARYING_WORLD_NORMAL            0
+#define GPU_VARYING_WORLD_POSITION          1
+#define GPU_VARYING_UV                      2
+#define GPU_VARYING_COLOR                   3
+#define GPU_VARYING_MATERIAL_INDEX          4
+
+// Varying from bounds.vert to bounds.frag
+#define GPU_VARYING_OBJECT_FLAGS            0
+
+// Fragment outputs of the transparent subpass (mesh_oit.frag): the position
+// in pColorAttachments of the subpass (Vulkan_Render_Pass.cpp)
+#define GPU_OIT_OUTPUT_ACCUMULATION         0
+#define GPU_OIT_OUTPUT_REVEALAGE            1
+
+// Input attachments of the composite subpass (oit_composite.frag): the
+// position in pInputAttachments of the subpass (Vulkan_Render_Pass.cpp)
+#define GPU_OIT_INPUT_ACCUMULATION          0
+#define GPU_OIT_INPUT_REVEALAGE             1
 
 #endif

@@ -3,23 +3,14 @@
 
 #include "common/frame_set.glsl"
 #include "common/scene_data.glsl"
+#include "common/safe_math.glsl"
 
 // Vertex inputs - matches CoreTypes::Vertex_Static_Mesh
-layout(location = 0) in vec3 in_position;
-layout(location = 1) in vec3 in_normal;
-layout(location = 2) in vec4 in_tangent;
-layout(location = 3) in vec2 in_uv;
-layout(location = 4) in vec4 in_color;
+#include "common/mesh_vertex_input.glsl"
 
-// Outputs to fragment shader
-layout(location = 0) out vec3 frag_world_normal;
-layout(location = 1) out vec3 frag_world_pos;
-layout(location = 2) out vec2 frag_uv;
-layout(location = 3) out vec4 frag_color;
-// flat: an index must reach every fragment unchanged. Without it the value
-// is interpolated between the three vertices, with no compilation or
-// validation error, only wrong materials.
-layout(location = 4) flat out uint frag_material_index;
+// Outputs to the fragment shaders (mesh.frag, mesh_oit.frag)
+#define MESH_VARYINGS_OUTPUT
+#include "common/mesh_varyings.glsl"
 
 void main()
 {
@@ -31,9 +22,12 @@ void main()
 
     gl_Position = frame.view_projection * world_pos;
 
-    // Normal to world space with the inverse-transpose computed on the CPU
-    // (handles non-uniform scale); no per-vertex inverse().
-    frag_world_normal = normalize(mat3(object.normal_matrix) * in_normal);
+    // Normal to world space with the normal matrix computed on the CPU
+    // (handles non-uniform scale); no per-vertex inverse(). Safe_normalize:
+    // a zero normal in the asset, or a collapsed object, gives the zero
+    // vector instead of the NaN of normalize(0), which would reach every
+    // fragment of the triangle.
+    frag_world_normal = Safe_normalize(mat3(object.normal_matrix) * in_normal);
 
     frag_world_pos      = world_pos.xyz;
     frag_uv             = in_uv;

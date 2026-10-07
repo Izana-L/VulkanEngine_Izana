@@ -190,9 +190,11 @@ namespace Renderer_System
 
                 Object_GPU& object = _objects[object_index];
                 object.model = _model;
-                // Inverse-transpose computed once per draw here instead of
+                // Normal matrix computed once per draw here instead of
                 // once per vertex in mesh.vert; correct under non-uniform
-                // scale.
+                // scale, and finite for a collapsed object, where the
+                // inverse-transpose it replaces is NaN (Mat4::Normal_matrix).
+                // Not unit scale: the shaders normalize the normal.
                 object.normal_matrix = MathLib::Matrix4(MathLib::Mat4::Normal_matrix(_model));
                 object.material_index = _item.material_index;
                 object.mesh_index = _item.mesh_gpu_id;

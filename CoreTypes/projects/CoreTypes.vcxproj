@@ -151,6 +151,7 @@
     </Manifest>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="..\code\headers\Alpha_Mode.hpp" />
     <ClInclude Include="..\code\headers\Asset_Handle.hpp" />
     <ClInclude Include="..\code\headers\Fnv.hpp" />
     <ClInclude Include="..\code\headers\Id.hpp" />

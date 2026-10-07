@@ -46,9 +46,11 @@ namespace Renderer_System
     {
         const VkBufferCopy cluster_copy{ 0, offsetof(Frame_Stats_GPU, cluster_light_references),
                                          sizeof(uint32_t) * 2 };   // light_index_count, dropped_light_count
-        // The total of the culling pass; the per-bucket counters are not
-        // needed by the statistics.
-        const VkBufferCopy draw_copy{ offsetof(Draw_Count_GPU, total_draw_count), offsetof(Frame_Stats_GPU, gpu_opaque_draws), sizeof(uint32_t) };
+        // The total of the culling pass and the objects it dropped, adjacent
+        // in both structs (asserted in Gpu_Layouts.hpp); the per-bucket
+        // counters are not needed by the statistics.
+        const VkBufferCopy draw_copy{ offsetof(Draw_Count_GPU, total_draw_count), offsetof(Frame_Stats_GPU, gpu_opaque_draws),
+                                      sizeof(uint32_t) * 2 };   // total_draw_count, dropped_draw_count
 
         vkCmdCopyBuffer(_command_buffer, _cluster_counters.buffer, _readback.buffer, 1, &cluster_copy);
         vkCmdCopyBuffer(_command_buffer, _draw_count.buffer, _readback.buffer, 1, &draw_copy);
@@ -114,6 +116,18 @@ namespace Renderer_System
             warned_cluster_overflow = true;
         }
 
+        // Same for the culling pass: an object that passed the frustum test
+        // but got no draw command (its bucket index is out of range, or its
+        // bucket is full) is not drawn, with no other trace.
+        if (_counters.gpu_draws_dropped > 0 && !warned_dropped_draws)
+        {
+            std::cerr << "[Renderer] The culling pass dropped " << _counters.gpu_draws_dropped << " object(s) it had kept: "
+                "their draw bucket is out of range or full, so they are not drawn. The CPU assigns the buckets "
+                "(Draw_List_Builder) and sizes them to their object count: this is a bug there. "
+                "Further occurrences are not reported.\n";
+            warned_dropped_draws = true;
+        }
+
         ++frames;
 
         // A frame measured in the other timing mode (the switch changed
@@ -157,7 +171,8 @@ namespace Renderer_System
             std::cout << "[Renderer] Opaque drawn " << opaque_drawn << " / " << last.opaque_candidates << " (" << To_string(last.opaque_path)
                 << ") | transparent drawn " << last.transparent_drawn << " / " << last.transparent_candidates
                 << " | cluster light references " << last_counters.cluster_light_references << " / " << CLUSTER_LIGHT_INDEX_CAPACITY
-                << " (dropped " << last_counters.cluster_lights_dropped << ") | geometry pool "
+                << " (dropped " << last_counters.cluster_lights_dropped << ") | draws dropped by culling "
+                << last_counters.gpu_draws_dropped << " | geometry pool "
                 << _geometry.used_vertices << " / " << _geometry.vertex_capacity << " vertices, "
                 << _geometry.used_indices << " / " << _geometry.index_capacity << " indices\n";
 

@@ -1,0 +1,79 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+// Shader self-test: evaluates, on the GPU, the arithmetic that exists twice,
+// once in GLSL and once in C++, so that Shader_Self_Test.cpp can compare the
+// two on a table of cases at startup instead of trusting that they agree.
+//
+// It includes the production files, not copies of them, so what it runs is
+// the code of the real shaders:
+//   cluster_math.glsl  - fragment to cluster (cluster_data.glsl, mesh.frag,
+//                        cluster_lights.comp); twin: Cluster_Grid::Find_cluster
+//                        and Cluster_Grid::Cluster_index;
+//   bounding_math.glsl - bounding ellipsoid against the frustum
+//                        (cull_objects.comp); twin:
+//                        Frustum::Intersects_ellipsoid;
+//   safe_math.glsl     - Safe_normalize (mesh.vert, shading.glsl): a zero
+//                        vector must stay finite.
+//
+// One invocation per test case, GPU_SELFTEST_GROUP_SIZE per group. The
+// pipeline has a layout of its own, with one set holding the two buffers.
+// No part of the frame's descriptors is used, which is why the production
+// files above are the ones without descriptors.
+//
+// EXACT mirror of Self_Test_Input and Self_Test_Output (Shader_Self_Test.cpp),
+// std430: every member is a vec4 / uvec4 or an array of them.
+#include "common/gpu_shared.h"
+#include "common/cluster_math.glsl"
+#include "common/bounding_math.glsl"
+#include "common/safe_math.glsl"
+
+layout(local_size_x = GPU_SELFTEST_GROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = GPU_BINDING_SELFTEST_INPUT, std430) readonly buffer Self_Test_Input
+{
+    uvec4 cluster_grid;                                    // xyz = tiles X, tiles Y, slices
+    vec4  cluster_params;                                  // xy = render size, z = slice scale, w = slice bias
+    vec4  frustum_planes[GPU_FRUSTUM_PLANE_COUNT];         // world space, normals pointing inside
+    uvec4 case_counts;                                     // x = cluster cases, y = ellipsoid cases, z = normalize cases
+    vec4  cluster_cases[GPU_SELFTEST_MAX_CASES];           // xy = fragment coordinates, z = view depth
+    vec4  ellipsoid_cases[GPU_SELFTEST_MAX_CASES * 5];     // per case: the four columns of the model, then the local sphere
+    vec4  normalize_cases[GPU_SELFTEST_MAX_CASES];         // xyz = vector to normalize
+} test_input;
+
+layout(set = 0, binding = GPU_BINDING_SELFTEST_OUTPUT, std430) writeonly buffer Self_Test_Output
+{
+    uvec4 cluster_results[GPU_SELFTEST_MAX_CASES];         // tile x, tile y, slice, cluster index
+    uvec4 ellipsoid_results[GPU_SELFTEST_MAX_CASES];       // x = 1 when the ellipsoid is kept
+    vec4  normalize_results[GPU_SELFTEST_MAX_CASES];       // xyz = Safe_normalize(vector), w = 1 when finite
+} test_output;
+
+void main()
+{
+    const uint i = gl_GlobalInvocationID.x;
+
+    if (i < test_input.case_counts.x)
+    {
+        const vec4  test_case = test_input.cluster_cases[i];
+        const uvec3 grid      = test_input.cluster_grid.xyz;
+        const uvec3 cluster   = Cluster_coordinates_in_grid(test_case.xy, test_case.z, grid, test_input.cluster_params);
+
+        test_output.cluster_results[i] = uvec4(cluster, Cluster_index_in_grid(cluster, grid));
+    }
+
+    if (i < test_input.case_counts.y)
+    {
+        const mat4 model = mat4(test_input.ellipsoid_cases[i * 5u + 0u], test_input.ellipsoid_cases[i * 5u + 1u],
+                                test_input.ellipsoid_cases[i * 5u + 2u], test_input.ellipsoid_cases[i * 5u + 3u]);
+        const vec4 sphere = test_input.ellipsoid_cases[i * 5u + 4u];
+
+        test_output.ellipsoid_results[i] = uvec4(Ellipsoid_in_frustum(model, sphere, test_input.frustum_planes) ? 1u : 0u, 0u, 0u, 0u);
+    }
+
+    if (i < test_input.case_counts.z)
+    {
+        const vec3 normalized = Safe_normalize(test_input.normalize_cases[i].xyz);
+
+        test_output.normalize_results[i] = vec4(normalized, Is_finite(normalized) ? 1.0 : 0.0);
+    }
+}

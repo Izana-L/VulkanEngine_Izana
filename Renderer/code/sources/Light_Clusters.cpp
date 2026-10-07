@@ -91,17 +91,13 @@ namespace Renderer_System
         boxes_valid = true;
     }
 
-    void Light_Clusters::Record_dispatch(VkCommandBuffer _command_buffer, VkPipelineLayout _compute_layout,
-                                         uint32_t _first_local_light, uint32_t _light_count) const
+    void Light_Clusters::Record_dispatch(VkCommandBuffer _command_buffer) const
     {
-        Cluster_Push_Constants push{};
-        push.cluster_count = CLUSTER_COUNT;
-        push.light_index_capacity = CLUSTER_LIGHT_INDEX_CAPACITY;
-        push.first_local_light = _first_local_light;
-        push.light_count = _light_count;
-
-        // One invocation per cluster, rounded up to whole groups.
-        pipeline.Dispatch(_command_buffer, _compute_layout, push, Dispatch_group_count(CLUSTER_COUNT, CLUSTER_GROUP_SIZE));
+        // One invocation per cluster, rounded up to whole groups. The shader
+        // takes the cluster count from the grid dimensions of Frame_UBO,
+        // which Renderer::Write_frame_uniforms fills from the same CLUSTER_*
+        // constants.
+        pipeline.Dispatch_groups(_command_buffer, Dispatch_group_count(CLUSTER_COUNT, CLUSTER_GROUP_SIZE));
     }
 
 } // namespace Renderer_System

@@ -138,10 +138,10 @@ namespace Renderer_System
     // =========================================================
 
     // Planes of the culling frustum carried by Frame_UBO; the same count as
-    // CoreTypes::Frustum (left, right, bottom, top, near; no far plane).
+    // Frustum (left, right, bottom, top, near; no far plane).
     // The shaders size Frame_UBO::frustum_planes with the same macro
     // (GPU_FRUSTUM_PLANE_COUNT, gpu_shared.h). The equality with
-    // CoreTypes::Frustum is asserted where both are visible, next to the copy
+    // Frustum is asserted where both are visible, next to the copy
     // of the planes into Frame_UBO (Renderer.cpp).
     static constexpr uint32_t FRUSTUM_PLANE_COUNT = GPU_FRUSTUM_PLANE_COUNT;
 

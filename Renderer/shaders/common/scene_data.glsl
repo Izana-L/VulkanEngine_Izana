@@ -41,19 +41,27 @@ const uint OBJECT_FLAG_MIRRORED     = GPU_OBJECT_FLAG_MIRRORED;       // bit 9: 
 const uint OBJECT_FLAG_BUCKET_SHIFT = GPU_OBJECT_FLAG_BUCKET_SHIFT;   // bits 10-17: draw bucket of an opaque object on the GPU paths
 const uint OBJECT_FLAG_BUCKET_MASK  = GPU_OBJECT_FLAG_BUCKET_MASK;    //             (Draw_Bucket in frame_set.glsl)
 
-// CoreTypes::Render_Pass_Bit: the same values as the macros (gpu_shared.h);
-// Renderer.cpp asserts that they agree.
+// Renderer_System::Render_Pass_Bit: both are built from the same macros
+// (gpu_shared.h).
 const uint RENDER_PASS_OPAQUE      = GPU_RENDER_PASS_OPAQUE;
 const uint RENDER_PASS_TRANSPARENT = GPU_RENDER_PASS_TRANSPARENT;
+
+// Values of Material::alpha_mode: Renderer_System::Alpha_Mode, built from
+// the same macros (gpu_shared.h). The mode, not the value of the alpha,
+// decides how the alpha of the base color is used and which pass draws the
+// object (the Extractor routes BLEND materials to the transparent pass).
+const uint ALPHA_MODE_OPAQUE = GPU_ALPHA_MODE_OPAQUE;   // alpha ignored
+const uint ALPHA_MODE_MASK   = GPU_ALPHA_MODE_MASK;     // fragments below alpha_cutoff are discarded
+const uint ALPHA_MODE_BLEND  = GPU_ALPHA_MODE_BLEND;    // weighted blended transparency
 
 // EXACT mirror of Renderer_System::Material_GPU, std430, 32 bytes.
 struct Material
 {
-    vec4 base_color;            // offset 0:  tint, alpha < 1 = transparent pass
-    uint albedo_texture_index;  // offset 16: bindless texture slot, always a written slot
-    uint albedo_sampler_index;  // offset 20: slot in samplers[] (a CoreTypes::Sampler_Preset value)
-    uint _pad0;                 // offset 24
-    uint _pad1;                 // offset 28
+    vec4  base_color;           // offset 0:  tint multiplied with the vertex color and the albedo sample
+    uint  albedo_texture_index; // offset 16: bindless texture slot, always a written slot
+    uint  albedo_sampler_index; // offset 20: slot in samplers[] (a CoreTypes::Sampler_Preset value)
+    uint  alpha_mode;           // offset 24: ALPHA_MODE_*
+    float alpha_cutoff;         // offset 28: ALPHA_MODE_MASK threshold, in [0, 1]
 };
 
 // Unsized arrays: raising MAX_OBJECTS or MAX_MATERIALS (Renderer_Limits.hpp)

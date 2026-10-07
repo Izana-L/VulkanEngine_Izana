@@ -33,14 +33,14 @@ layout(local_size_x = GPU_CLUSTER_GROUP_SIZE, local_size_y = 1, local_size_z = 1
 #include "common/frame_set.glsl"
 #include "common/cluster_data.glsl"
 
-// EXACT mirror of Renderer_System::Cluster_Push_Constants (C++), 16 bytes.
-layout(push_constant) uniform Cluster_Push_Constants
-{
-    uint cluster_count;          // offset 0
-    uint light_index_capacity;   // offset 4: entries of cluster_light_indices
-    uint first_local_light;      // offset 8: lights before it are directional
-    uint light_count;            // offset 12
-} push;
+// No push constants: everything the pass needs is in the frame's uniform
+// block (frame_set.glsl) or in the buffers it reads and writes, so the
+// numbers cannot disagree with the ones mesh.frag reads:
+//   cluster count         - tiles X * tiles Y * slices of frame.cluster_grid;
+//   first local light     - frame.cluster_grid.w, the number of directional
+//                           lights, which are not clustered;
+//   light count           - frame.light_count;
+//   light index capacity  - the length of cluster_light_indices.indices.
 
 // Set 0, binding 5 (Binding_Per_Frame::Cluster_Counters). EXACT mirror of
 // Renderer_System::Cluster_Counters_GPU. Reset to zero every frame.
@@ -80,8 +80,13 @@ void main()
 {
     const uint cluster = gl_GlobalInvocationID.x;
 
+    const uint cluster_count        = frame.cluster_grid.x * frame.cluster_grid.y * frame.cluster_grid.z;
+    const uint first_local_light    = frame.cluster_grid.w;
+    const uint light_count          = uint(max(frame.light_count, 0));
+    const uint light_index_capacity = uint(cluster_light_indices.indices.length());
+
     // The dispatch is rounded up to whole groups.
-    if (cluster >= push.cluster_count)
+    if (cluster >= cluster_count)
         return;
 
     const vec3 box_min = cluster_aabbs.aabbs[cluster].min_point.xyz;
@@ -90,7 +95,7 @@ void main()
     // ── Pass 1: count ─────────────────────────────────────────
     uint count = 0u;
 
-    for (uint i = push.first_local_light; i < push.light_count; ++i)
+    for (uint i = first_local_light; i < light_count; ++i)
     {
         if (Light_reaches_cluster(i, box_min, box_max))
             ++count;
@@ -107,8 +112,8 @@ void main()
     {
         offset = atomicAdd(cluster_counters.light_index_count, count);
 
-        if (offset < push.light_index_capacity)
-            stored = min(count, push.light_index_capacity - offset);
+        if (offset < light_index_capacity)
+            stored = min(count, light_index_capacity - offset);
 
         if (stored < count)
             atomicAdd(cluster_counters.dropped_light_count, count - stored);
@@ -121,7 +126,7 @@ void main()
     // than the first one never exposes unwritten entries.
     uint written = 0u;
 
-    for (uint i = push.first_local_light; i < push.light_count && written < stored; ++i)
+    for (uint i = first_local_light; i < light_count && written < stored; ++i)
     {
         if (Light_reaches_cluster(i, box_min, box_max))
         {

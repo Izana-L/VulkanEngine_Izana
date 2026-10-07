@@ -46,8 +46,8 @@ namespace Renderer_System
     public:
 
         // _compute_layout: the compute pipeline layout the pass is built
-        // and dispatched against (its push constant range holds
-        // Cluster_Push_Constants).
+        // against. The pass declares no push constants: it reads the light
+        // range and the grid dimensions from the frame's uniform block.
         Light_Clusters(const Vulkan_Device& _device, VmaAllocator _allocator,
                        VkPipelineCache _pipeline_cache, VkPipelineLayout _compute_layout);
         ~Light_Clusters();
@@ -84,12 +84,11 @@ namespace Renderer_System
         void Commit(const MathLib::Matrix4& _projection, float _near_plane);
 
         // Records the assignment pass: one invocation per cluster tests
-        // the local lights [_first_local_light, _light_count) of the frame
-        // (the directional lights at the start of the buffer are not
-        // clustered). The compute descriptor sets must already be bound
-        // with _compute_layout.
-        void Record_dispatch(VkCommandBuffer _command_buffer, VkPipelineLayout _compute_layout,
-                             uint32_t _first_local_light, uint32_t _light_count) const;
+        // the local lights of the frame, [Frame_UBO::directional_light_count,
+        // Frame_UBO::light_count): the directional lights at the start of
+        // the buffer are not clustered. The compute descriptor sets must
+        // already be bound with the compute pipeline layout.
+        void Record_dispatch(VkCommandBuffer _command_buffer) const;
 
         VkBuffer   Get_aabb_buffer() const { return aabb_buffer.buffer; }
         VkPipeline Get_pipeline() const { return pipeline.Get_handle(); }

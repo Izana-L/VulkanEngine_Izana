@@ -35,16 +35,16 @@
 #include "common/scene_data.glsl"
 #include "common/bindless.glsl"
 #include "common/cluster_data.glsl"
+#include "common/safe_math.glsl"
 #include "common/shading.glsl"
 
-layout(location = 0) in vec3 frag_world_normal;
-layout(location = 1) in vec3 frag_world_pos;
-layout(location = 2) in vec2 frag_uv;
-layout(location = 3) in vec4 frag_color;
-layout(location = 4) flat in uint frag_material_index;
+// Inputs from mesh.vert
+#include "common/mesh_varyings.glsl"
 
-layout(location = 0) out vec4  out_accumulation;
-layout(location = 1) out float out_revealage;
+// Outputs: the position in the pColorAttachments of the subpass
+// (Vulkan_Render_Pass.cpp), from the same macros.
+layout(location = GPU_OIT_OUTPUT_ACCUMULATION) out vec4  out_accumulation;
+layout(location = GPU_OIT_OUTPUT_REVEALAGE)    out float out_revealage;
 
 // ── Weight function ───────────────────────────────────────────
 // Equation 7 of McGuire and Bavoil:
@@ -87,16 +87,27 @@ float Oit_weight(float _view_depth, float _alpha)
 
 void main()
 {
-    const vec4  base       = Material_base_color(frag_material_index, frag_color, frag_uv);
-    const float view_depth = View_depth(frag_world_pos);
-    const float alpha      = clamp(base.a, 0.0, 1.0);
+    const Material material = material_buffer.materials[frag_material_index];
+    const vec4     base     = Material_base_color(material, frag_color, frag_uv);
+    const float    view_depth = View_depth(frag_world_pos);
+    const float    alpha      = clamp(base.a, 0.0, 1.0);
+
+    const vec3 lit = Shade_surface(base.rgb, frag_world_pos, frag_world_normal, gl_FragCoord.xy, view_depth);
+
+    // The accumulation is a sum: a NaN or an infinity added to it cannot be
+    // taken back, and would spoil the pixel for every layer of every object
+    // over it, not only for this fragment. A fragment with a non-finite color
+    // is dropped instead (the normals and lights that reach this point are
+    // finite by construction; this is the last line of defense).
+    if (!Is_finite(lit))
+        discard;
 
     // The swapchain is a UNORM target: the fixed-function blending of the
     // sorted path clamped every source color to [0, 1] before blending it.
     // The same clamp keeps the look of that path and bounds the
     // accumulation (see OIT_WEIGHT_MAX). An HDR target would replace it
     // with a larger bound.
-    const vec3 color = clamp(Shade_surface(base.rgb, frag_world_pos, frag_world_normal, gl_FragCoord.xy, view_depth), 0.0, 1.0);
+    const vec3 color = clamp(lit, 0.0, 1.0);
 
     const float weight = Oit_weight(view_depth, alpha);
 

@@ -33,6 +33,9 @@
     <ClCompile Include="..\code\sources\Sampler_Cache.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\code\sources\Shader_Self_Test.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\code\sources\Pipeline_Layout.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -108,6 +111,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\code\headers\Sampler_Cache.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code\headers\Shader_Self_Test.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\code\headers\Swapchain_Targets.hpp">

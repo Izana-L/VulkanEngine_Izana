@@ -1,12 +1,15 @@
 #pragma once
 
 #include <Matrix.hpp>
+#include <Matrix3.hpp>
 #include <Vector.hpp>
 #include <Vector3.hpp>
 #include <MathConstants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
+#include <algorithm>
+#include <cassert>
 #include <cmath>
 
 
@@ -73,13 +76,20 @@ namespace MathLib
         }
 
         // Builds a rotation matrix from Euler angles (pitch=X, yaw=Y, roll=Z).
-        // Applied in ZYX order (roll first, then yaw, then pitch) — be aware that
-        // different engines use different orders; always document which order you use.
+        // Applied to a vector, the rotations happen in the order X (pitch) first,
+        // then Y (yaw), then Z (roll), all around the FIXED world axes:
+        //   R = Rz * Ry * Rx
+        // This is the same convention as Quat::From_euler (glm), so both ways of
+        // building a rotation from the same angles agree:
+        //   Rotation_euler(p, y, r) == Quat::To_matrix4(Quat::From_euler(p, y, r))
+        // Different engines use different orders; this is the one the whole Math
+        // module (and Transform_Component) uses. With this order the gimbal lock
+        // sits at yaw = +-90 degrees.
         inline Matrix4 Rotation_euler(float pitch, float yaw, float roll) {
             Matrix4 rX = RotationX(pitch);
             Matrix4 rY = RotationY(yaw);
             Matrix4 rZ = RotationZ(roll);
-            return rX * rY * rZ;
+            return rZ * rY * rX;
         }
 
         // Builds a non-uniform scale matrix
@@ -129,14 +139,20 @@ namespace MathLib
 
         // Builds the basis from a view direction and an approximate up:
         // forward is normalized, right = cross(forward, up) and the up
-        // vector is re-orthogonalized from both. Same math as glm::lookAtRH.
-        // Degenerate when forward is parallel to up (right becomes NaN).
-        inline View_basis Make_view_basis(const Vector3& forward, const Vector3& up) 
+        // vector is re-orthogonalized from both. Same math as glm::lookAtRH,
+        // but it never produces NaN:
+        //   - a zero-length forward (eye == center) has no direction, so the
+        //     default forward (-Z) is used
+        //   - an up that is zero or parallel to forward (looking straight up or
+        //     down against world-up) is replaced by an arbitrary perpendicular
+        //     of forward (see Vec3::Safe_up)
+        inline View_basis Make_view_basis(const Vector3& forward, const Vector3& up)
         {
             View_basis basis;
-            basis.forward = glm::normalize(forward);
-            basis.right = glm::normalize(glm::cross(basis.forward, up));
-            basis.up = glm::cross(basis.right, basis.forward);
+            basis.forward = Vec3::Normalize(forward);
+            if (Vec3::Length_squared(basis.forward) == 0.0f) basis.forward = Vec3::Forward();
+            basis.right = Vec3::Normalize(Vec3::Cross(basis.forward, Vec3::Safe_up(basis.forward, up)));
+            basis.up = Vec3::Cross(basis.right, basis.forward);
             return basis;
         }
 
@@ -165,16 +181,71 @@ namespace MathLib
             return View_from_basis(eye, Make_view_basis(center - eye, up));
         }
 
+        // ---------------------------------------------------------
+        // Projection input validation
+        // ---------------------------------------------------------
+        // A projection built from invalid parameters (aspect 0, fov 0 or PI,
+        // near 0, an empty ortho box...) holds inf/NaN, and a single such matrix
+        // in a per-frame buffer poisons everything drawn with it. So the
+        // projection builders check their input:
+        //   - DEBUG builds: an assert fires, to catch the bad caller;
+        //   - RELEASE builds: the value is clamped to the nearest valid one (NaN
+        //     falls back to a default), so the frame still renders sanely.
+        namespace Detail
+        {
+            // std::clamp that maps NaN to a fallback instead of letting it through.
+            inline float Clamp_or(float value, float lo, float hi, float fallback) {
+                return std::isnan(value) ? fallback : std::clamp(value, lo, hi);
+            }
+
+            // Vertical field of view, valid in (0, PI) radians (tan(fov/2) must stay finite and positive).
+            inline float Valid_fov(float fovY) {
+                assert(fovY > 0.0f && fovY < Constants::PI && "fovY must be in (0, PI) radians");
+                return Clamp_or(fovY, Constants::EPSILON_LARGE, Constants::PI - Constants::EPSILON_LARGE,
+                    Constants::FOV_DEFAULT * Constants::DEG_TO_RAD);
+            }
+
+            // Width / height, valid when finite and > 0.
+            inline float Valid_aspect(float aspect) {
+                assert(aspect > 0.0f && std::isfinite(aspect) && "aspect must be finite and > 0");
+                return Clamp_or(aspect, Constants::EPSILON_LARGE, 1.0f / Constants::EPSILON_LARGE, 1.0f);
+            }
+
+            // Perspective near plane, valid when finite and > 0 (z_ndc is divided by it).
+            inline float Valid_near(float nearPlane) {
+                assert(nearPlane > 0.0f && std::isfinite(nearPlane) && "near plane must be finite and > 0");
+                return Clamp_or(nearPlane, Constants::EPSILON, Constants::FLOAT_MAX, Constants::NEAR_PLANE_DEFAULT);
+            }
+
+            // Perspective far plane, valid when finite and beyond the (already valid) near plane.
+            inline float Valid_far(float nearPlane, float farPlane) {
+                assert(farPlane > nearPlane && std::isfinite(farPlane) && "far plane must be finite and > near plane");
+                const float min_far = nearPlane * (1.0f + Constants::EPSILON_SMALL);
+                return std::min(farPlane > min_far ? farPlane : min_far, Constants::FLOAT_MAX); // NaN -> min_far
+            }
+
+            // Orthographic range [lo, hi]: glm divides by (hi - lo), so the two ends must differ.
+            // Only (nearly) equal ends are touched; a flipped range (hi < lo) is legal.
+            inline float Keep_apart(float lo, float hi) {
+                assert(std::isfinite(lo) && std::isfinite(hi) && lo != hi && "ortho range must be finite and non-empty");
+                const float min_gap = std::max(Constants::EPSILON, std::abs(lo) * Constants::EPSILON_SMALL);
+                return (std::abs(hi - lo) >= min_gap) ? hi : lo + min_gap;
+            }
+        }
+
         // Builds a perspective projection matrix.
         // Simulates how a real camera sees: objects farther away appear smaller.
         // This is the standard projection for 3D games.
-        //   fovY       -> vertical field of view in radians (e.g. glm::radians(60.0f))
-        //   aspect     -> viewport width / viewport height
-        //   nearPlane  -> closest distance the camera can see (avoid 0, causes precision issues)
-        //   farPlane   -> farthest distance the camera can see
+        //   fovY       -> vertical field of view in radians (e.g. glm::radians(60.0f)), in (0, PI)
+        //   aspect     -> viewport width / viewport height, > 0
+        //   nearPlane  -> closest distance the camera can see, > 0 (avoid ~0, causes precision issues)
+        //   farPlane   -> farthest distance the camera can see, > nearPlane
+        // Invalid values assert in debug builds and are clamped in release builds.
         inline Matrix4 Perspective(float fovY, float aspect,
             float nearPlane, float farPlane) {
-            return glm::perspective(fovY, aspect, nearPlane, farPlane);
+            nearPlane = Detail::Valid_near(nearPlane);
+            return glm::perspective(Detail::Valid_fov(fovY), Detail::Valid_aspect(aspect),
+                nearPlane, Detail::Valid_far(nearPlane, farPlane));
         }
         // =========================================================
         // Reverse-Z
@@ -225,14 +296,20 @@ namespace MathLib
         // Same requirements as Reverse_z_correction(): float depth buffer,
         // depth cleared to 0.0, compare op GREATER.
         //
-        //   fovY      -> vertical field of view in radians
-        //   aspect    -> viewport width / viewport height
+        //   fovY      -> vertical field of view in radians, in (0, PI)
+        //   aspect    -> viewport width / viewport height, > 0
         //   nearPlane -> closest distance the camera can see (must be > 0)
+        // Invalid values assert in debug builds and are clamped in release
+        // builds (aspect 0 or near 0 would otherwise put inf/NaN in the matrix).
         //
         // Right-handed, camera looking down -Z, [0,1] depth: the same
         // conventions glm::perspective follows under GLM_FORCE_DEPTH_ZERO_TO_ONE.
         inline Matrix4 Perspective_reverse_z_infinite(float fovY, float aspect,
             float nearPlane) {
+            fovY = Detail::Valid_fov(fovY);
+            aspect = Detail::Valid_aspect(aspect);
+            nearPlane = Detail::Valid_near(nearPlane);
+
             const float focal = 1.0f / std::tan(fovY * 0.5f);
 
             Matrix4 projection(0.0f);
@@ -247,9 +324,16 @@ namespace MathLib
         // Builds an orthographic projection matrix.
         // No perspective foreshortening: objects stay the same size regardless of depth.
         // Used for 2D games, UI rendering, shadow maps, and technical/CAD views.
+        // Each pair (left/right, bottom/top, near/far) must differ, or the matrix
+        // would divide by zero: equal values assert in debug builds and are pushed
+        // apart by a minimal gap in release builds. A flipped pair (right < left)
+        // is legal and mirrors the projection.
         inline Matrix4 Orthographic(float left, float right,
             float bottom, float top,
             float nearPlane, float farPlane) {
+            right = Detail::Keep_apart(left, right);
+            top = Detail::Keep_apart(bottom, top);
+            farPlane = Detail::Keep_apart(nearPlane, farPlane);
             return glm::ortho(left, right, bottom, top, nearPlane, farPlane);
         }
 
@@ -327,11 +411,15 @@ namespace MathLib
             return glm::inverse(m);
         }
 
-        // Returns the normal matrix: inverse-transpose of m as a Matrix3.
+        // Returns the normal matrix: inverse-transpose of the upper-left 3x3 of m.
         // CRITICAL for correct lighting with non-uniform scale: normals cannot
         // be transformed by the same matrix as positions — they need this one.
+        // Assumes an affine matrix (TRS), where translation does not affect
+        // normals. Delegates to Mat3::Normal_matrix, which stays finite when an
+        // axis is scaled to 0 (see there) and only needs the 3x3, so it is also
+        // cheaper than inverting the full 4x4 (this runs once per draw).
         inline Matrix3 Normal_matrix(const Matrix4& m) {
-            return Matrix3(glm::transpose(glm::inverse(m)));
+            return Mat3::Normal_matrix(Matrix3(m));
         }
 
         // Extracts only the upper-left 3x3 submatrix (rotation + scale, no translation).
@@ -350,9 +438,32 @@ namespace MathLib
             return true;
         }
 
-        // Checks if the matrix is singular (no inverse exists)
+        // Checks if the matrix is singular (no inverse exists).
+        // The determinant alone cannot decide this: it grows and shrinks with the
+        // SIZE of the matrix (Scale_uniform(0.1) has det 1e-3 and is perfectly
+        // invertible), so an absolute threshold on it flags valid small matrices.
+        // Instead each column is normalized to unit length first; the determinant
+        // of that matrix is the Hadamard ratio, in [0, 1]: 1 when the columns are
+        // mutually perpendicular, 0 when they are linearly dependent, whatever
+        // their size. "epsilon" is a threshold on that ratio. A zero column, or a
+        // matrix with NaN/inf components, counts as singular.
+        //
+        // An affine matrix (last row 0,0,0,1, i.e. any TRS) is singular exactly
+        // when its upper 3x3 is, so only that part is tested: the translation
+        // column would otherwise inflate the column lengths and make a far-away
+        // object look singular.
         inline bool Is_singular(const Matrix4& m, float epsilon = Constants::EPSILON_SMALL) {
-            return std::abs(Determinant(m)) < epsilon;
+            const bool affine = m[0][3] == 0.0f && m[1][3] == 0.0f && m[2][3] == 0.0f && m[3][3] == 1.0f;
+            if (affine) return Mat3::Is_singular(Matrix3(m), epsilon);
+
+            const float len0 = glm::length(m[0]);
+            const float len1 = glm::length(m[1]);
+            const float len2 = glm::length(m[2]);
+            const float len3 = glm::length(m[3]);
+            if (!(len0 > 0.0f) || !(len1 > 0.0f) || !(len2 > 0.0f) || !(len3 > 0.0f)) return true; // also catches NaN
+
+            const float ratio = std::abs(Determinant(Matrix4(m[0] / len0, m[1] / len1, m[2] / len2, m[3] / len3)));
+            return !(ratio >= epsilon); // written this way so NaN counts as singular
         }
 
         // Checks if the matrix is orthogonal (pure rotation, no scale or shear).
@@ -374,23 +485,56 @@ namespace MathLib
 
         // Extracts the scale component from a TRS matrix.
         // Scale is the length of each of the first three column vectors.
+        // If the matrix MIRRORS (determinant of its 3x3 is negative) the X scale
+        // is returned NEGATIVE: a rotation cannot represent a mirror, so the usual
+        // convention for decomposing a TRS matrix is to carry it in the sign of
+        // one scale axis. This makes the round trip work:
+        //   TRS(Get_translation(m), quat_from(Get_Rotation(m)), Get_scale(m)) == m
         inline Vector3 Get_scale(const Matrix4& m) {
-            return glm::vec3(
+            Vector3 scale(
                 glm::length(glm::vec3(m[0])),
                 glm::length(glm::vec3(m[1])),
                 glm::length(glm::vec3(m[2]))
             );
+            if (glm::determinant(Matrix3(m)) < 0.0f) scale.x = -scale.x;
+            return scale;
         }
 
         // Extracts the rotation component as a 3x3 matrix from a TRS matrix,
         // removing the scale by normalizing the column vectors.
+        // Always returns a proper rotation (determinant +1): a mirror in m is
+        // carried by the sign of Get_scale().x, not by the rotation.
+        // An axis scaled to 0 has lost its direction, so it is rebuilt as the
+        // cross product of the other two. If two or more axes collapsed the
+        // rotation cannot be recovered and the identity is returned.
         inline Matrix3 Get_Rotation(const Matrix4& m) {
-            glm::vec3 scale = Get_scale(m);
-            return Matrix3(
-                glm::vec3(m[0]) / scale.x,
-                glm::vec3(m[1]) / scale.y,
-                glm::vec3(m[2]) / scale.z
-            );
+            Vector3 axis[3] = { Vector3(m[0]), Vector3(m[1]), Vector3(m[2]) };
+            bool valid[3];
+            int valid_count = 0;
+
+            for (int i = 0; i < 3; ++i)
+            {
+                const float len_sq = glm::dot(axis[i], axis[i]);
+                valid[i] = len_sq > Constants::FLOAT_MIN;
+                if (valid[i])
+                {
+                    axis[i] *= 1.0f / std::sqrt(len_sq);
+                    ++valid_count;
+                }
+            }
+
+            if (valid_count < 2) return Matrix3(1.0f);
+
+            if (valid_count == 3)
+            {
+                // A mirror shows up as a left-handed basis: flip one axis to get a rotation.
+                if (glm::dot(axis[0], glm::cross(axis[1], axis[2])) < 0.0f) axis[0] = -axis[0];
+            }
+            else if (!valid[0]) axis[0] = glm::cross(axis[1], axis[2]);
+            else if (!valid[1]) axis[1] = glm::cross(axis[2], axis[0]);
+            else                axis[2] = glm::cross(axis[0], axis[1]);
+
+            return Matrix3(axis[0], axis[1], axis[2]);
         }
 
         // =========================================================

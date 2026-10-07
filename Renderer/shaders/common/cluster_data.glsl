@@ -4,6 +4,9 @@
 // Set and binding numbers shared with C++.
 #include "gpu_shared.h"
 
+// The fragment-to-cluster arithmetic, shared with the shader self-test.
+#include "cluster_math.glsl"
+
 // Clustered lighting: the per-cluster light lists of the frame and the
 // mapping from a fragment to its cluster. Requires frame_set.glsl, included
 // before this file.
@@ -50,28 +53,17 @@ layout(set = GPU_SET_PER_FRAME, binding = GPU_BINDING_CLUSTER_LIGHT_INDICES, std
     uint indices[];
 } cluster_light_indices;
 
-// Tile and slice of a fragment. _frag_coord is gl_FragCoord.xy (origin at
-// the top left, pixel centers at .5); _view_depth is the distance along
-// the view direction, -z in view space. Fragments beyond the last slice
-// boundary go to the last slice, closer than the first one to slice 0.
+// Tile and slice of a fragment, and the index of its cluster, for the grid
+// of the frame: the pure functions of cluster_math.glsl with the values of
+// Frame_UBO.
 uvec3 Cluster_coordinates(vec2 _frag_coord, float _view_depth)
 {
-    uvec2 tile = uvec2(_frag_coord * vec2(frame.cluster_grid.xy) / frame.cluster_params.xy);
-    tile = min(tile, frame.cluster_grid.xy - uvec2(1u));
-
-    // log of a non-positive value is undefined; such a depth cannot come
-    // from a visible fragment, and the clamp keeps it in slice 0.
-    const float slice = floor(log(max(_view_depth, 1e-4)) * frame.cluster_params.z + frame.cluster_params.w);
-    const uint  last_slice = frame.cluster_grid.z - 1u;
-
-    return uvec3(tile, uint(clamp(slice, 0.0, float(last_slice))));
+    return Cluster_coordinates_in_grid(_frag_coord, _view_depth, frame.cluster_grid.xyz, frame.cluster_params);
 }
 
 uint Cluster_index(uvec3 _coordinates)
 {
-    return _coordinates.x
-         + _coordinates.y * frame.cluster_grid.x
-         + _coordinates.z * frame.cluster_grid.x * frame.cluster_grid.y;
+    return Cluster_index_in_grid(_coordinates, frame.cluster_grid.xyz);
 }
 
 #endif

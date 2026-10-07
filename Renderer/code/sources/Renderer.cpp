@@ -2,6 +2,7 @@
 
 #include <Cluster_Grid.hpp>
 #include <Descriptor_Sets.hpp>
+#include <Shader_Self_Test.hpp>
 #include <Vulkan_Utils.hpp>
 #include <Vulkan_Vertex_Layout.hpp>
 
@@ -42,17 +43,7 @@ namespace Renderer_System
         static_assert(FRUSTUM_PLANE_COUNT == Frustum::PLANE_COUNT,
             "Frame_UBO::frustum_planes and Frustum must hold the same planes");
 
-        // CoreTypes does not include gpu_shared.h: the pass bits of
-        // Object_GPU::flags are the macros the shaders read
-        // (RENDER_PASS_* of scene_data.glsl), so the CoreTypes enum must
-        // agree with them.
-        static_assert(Render_Pass_Bit::Opaque == GPU_RENDER_PASS_OPAQUE,
-            "Render_Pass_Bit::Opaque and RENDER_PASS_OPAQUE of the shaders must be the same bit");
-        static_assert(Render_Pass_Bit::Transparent == GPU_RENDER_PASS_TRANSPARENT,
-            "Render_Pass_Bit::Transparent and RENDER_PASS_TRANSPARENT of the shaders must be the same bit");
-
-#ifndef NDEBUG
-        // Debug self-check of the culling test (Frustum::
+        // Self-check of the culling test (Frustum::
         // Intersects_ellipsoid), on a case whose result is known: a mesh
         // bounding sphere of radius 1 at the origin under a parent scaled
         // (2, 1, 1) and a child rotated 45 degrees about Z. The product has
@@ -63,8 +54,10 @@ namespace Renderer_System
         // x = -2.0). The longest column would cull both.
         //
         // cull_objects.comp evaluates the same formula
-        // (mesh_table.glsl); a change to one side that breaks this case
-        // makes the two cullings diverge. Throws std::logic_error.
+        // (bounding_math.glsl); a change to one side that breaks this case
+        // makes the two cullings diverge. Pure CPU and instantaneous, so it
+        // runs in every build; the shader side is compared with this one by
+        // Shader_Self_Test. Throws std::logic_error.
         void Check_ellipsoid_culling()
         {
             using namespace MathLib;
@@ -88,7 +81,19 @@ namespace Renderer_System
                                        "; hidden object culled: " + (outside_culled ? "yes" : "no") + ")");
             }
         }
+
+        // A disagreement between a shader and its C++ twin means lights or
+        // objects are computed wrongly on this GPU, or with these shaders:
+        // reported in every build, and fatal in a debug one, where a
+        // developer is about to look at the result.
+        void Report_self_test_failure(const std::string& _message)
+        {
+            std::cerr << "[Renderer] SELF-TEST FAILED: " << _message << "\n";
+
+#ifndef NDEBUG
+            throw std::logic_error("Renderer: self-test failed: " + _message);
 #endif
+        }
 
         // Size of the framebuffer of _window in pixels, which is the size
         // the swapchain is built for. Zero in a dimension while minimized.
@@ -343,12 +348,26 @@ namespace Renderer_System
     {
         try
         {
-#ifndef NDEBUG
-            // The CPU culling of the transparent items and the GPU culling
-            // of the opaque ones evaluate the same formula; its known case
-            // is checked once per debug run.
+            // -- Self-tests --
+            // The arithmetic that exists twice, in the shaders and in C++,
+            // is compared before anything is drawn.
+            //
+            // CPU culling of the transparent items and the GPU culling of
+            // the opaque ones evaluate the same formula; its known case.
             Check_ellipsoid_culling();
-#endif
+
+            // The cluster mapping against the boxes the light pass tests
+            // lights with: pure CPU, deterministic.
+            if (const std::string problem = Cluster_Grid::Verify_consistency(); !problem.empty())
+                throw std::logic_error("Renderer: the cluster grid is inconsistent: " + problem);
+
+            // The GLSL of the cluster mapping, the culling test and
+            // Safe_normalize, run on this GPU, against their C++ twins.
+            if (const std::string mismatch = Shader_Self_Test::Run(device, allocator.Get_handle(), pipeline_cache.Get_handle(), upload_context);
+                !mismatch.empty())
+            {
+                Report_self_test_failure("the shaders disagree with their C++ twins:" + mismatch);
+            }
 
             // -- Bindless samplers --
             // Slot i of the sampler array receives the sampler of
@@ -994,11 +1013,10 @@ namespace Renderer_System
                 sizeof(GPU_Light) * light_count);
         }
 
+        // light_count and directional_light_count (set below) are also the
+        // range the cluster pass distributes, [directional, count): it reads
+        // them from this block, with no copy of its own.
         ubo.light_count = static_cast<int32_t>(light_count);
-
-        // Also the range the cluster pass distributes (its push constants).
-        uploaded_light_count = light_count;
-        uploaded_directional_light_count = directional_count;
 
         // -- Clustered lighting --
         // The grid is built for the near plane of the packet when it is a

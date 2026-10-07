@@ -121,8 +121,14 @@ namespace MathLib
         // Returns a vector with the same direction but length 1.
         // Critical in 3D graphics: normals, light directions, camera directions
         // all need to be unit-length for lighting math to be correct.
+        // A zero-length vector has no direction, so it is returned as ZERO
+        // instead of NaN (glm::normalize divides 0 by 0). There is no absolute
+        // "small" threshold: only a squared length below FLOAT_MIN (|v| < ~1e-19,
+        // where it underflows) counts as zero, so short but valid vectors still
+        // normalize. NaN input still gives NaN, so real upstream bugs stay visible.
         inline Vector3 Normalize(const Vector3& v) {
-            return glm::normalize(v);
+            const float len_sq = Length_squared(v);
+            return (len_sq <= Constants::FLOAT_MIN) ? Zero() : v * (1.0f / std::sqrt(len_sq));
         }
 
         // Checks if a vector already has length ~1 (within a small tolerance)
@@ -134,13 +140,16 @@ namespace MathLib
         // Angles and rotation
         // =========================================================
 
-        // Returns the angle (in radians) between two vectors, ignoring their length.
+        // Returns the angle (in radians, in [0, PI]) between two vectors, ignoring their length.
         // Unlike 2D, there's no single "Angle()" function relative to one axis here,
         // since in 3D a vector's orientation can't be described by one angle alone.
+        // Computed as atan2(|a x b|, a . b) rather than acos(a . b): acos is
+        // ill-conditioned near 0 and PI (a dot product within float rounding of
+        // +-1 cannot tell 0.01 degrees from 0), while atan2 keeps its precision
+        // at every angle. It also needs no normalization, so a zero-length
+        // vector gives 0 instead of NaN.
         inline float Angle_between(const Vector3& a, const Vector3& b) {
-            float dot = Dot(Normalize(a), Normalize(b));
-            dot = glm::clamp(dot, -1.0f, 1.0f); // avoid NaN from floating point errors in acos
-            return std::acos(dot);
+            return std::atan2(Length(Cross(a, b)), Dot(a, b));
         }
 
         // Rotates vector v around an arbitrary axis by the given angle (radians),
@@ -148,11 +157,44 @@ namespace MathLib
         //   v_rot = v*cos(theta) + (axis × v)*sin(theta) + axis*(axis · v)*(1-cos(theta))
         // This lets you rotate around ANY axis, not just X/Y/Z - useful when you
         // don't want to build a full rotation matrix or quaternion for a single rotation.
+        // A zero-length axis defines no rotation, so v is returned unchanged.
         inline Vector3 Rotate_around_axis(const Vector3& v, const Vector3& axis, float radians) {
             Vector3 normAxis = Normalize(axis); // the formula assumes a unit-length axis
+            if (Length_squared(normAxis) == 0.0f) return v;
             float c = std::cos(radians);
             float s = std::sin(radians);
             return v * c + Cross(normAxis, v) * s + normAxis * Dot(normAxis, v) * (1.0f - c);
+        }
+
+        // =========================================================
+        // Basis helpers
+        // =========================================================
+
+        // Returns a unit vector perpendicular to v (v does not need to be normalized).
+        // A vector has infinitely many perpendiculars in 3D; this one is arbitrary
+        // but deterministic and well conditioned: v is crossed with the axis it is
+        // LEAST aligned with. Returns zero for a zero-length v.
+        // Used wherever a direction is needed but the geometry does not give one
+        // (opposite vectors in Slerp, a view straight up or down, ...).
+        inline Vector3 Any_perpendicular(const Vector3& v) {
+            const Vector3 a = glm::abs(v);
+            const Vector3 axis = (a.x <= a.y && a.x <= a.z) ? UnitX()
+                               : (a.y <= a.z)               ? UnitY()
+                                                            : UnitZ();
+            return Normalize(Cross(v, axis));
+        }
+
+        // Returns a unit "up" hint that is safe to cross with "forward".
+        // cross(forward, up) is the "right" vector of a camera or object; it
+        // collapses to zero (and everything built from it turns NaN) when up is
+        // zero or parallel to forward, e.g. a camera looking straight up or down
+        // against world-up. In that case an arbitrary perpendicular of forward is
+        // returned instead. "forward" must be unit length.
+        inline Vector3 Safe_up(const Vector3& forward, const Vector3& up) {
+            const Vector3 u = Normalize(up);
+            // forward and u are unit length, so |cross| is the sine of the angle between them
+            constexpr float min_sin_sq = Constants::EPSILON_SMALL * Constants::EPSILON_SMALL;
+            return (Length_squared(Cross(forward, u)) > min_sin_sq) ? u : Any_perpendicular(forward);
         }
 
         // =========================================================
@@ -171,27 +213,61 @@ namespace MathLib
         // Use this when interpolating DIRECTIONS (e.g. smoothly turning a camera
         // or character from facing one way to facing another) rather than positions,
         // since Lerp-ing two directions can shrink/distort the path in between.
+        //
+        // Degenerate inputs are handled instead of producing NaN:
+        //   - a zero-length vector has no direction -> falls back to Lerp
+        //   - same direction (any lengths)          -> the direction is kept, only the length is blended
+        //   - opposite directions                   -> every plane through both is a valid arc,
+        //                                              so an arbitrary perpendicular is used
         inline Vector3 Slerp(const Vector3& a, const Vector3& b, float t)
         {
-            Vector3 normA = Normalize(a);
-            Vector3 normB = Normalize(b);
+            if (Length_squared(a) <= Constants::FLOAT_MIN || Length_squared(b) <= Constants::FLOAT_MIN)
+                return Lerp(a, b, t);
 
-            float dot = glm::clamp(Dot(normA, normB), -1.0f, 1.0f);
-            float theta = std::acos(dot) * t; // angle to rotate by, scaled by t
+            const Vector3 normA = Normalize(a);
+            const Vector3 normB = Normalize(b);
+            const float len = glm::mix(Length(a), Length(b), t);
 
-            // build a vector perpendicular to normA, lying in the plane of normA/normB
-            Vector3 relative = Normalize(normB - normA * dot);
-            Vector3 dir = normA * std::cos(theta) + relative * std::sin(theta);
+            const float dot = glm::clamp(Dot(normA, normB), -1.0f, 1.0f);
 
-            float len = glm::mix(Length(a), Length(b), t);
+            // Part of normB perpendicular to normA: its length is sin(theta) and its
+            // direction is the one the arc leaves normA in. For nearly parallel or
+            // opposite vectors this subtraction cancels almost everything and leaves a
+            // small component along normA, which would make the result drift away from
+            // unit length: removing it once more keeps the vector truly perpendicular.
+            Vector3 perpendicular = normB - normA * dot;
+            perpendicular -= normA * Dot(perpendicular, normA);
+            const float sin_theta = Length(perpendicular);
+
+            Vector3 dir;
+            if (sin_theta > Constants::EPSILON_SMALL)
+            {
+                const float theta = std::atan2(sin_theta, dot) * t; // angle to rotate by, scaled by t
+                dir = normA * std::cos(theta) + (perpendicular / sin_theta) * std::sin(theta);
+            }
+            else if (dot > 0.0f)
+            {
+                // Same direction: no arc to follow, and normalized lerp is exact at this size.
+                dir = Normalize(glm::mix(normA, normB, t));
+            }
+            else
+            {
+                // Opposite directions: half a turn through an arbitrary perpendicular.
+                const float angle = Constants::PI * t;
+                dir = normA * std::cos(angle) + Any_perpendicular(normA) * std::sin(angle);
+            }
+
             return dir * len;
         }
 
         // Eased interpolation: same straight-line path as Lerp, but speed eases
         // in and out (slow-fast-slow) instead of being constant.
         // Good for animations/transitions that should feel less mechanical.
+        // t is clamped to [0, 1], like GLSL smoothstep: the curve overshoots
+        // wildly outside that range (t=2 would give -4).
         inline Vector3 SmoothStep(const Vector3& a, const Vector3& b, float t) {
-            float smoothT = t * t * (3.0f - 2.0f * t); // classic smoothstep curve
+            float clampedT = glm::clamp(t, 0.0f, 1.0f);
+            float smoothT = clampedT * clampedT * (3.0f - 2.0f * clampedT); // classic smoothstep curve
             return Lerp(a, b, smoothT);
         }
 
@@ -210,9 +286,12 @@ namespace MathLib
         // Projects v onto the direction of "onto": returns the component of v
         // that points in the same direction as "onto".
         // Used for: sliding movement along a surface, shadow/lighting math.
+        // The result does not depend on the length of "onto", so there is no
+        // "too short" threshold: only a (numerically) zero-length "onto", which
+        // has no direction to project on, returns zero.
         inline Vector3 Project(const Vector3& v, const Vector3& onto) {
             float ontoLenSq = Length_squared(onto);
-            if (ontoLenSq < Constants::EPSILON_SMALL) return Zero(); // avoid division by ~zero
+            if (ontoLenSq <= Constants::FLOAT_MIN) return Zero(); // avoid division by zero
             return onto * (Dot(v, onto) / ontoLenSq);
         }
 
