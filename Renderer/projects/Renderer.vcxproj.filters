@@ -72,6 +72,9 @@
     <ClCompile Include="..\code\sources\Mesh_Registry.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\code\sources\Mesh_Upload.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\code\sources\Present_Sync.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -82,9 +85,6 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\code\sources\Renderer_Setup.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="..\code\sources\Upload_Context.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -161,6 +161,9 @@
     <ClInclude Include="..\code\headers\Mesh_Registry.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\code\headers\Mesh_Upload.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="..\code\headers\Present_Sync.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -168,9 +171,6 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\code\headers\Renderer_Limits.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="..\code\headers\Upload_Context.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\code\headers\Validation_Mode.hpp">

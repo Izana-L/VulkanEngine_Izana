@@ -64,6 +64,13 @@ namespace Renderer_System
         assert(_allocator != VK_NULL_HANDLE && "Vulkan_Allocator must be fully constructed before creating the OIT targets");
         assert(_extent.width > 0 && _extent.height > 0 && "OIT target extent must be greater than zero");
 
+        // The targets are created with vmaCreateImage directly (lazily
+        // allocated memory), not through Vulkan_Image_Utils::Create_image,
+        // so the check that the device can make an image of this size and
+        // usage is made here, in every build, before anything is created.
+        Vulkan_Image_Utils::Require_image_support(_allocator, _format, VK_IMAGE_TILING_OPTIMAL, OIT_TARGET_USAGE,
+                                                  _extent.width, _extent.height, 1, "Vulkan_OIT_Resources");
+
         VkImageCreateInfo image_info{};
         image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         image_info.imageType = VK_IMAGE_TYPE_2D;
@@ -108,8 +115,7 @@ namespace Renderer_System
         Target target;
         target.image = Unique_Image(_allocator, created);
         target.lazily_allocated = lazily_allocated;
-        target.view = Unique_Image_View(_device, Vulkan_Image_Utils::Create_image_view(_device, target.image.Get(),
-                                                                                      _format, VK_IMAGE_ASPECT_COLOR_BIT, 1));
+        target.view = Create_unique_image_view(_device, target.image.Get(), _format, VK_IMAGE_ASPECT_COLOR_BIT, 1);
 
         return target;
     }

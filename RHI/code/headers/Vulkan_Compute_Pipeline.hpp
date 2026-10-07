@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.h>
 
 #include <Vulkan_Device.hpp>
+#include <Vulkan_Handles.hpp>
 
 #include <string>
 
@@ -27,11 +28,11 @@ namespace Renderer_System
     // with its descriptor sets at the same bind point. State bound at
     // VK_PIPELINE_BIND_POINT_GRAPHICS is not visible to vkCmdDispatch.
     //
+    // The handle is owned by a Unique_Pipeline, like Vulkan_Pipeline's.
     // Not copyable; movable, like Vulkan_Pipeline.
     class Vulkan_Compute_Pipeline
     {
-        VkDevice   device_handle;
-        VkPipeline pipeline;
+        Unique_Pipeline pipeline;
 
     public:
 
@@ -47,22 +48,17 @@ namespace Renderer_System
         Vulkan_Compute_Pipeline(const Vulkan_Device& _device, VkPipelineCache _pipeline_cache,
             VkPipelineLayout _pipeline_layout, const std::string& _shader_path);
 
-        ~Vulkan_Compute_Pipeline();
+        ~Vulkan_Compute_Pipeline() = default;
 
         Vulkan_Compute_Pipeline(const Vulkan_Compute_Pipeline&) = delete;
         Vulkan_Compute_Pipeline& operator=(const Vulkan_Compute_Pipeline&) = delete;
 
-        Vulkan_Compute_Pipeline(Vulkan_Compute_Pipeline&& _other) noexcept;
-        Vulkan_Compute_Pipeline& operator=(Vulkan_Compute_Pipeline&& _other) noexcept;
+        Vulkan_Compute_Pipeline(Vulkan_Compute_Pipeline&& _other) noexcept = default;
+        Vulkan_Compute_Pipeline& operator=(Vulkan_Compute_Pipeline&& _other) noexcept = default;
 
         // Bound with vkCmdBindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE)
         // before vkCmdDispatch.
         VkPipeline Get_handle() const;
-
-    private:
-
-        void Destroy();
-        VkShaderModule Create_shader_module(const std::string& _spv_file_path) const;
     };
 
 } // namespace Renderer_System

@@ -1,5 +1,6 @@
 #include "Renderer_Impl.hpp"
 
+#include <Mesh_Upload.hpp>
 #include <Vulkan_Image_Utils.hpp>
 #include <Vulkan_Utils.hpp>
 
@@ -123,18 +124,20 @@ namespace Renderer_System
 
             if (mesh_count > 0)
             {
-                upload_context.Record_mesh_copies(transfer_cmd, _batch.meshes, mesh_registry, first_mesh_id,
-                                                  geometry_pool, mesh_table_buffer.buffer);
+                Record_mesh_copies(upload_context, transfer_cmd, _batch.meshes, mesh_registry, first_mesh_id,
+                                   geometry_pool, mesh_table_buffer.buffer);
             }
 
             // -- Textures --
             // No barriers are needed BETWEEN assets: each Texture_GPU
             // barriers its own image, so the recordings touch disjoint
             // resources. The barriers that do exist (layout transitions,
-            // mip generation) are internal to each Texture_GPU.
+            // mip generation) are internal to each Texture_GPU. Their
+            // staging buffers come from the upload context, like the one of
+            // the meshes.
             for (const Texture_Upload& upload : _batch.textures)
             {
-                textures.emplace_back(device, allocator.Get_handle(), transfer_cmd, *upload.data,
+                textures.emplace_back(device, allocator.Get_handle(), upload_context, transfer_cmd, *upload.data,
                                       Vulkan_Image_Utils::To_vk_format(upload.format));
             }
 
@@ -150,7 +153,8 @@ namespace Renderer_System
             // for the device (the transfer either never ran or was waited
             // for), release the staging and command buffers, give back the
             // ranges and drop the registry entries added above (Texture_GPU
-            // destructors free their images).
+            // destructors free their images; the staging buffers were freed
+            // by the upload context).
             upload_context.Abort(transfer_cmd);
 
             if (meshes_registered)
@@ -163,8 +167,8 @@ namespace Renderer_System
 
         // -- Post-upload --
         // The transfer has completed (Submit_and_wait returned), so the GPU
-        // has consumed every staging buffer in the batch and they can all be
-        // freed now.
+        // has consumed every staging buffer in the batch, the textures' and
+        // the meshes' alike, and they can all be freed now.
         upload_context.End(transfer_cmd);
 
         for (size_t i = 0; i < mesh_count; ++i)
@@ -172,8 +176,6 @@ namespace Renderer_System
 
         for (size_t i = first_texture; i < textures.size(); ++i)
         {
-            textures[i].Release_staging_buffers();
-
             // Register in the global bindless texture array. Only the view
             // is registered: the sampler is chosen per draw, from the
             // sampler array, by the material's preset. The bindless index,

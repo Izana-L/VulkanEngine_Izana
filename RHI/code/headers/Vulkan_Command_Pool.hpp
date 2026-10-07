@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.h>
 
 #include <Vulkan_Device.hpp>
+#include <Vulkan_Handles.hpp>
 
 #include <cstdint>
 #include <vector>
@@ -21,10 +22,13 @@ namespace Renderer_System {
     //     buffers for one-off uploads (Renderer::Upload_batch).
     // Both used to be written by hand at their call sites; this is the
     // one implementation of pool creation in the engine.
+    //
+    // The pool is owned by a Unique_Command_Pool, whose destruction frees
+    // every command buffer allocated from it. Not copyable; movable.
     class Vulkan_Command_Pool 
     {
         VkDevice device_handle;
-        VkCommandPool command_pool;
+        Unique_Command_Pool command_pool;
         std::vector<VkCommandBuffer> command_buffers;
 
     public:
@@ -37,13 +41,13 @@ namespace Renderer_System {
             uint32_t _buffer_count,
             VkCommandPoolCreateFlags _flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
 
-        ~Vulkan_Command_Pool();
+        ~Vulkan_Command_Pool() = default;
 
         Vulkan_Command_Pool(const Vulkan_Command_Pool&) = delete;
         Vulkan_Command_Pool& operator=(const Vulkan_Command_Pool&) = delete;
 
-        Vulkan_Command_Pool(Vulkan_Command_Pool&& _other) noexcept;
-        Vulkan_Command_Pool& operator=(Vulkan_Command_Pool&& _other) noexcept;
+        Vulkan_Command_Pool(Vulkan_Command_Pool&& _other) noexcept = default;
+        Vulkan_Command_Pool& operator=(Vulkan_Command_Pool&& _other) noexcept = default;
 
         // Returns the command buffer assigned to a specific index
         // (0 to _buffer_count - 1). The caller is responsible for
@@ -67,11 +71,6 @@ namespace Renderer_System {
 
         // How many command buffers were allocated up front.
         uint32_t Get_buffer_count() const;
-
-    private:
-        // Destroys the command pool. Destroying the pool automatically
-        // frees all command buffers allocated from it.
-        void Destroy();
     };
 
 }

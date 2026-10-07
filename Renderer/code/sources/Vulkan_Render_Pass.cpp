@@ -16,9 +16,10 @@ namespace Renderer_System {
         VkFormat _accumulation_format,
         VkFormat _revealage_format)
 
-        : device_handle(_device.Get_logical_device_handle()),
-        render_pass(VK_NULL_HANDLE),
+        : render_pass(),
         depth_format(_depth_format) {
+
+        const VkDevice device_handle = _device.Get_logical_device_handle();
 
         assert(device_handle != VK_NULL_HANDLE && "Vulkan_Device must be fully constructed before creating a render pass");
         assert(_color_format != VK_FORMAT_UNDEFINED && "Color format cannot be VK_FORMAT_UNDEFINED");
@@ -268,58 +269,27 @@ namespace Renderer_System {
         render_pass_info.dependencyCount = static_cast<uint32_t>(dependencies.size());
         render_pass_info.pDependencies = dependencies.data();
 
-        VK_CHECK(vkCreateRenderPass(device_handle, &render_pass_info, nullptr, &render_pass),
+        // The output of a failed creation is undefined: the owner is built
+        // only from the handle of a successful one.
+        VkRenderPass created = VK_NULL_HANDLE;
+        VK_CHECK(vkCreateRenderPass(device_handle, &render_pass_info, nullptr, &created),
             "Failed to create render pass");
+
+        render_pass = Unique_Render_Pass(device_handle, created);
 
         std::cout << "[Vulkan_Render_Pass] Render pass created successfully (color, depth and two OIT attachments; "
                      "opaque, transparent and composite subpasses).\n";
     }
 
-    // ---------- Destructor ----------
-    Vulkan_Render_Pass::~Vulkan_Render_Pass() {
-        Destroy();
-    }
-
-    // ---------- Destroy ----------
-    void Vulkan_Render_Pass::Destroy() {
-        if (render_pass != VK_NULL_HANDLE) {
-            vkDestroyRenderPass(device_handle, render_pass, nullptr);
-            render_pass = VK_NULL_HANDLE;
-        }
-    }
-
-    // ---------- Move constructor ----------
-    Vulkan_Render_Pass::Vulkan_Render_Pass(Vulkan_Render_Pass&& _other) noexcept
-        : device_handle(_other.device_handle),
-        render_pass(_other.render_pass),
-        depth_format(_other.depth_format) {
-
-        _other.render_pass = VK_NULL_HANDLE;
-    }
-
-    // ---------- Move assignment ----------
-    Vulkan_Render_Pass& Vulkan_Render_Pass::operator=(Vulkan_Render_Pass&& _other) noexcept {
-        if (this != &_other) {
-            Destroy();
-
-            device_handle = _other.device_handle;
-            render_pass = _other.render_pass;
-            depth_format = _other.depth_format;
-
-            _other.render_pass = VK_NULL_HANDLE;
-        }
-        return *this;
-    }
-
     // ---------- Get_handle ----------
     VkRenderPass Vulkan_Render_Pass::Get_handle() const {
-        assert(render_pass != VK_NULL_HANDLE && "Get_handle() called on a moved-from or destroyed Vulkan_Render_Pass");
-        return render_pass;
+        assert(render_pass && "Get_handle() called on a moved-from or destroyed Vulkan_Render_Pass");
+        return render_pass.Get();
     }
 
     // ---------- Get_depth_format ----------
     VkFormat Vulkan_Render_Pass::Get_depth_format() const {
-        assert(render_pass != VK_NULL_HANDLE && "Get_depth_format() called on a moved-from or destroyed Vulkan_Render_Pass");
+        assert(render_pass && "Get_depth_format() called on a moved-from or destroyed Vulkan_Render_Pass");
         return depth_format;
     }
 

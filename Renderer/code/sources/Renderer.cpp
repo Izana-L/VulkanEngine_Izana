@@ -339,20 +339,13 @@ namespace Renderer_System
             }
 
             // Entry point to give back an image that was acquired and never
-            // presented (swapchain maintenance1). The KHR name is tried
-            // first; the EXT predecessor has the same signature.
-            if (device.Is_swapchain_maintenance1_enabled())
+            // presented (swapchain maintenance1). The device knows which
+            // variant (KHR or its EXT predecessor, same signature) it
+            // enabled, so the function of that name is loaded directly.
+            if (const Swapchain_Maintenance1_Variant* variant = device.Get_swapchain_maintenance1_variant())
             {
-                const VkDevice dev = device.Get_logical_device_handle();
-
                 release_swapchain_images = reinterpret_cast<PFN_vkReleaseSwapchainImagesKHR>(
-                    vkGetDeviceProcAddr(dev, "vkReleaseSwapchainImagesKHR"));
-
-                if (release_swapchain_images == nullptr)
-                {
-                    release_swapchain_images = reinterpret_cast<PFN_vkReleaseSwapchainImagesKHR>(
-                        vkGetDeviceProcAddr(dev, "vkReleaseSwapchainImagesEXT"));
-                }
+                    vkGetDeviceProcAddr(device.Get_logical_device_handle(), variant->release_images_function));
             }
 
             pipeline_registry.Warm_up(Build_pipeline_manifest());

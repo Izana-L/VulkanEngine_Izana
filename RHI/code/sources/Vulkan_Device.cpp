@@ -6,6 +6,7 @@
 #include <set>
 #include <cstring>
 #include <cassert>
+#include <optional>
 #include <unordered_set>
 
 namespace Renderer_System {
@@ -19,12 +20,11 @@ namespace Renderer_System {
 
         std::unordered_set<std::string> Enumerate_device_extensions(VkPhysicalDevice _device)
         {
-            uint32_t extension_count = 0;
-            VK_CHECK(vkEnumerateDeviceExtensionProperties(_device, nullptr, &extension_count, nullptr),
-                "Vulkan_Device: enumerate device extensions");
-
-            std::vector<VkExtensionProperties> available_extensions(extension_count);
-            VK_CHECK(vkEnumerateDeviceExtensionProperties(_device, nullptr, &extension_count, available_extensions.data()),
+            const std::vector<VkExtensionProperties> available_extensions = Vulkan_Utils::Enumerate<VkExtensionProperties>(
+                [&](uint32_t* _count, VkExtensionProperties* _data)
+                {
+                    return vkEnumerateDeviceExtensionProperties(_device, nullptr, _count, _data);
+                },
                 "Vulkan_Device: enumerate device extensions");
 
             std::unordered_set<std::string> names;
@@ -34,10 +34,6 @@ namespace Renderer_System {
             return names;
         }
 
-        // Every requirement of Is_device_suitable that _support fails, in
-        // words, for the error raised when no GPU qualifies. Empty when the
-        // device is suitable; Is_device_suitable is defined as exactly that,
-        // so the message and the decision cannot disagree.
         // First floating-point depth format of the candidates that can be a
         // depth attachment with optimal tiling, in order of preference:
         // D32_SFLOAT first, because the stencil aspect is not used and
@@ -58,6 +54,10 @@ namespace Renderer_System {
             return VK_FORMAT_UNDEFINED;
         }
 
+        // Every requirement that _support fails, in words, for the error
+        // raised when no GPU qualifies. Empty when the GPU is suitable: a
+        // GPU is suitable exactly when this list is empty, so the message
+        // and the decision cannot disagree.
         std::vector<std::string> Find_missing_requirements(const Device_Support& _support, const Device_Requirements& _requirements)
         {
             std::vector<std::string> missing;
@@ -81,8 +81,17 @@ namespace Renderer_System {
 
             if (!_support.swapchain_extension)
                 missing.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
-            else if (!_support.surface_adequate)
-                missing.push_back("a surface format and a present mode for the window");
+            else if (_support.queue_families.present_family.has_value())
+            {
+                // Formats and present modes are only reported for a GPU that
+                // can present to the surface; without a present queue family
+                // the entry above already says why, and the surface was not
+                // asked.
+                if (!_support.surface_adequate)
+                    missing.push_back("a surface format and a present mode for the window");
+                else if (!_support.surface_srgb_format)
+                    missing.push_back("an sRGB surface format (the shaders output linear color and rely on the hardware sRGB encode)");
+            }
 
             // Bindless textures are not optional in this renderer: every
             // pipeline layout carries the bindless set and the fragment
@@ -143,6 +152,276 @@ namespace Renderer_System {
 
             return missing;
         }
+
+        // Queue families the engine uses, out of _families (the properties of
+        // every family of _device, read once by the caller).
+        Queue_Family_Indices Find_queue_families(VkPhysicalDevice _device, VkSurfaceKHR _surface,
+                                                 const std::vector<VkQueueFamilyProperties>& _families)
+        {
+            assert(_device != VK_NULL_HANDLE);
+            assert(_surface != VK_NULL_HANDLE);
+
+            Queue_Family_Indices indices;
+
+            // The graphics queue also records every compute dispatch, so its
+            // family must support both kinds of work. Desktop GPUs always
+            // expose such a family, but the specification only guarantees
+            // that one family of one device of the implementation supports
+            // graphics and compute together, not that every graphics family
+            // does. A device without such a family ends up without
+            // graphics_family and is rejected as incomplete.
+            constexpr VkQueueFlags required_graphics_flags = VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT;
+
+            for (uint32_t i = 0; i < static_cast<uint32_t>(_families.size()); ++i)
+            {
+                if ((_families[i].queueFlags & required_graphics_flags) == required_graphics_flags)
+                    indices.graphics_family = i;
+
+                VkBool32 present_support = VK_FALSE;
+                VK_CHECK(vkGetPhysicalDeviceSurfaceSupportKHR(_device, i, _surface, &present_support),
+                    "Vulkan_Device: query surface support");
+
+                if (present_support == VK_TRUE)
+                    indices.present_family = i;
+
+                if (indices.Is_complete()) break;
+            }
+
+            return indices;
+        }
+
+        // Everything the selection and the creation of the device need to
+        // know about _device. _properties are the ones of vkGetPhysicalDeviceProperties,
+        // read once by the caller.
+        Device_Support Query_device_support(VkPhysicalDevice _device, const VkPhysicalDeviceProperties& _properties,
+                                            VkSurfaceKHR _surface, const Vulkan_Instance& _instance)
+        {
+            assert(_device != VK_NULL_HANDLE);
+            assert(_surface != VK_NULL_HANDLE);
+
+            Device_Support support;
+
+            // Properties: API version and limits. The version the application
+            // can rely on is the minimum of the instance's and the device's:
+            // the device may report a higher one than the instance enables.
+            support.api_version = std::min(_instance.Get_api_version(), _properties.apiVersion);
+            support.max_sampler_anisotropy = _properties.limits.maxSamplerAnisotropy;
+            support.max_bound_descriptor_sets = _properties.limits.maxBoundDescriptorSets;
+            support.max_draw_indirect_count = _properties.limits.maxDrawIndirectCount;
+            support.max_per_stage_storage_buffers = _properties.limits.maxPerStageDescriptorStorageBuffers;
+            support.max_set_storage_buffers = _properties.limits.maxDescriptorSetStorageBuffers;
+            support.timestamp_period = _properties.limits.timestampPeriod;
+
+            // Descriptor indexing limits. The properties struct is core only
+            // from Vulkan 1.2, and chaining it on an older device is invalid;
+            // such devices keep all-zero limits and are rejected anyway.
+            if (support.api_version >= VK_API_VERSION_1_2) {
+                VkPhysicalDeviceDescriptorIndexingProperties indexing_properties{};
+                indexing_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES;
+
+                VkPhysicalDeviceProperties2 properties2{};
+                properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+                properties2.pNext = &indexing_properties;
+
+                vkGetPhysicalDeviceProperties2(_device, &properties2);
+
+                Bindless_Limits& limits = support.bindless_limits;
+                limits.max_per_stage_sampled_images = indexing_properties.maxPerStageDescriptorUpdateAfterBindSampledImages;
+                limits.max_per_set_sampled_images = indexing_properties.maxDescriptorSetUpdateAfterBindSampledImages;
+                limits.max_per_stage_samplers = indexing_properties.maxPerStageDescriptorUpdateAfterBindSamplers;
+                limits.max_per_set_samplers = indexing_properties.maxDescriptorSetUpdateAfterBindSamplers;
+                limits.max_per_stage_resources = indexing_properties.maxPerStageUpdateAfterBindResources;
+                limits.max_descriptors_in_all_pools = indexing_properties.maxUpdateAfterBindDescriptorsInAllPools;
+            }
+
+            // Extensions.
+            const std::unordered_set<std::string> extensions = Enumerate_device_extensions(_device);
+
+            support.swapchain_extension = true;
+            for (const char* required : required_device_extensions)
+                if (extensions.count(required) == 0) support.swapchain_extension = false;
+
+            // Swapchain maintenance1: the first variant (KHR, then EXT) whose
+            // instance extension is enabled and whose device extension this
+            // GPU exposes. Both halves come from the same entry of the
+            // table, so they always carry the same name, which is what the
+            // specification requires of the dependency between them.
+            for (const Swapchain_Maintenance1_Variant& variant : SWAPCHAIN_MAINTENANCE1_VARIANTS)
+            {
+                if (_instance.Is_extension_enabled(variant.surface_extension) && extensions.count(variant.swapchain_extension) != 0)
+                {
+                    support.swapchain_maintenance1_variant = &variant;
+                    break;
+                }
+            }
+
+            // Features, through one chained query. The swapchain maintenance1
+            // struct is chained only when a variant of it is usable on this
+            // GPU, as required for a feature query.
+            // VkPhysicalDeviceVulkan12Features is chained only on a Vulkan 1.2
+            // device, where the structure is defined; older devices keep every
+            // Vulkan 1.2 feature false and are rejected anyway. It is the same
+            // structure the device is created with, so the query and the
+            // creation read the features from one place.
+            VkPhysicalDeviceVulkan12Features vulkan12_features{};
+            vulkan12_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+
+            VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR maintenance1_features{};
+            maintenance1_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_KHR;
+
+            const bool query_vulkan12 = support.api_version >= VK_API_VERSION_1_2;
+            const bool query_maintenance1 = support.swapchain_maintenance1_variant != nullptr;
+
+            void* feature_chain = query_maintenance1 ? &maintenance1_features : nullptr;
+
+            if (query_vulkan12)
+            {
+                vulkan12_features.pNext = feature_chain;
+                feature_chain = &vulkan12_features;
+            }
+
+            VkPhysicalDeviceFeatures2 features2{};
+            features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            features2.pNext = feature_chain;
+
+            vkGetPhysicalDeviceFeatures2(_device, &features2);
+
+            support.sampler_anisotropy = features2.features.samplerAnisotropy == VK_TRUE;
+            support.multi_draw_indirect = features2.features.multiDrawIndirect == VK_TRUE;
+            support.draw_indirect_first_instance = features2.features.drawIndirectFirstInstance == VK_TRUE;
+            support.fill_mode_non_solid = features2.features.fillModeNonSolid == VK_TRUE;
+            support.independent_blend = features2.features.independentBlend == VK_TRUE;
+            support.draw_indirect_count = vulkan12_features.drawIndirectCount == VK_TRUE;
+            support.timeline_semaphore = vulkan12_features.timelineSemaphore == VK_TRUE;
+            support.depth_format = Select_float_depth_format(_device);
+            support.vertex_formats = true;
+            for (VkFormat format : _instance.Get_requirements().vertex_formats)
+            {
+                VkFormatProperties format_properties{};
+                vkGetPhysicalDeviceFormatProperties(_device, format, &format_properties);
+
+                if ((format_properties.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT) == 0)
+                    support.vertex_formats = false;
+            }
+            support.bindless = vulkan12_features.runtimeDescriptorArray == VK_TRUE &&
+                               vulkan12_features.descriptorBindingPartiallyBound == VK_TRUE &&
+                               vulkan12_features.shaderSampledImageArrayNonUniformIndexing == VK_TRUE &&
+                               vulkan12_features.descriptorBindingSampledImageUpdateAfterBind == VK_TRUE &&
+                               vulkan12_features.descriptorBindingUpdateUnusedWhilePending == VK_TRUE;
+
+
+            support.swapchain_maintenance1_feature =
+                query_maintenance1 && maintenance1_features.swapchainMaintenance1 == VK_TRUE;
+
+            // Queues. The properties of the families are read once: the
+            // queue family search and the timestamp support below share them.
+            const std::vector<VkQueueFamilyProperties> families = Vulkan_Utils::Enumerate<VkQueueFamilyProperties>(
+                [&](uint32_t* _count, VkQueueFamilyProperties* _data)
+                {
+                    vkGetPhysicalDeviceQueueFamilyProperties(_device, _count, _data);
+                },
+                "Vulkan_Device: enumerate queue families");
+
+            support.queue_families = Find_queue_families(_device, _surface, families);
+
+            // Timestamp support belongs to the queue family that records the
+            // frame: the graphics family, which also records every dispatch.
+            if (support.queue_families.graphics_family.has_value())
+                support.timestamp_valid_bits = families[support.queue_families.graphics_family.value()].timestampValidBits;
+
+            // The surface. The specification only allows asking a GPU that
+            // can present to it (vkGetPhysicalDeviceSurfaceSupportKHR, which
+            // Find_queue_families just did for every family): any other GPU
+            // is rejected for lacking a present queue, and leaving it out of
+            // these queries also keeps one GPU that cannot present from
+            // failing the whole selection with an error of its own.
+            if (support.swapchain_extension && support.queue_families.present_family.has_value())
+            {
+                const std::vector<VkSurfaceFormatKHR> formats = Vulkan_Utils::Enumerate<VkSurfaceFormatKHR>(
+                    [&](uint32_t* _count, VkSurfaceFormatKHR* _data)
+                    {
+                        return vkGetPhysicalDeviceSurfaceFormatsKHR(_device, _surface, _count, _data);
+                    },
+                    "Vulkan_Device: query surface formats");
+
+                const std::vector<VkPresentModeKHR> present_modes = Vulkan_Utils::Enumerate<VkPresentModeKHR>(
+                    [&](uint32_t* _count, VkPresentModeKHR* _data)
+                    {
+                        return vkGetPhysicalDeviceSurfacePresentModesKHR(_device, _surface, _count, _data);
+                    },
+                    "Vulkan_Device: query surface present modes");
+
+                support.surface_adequate = !formats.empty() && !present_modes.empty();
+
+                for (const VkSurfaceFormatKHR& format : formats)
+                {
+                    if (Vulkan_Utils::Is_srgb_format(format.format) && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+                    {
+                        support.surface_srgb_format = true;
+                        break;
+                    }
+                }
+            }
+
+            return support;
+        }
+
+        // How a suitable GPU ranks against the others (see Device_Rank).
+        Device_Rank Compute_rank(VkPhysicalDevice _device, const VkPhysicalDeviceProperties& _properties)
+        {
+            VkPhysicalDeviceMemoryProperties memory_properties{};
+            vkGetPhysicalDeviceMemoryProperties(_device, &memory_properties);
+
+            Device_Rank rank;
+
+            if (_properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
+                rank.type_level = 2;
+            else if (_properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU)
+                rank.type_level = 1;
+
+            for (uint32_t i = 0; i < memory_properties.memoryHeapCount; ++i)
+                if (memory_properties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+                    rank.device_local_bytes = std::max<uint64_t>(
+                        rank.device_local_bytes, memory_properties.memoryHeaps[i].size);
+
+            rank.vendor_id = _properties.vendorID;
+            rank.device_id = _properties.deviceID;
+
+            return rank;
+        }
+
+        // A physical device and everything the selection learned about it,
+        // computed once and read by every later step (the choice, the error
+        // message, the creation of the logical device).
+        struct Device_Candidate
+        {
+            VkPhysicalDevice           handle = VK_NULL_HANDLE;
+            VkPhysicalDeviceProperties properties{};
+            Device_Support             support;
+
+            // Requirements the GPU fails (Find_missing_requirements); empty
+            // when it is suitable.
+            std::vector<std::string>   missing;
+
+            // Meaningful only when the GPU is suitable.
+            Device_Rank                rank;
+        };
+
+        Device_Candidate Evaluate_candidate(VkPhysicalDevice _device, VkSurfaceKHR _surface, const Vulkan_Instance& _instance)
+        {
+            Device_Candidate candidate;
+            candidate.handle = _device;
+
+            vkGetPhysicalDeviceProperties(_device, &candidate.properties);
+
+            candidate.support = Query_device_support(_device, candidate.properties, _surface, _instance);
+            candidate.missing = Find_missing_requirements(candidate.support, _instance.Get_requirements());
+
+            if (candidate.missing.empty())
+                candidate.rank = Compute_rank(_device, candidate.properties);
+
+            return candidate;
+        }
     }
 
     // ---------- Constructor ----------
@@ -152,7 +431,7 @@ namespace Renderer_System {
                                   graphics_queue(VK_NULL_HANDLE),
                                   present_queue(VK_NULL_HANDLE),
                                   device_name(),
-                                  swapchain_maintenance1_enabled(false),
+                                  swapchain_maintenance1(nullptr),
                                   sampler_anisotropy_enabled(false),
                                   max_sampler_anisotropy(1.0f),
                                   bindless_enabled(false),
@@ -170,46 +449,48 @@ namespace Renderer_System {
         // read the same values.
         const Device_Requirements& requirements = _instance.Get_requirements();
 
-        std::vector<VkPhysicalDevice> available_devices = Enumerate_physical_devices(instance_handle);
-            
+        const std::vector<VkPhysicalDevice> available_devices = Vulkan_Utils::Enumerate<VkPhysicalDevice>(
+            [&](uint32_t* _count, VkPhysicalDevice* _data)
+            {
+                return vkEnumeratePhysicalDevices(instance_handle, _count, _data);
+            },
+            "Vulkan_Device: enumerate physical devices");
+
         if (available_devices.empty())
             throw std::runtime_error("No GPUs with Vulkan support found on this system");
 
-        std::optional<Device_Rank> best_rank;
-        VkPhysicalDevice best_device = VK_NULL_HANDLE;
-        Device_Support best_support;
+        // Every GPU is evaluated once: what it supports, which requirements
+        // it fails and, when it passes them all, how it ranks. The choice
+        // and the error message read the same evaluation.
+        std::optional<Device_Candidate> best;
 
         // What each rejected GPU lacks, so the error names the actual cause
         // instead of listing every requirement.
         std::string rejections;
 
-        for (VkPhysicalDevice candidate : available_devices) {
-            const Device_Support support = Query_device_support(candidate, surface_handle, _instance);
-            const std::optional<Device_Rank> rank = Rate_device_suitability(candidate, support, requirements);
-            if (rank && (!best_rank || *best_rank < *rank)) {
-                best_rank = rank;
-                best_device = candidate;
-                best_support = support;
+        for (VkPhysicalDevice candidate_handle : available_devices) {
+            Device_Candidate candidate = Evaluate_candidate(candidate_handle, surface_handle, _instance);
+
+            if (!candidate.missing.empty()) {
+                rejections += "\n  " + std::string(candidate.properties.deviceName) + " lacks: ";
+                for (size_t i = 0; i < candidate.missing.size(); ++i)
+                    rejections += (i == 0 ? "" : ", ") + candidate.missing[i];
+                continue;
             }
 
-            const std::vector<std::string> missing = Find_missing_requirements(support, requirements);
-            if (!missing.empty()) {
-                VkPhysicalDeviceProperties properties{};
-                vkGetPhysicalDeviceProperties(candidate, &properties);
-
-                rejections += "\n  " + std::string(properties.deviceName) + " lacks: ";
-                for (size_t i = 0; i < missing.size(); ++i)
-                    rejections += (i == 0 ? "" : ", ") + missing[i];
-            }
+            if (!best || best->rank < candidate.rank)
+                best = std::move(candidate);
         }
 
-        if (best_device == VK_NULL_HANDLE)
+        if (!best)
             throw std::runtime_error("No suitable GPU found." + rejections);
-                
-        physical_device = best_device;
+
+        const Device_Support& best_support = best->support;
+
+        physical_device = best->handle;
         queue_family_indices = best_support.queue_families;
 
-        Log_selected_device(physical_device);
+        Log_selected_device(best->properties);
 
         // ── Queue create infos ─────────────────────────────────────
         std::set<uint32_t> unique_queue_families = {
@@ -290,23 +571,21 @@ namespace Renderer_System {
         std::vector<const char*> device_extensions = required_device_extensions;
 
         // The device half of swapchain maintenance1 needs all three: the
-        // instance half (surface maintenance1 + surface capabilities2),
-        // the device extension, and the feature bit.
-        swapchain_maintenance1_enabled =
-            _instance.Is_surface_maintenance1_enabled() &&
-            best_support.swapchain_maintenance1_extension != nullptr &&
-            best_support.swapchain_maintenance1_feature;
+        // instance half (surface maintenance1 + surface capabilities2), the
+        // device extension of the SAME variant (best_support holds it only
+        // when its instance extension is enabled), and the feature bit.
+        swapchain_maintenance1 = best_support.swapchain_maintenance1_feature ? best_support.swapchain_maintenance1_variant : nullptr;
 
-        if (swapchain_maintenance1_enabled) {
-            device_extensions.push_back(best_support.swapchain_maintenance1_extension);
-            std::cout << "[Vulkan_Device] " << best_support.swapchain_maintenance1_extension
+        if (swapchain_maintenance1 != nullptr) {
+            device_extensions.push_back(swapchain_maintenance1->swapchain_extension);
+            std::cout << "[Vulkan_Device] " << swapchain_maintenance1->swapchain_extension
                 << " enabled: present fences available.\n";
         }
         else {
             std::cout << "[Vulkan_Device] Swapchain maintenance1 not enabled ("
                 << (_instance.Is_surface_maintenance1_enabled() ? "" : "instance half missing; ")
-                << (best_support.swapchain_maintenance1_extension ? "" : "device extension missing; ")
-                << (best_support.swapchain_maintenance1_feature ? "" : "feature unsupported; ")
+                << (best_support.swapchain_maintenance1_variant ? "" : "no device extension paired with an enabled instance extension; ")
+                << ((best_support.swapchain_maintenance1_variant == nullptr || best_support.swapchain_maintenance1_feature) ? "" : "feature unsupported; ")
                 << "falling back to per-image semaphores only).\n";
         }
 
@@ -369,7 +648,7 @@ namespace Renderer_System {
         // enabled; chaining a feature struct of a disabled extension is
         // invalid usage.
         void* chain_head = &vulkan12_features;
-        vulkan12_features.pNext = swapchain_maintenance1_enabled ? &swapchain_maintenance1_features : nullptr;
+        vulkan12_features.pNext = swapchain_maintenance1 != nullptr ? &swapchain_maintenance1_features : nullptr;
 
         std::cout << "[Vulkan_Device] Bindless descriptor indexing "
             << (bindless_enabled ? "enabled" : "not available") << ".\n";
@@ -426,7 +705,7 @@ namespace Renderer_System {
         present_queue(_other.present_queue),
         queue_family_indices(_other.queue_family_indices),
         device_name(std::move(_other.device_name)),
-        swapchain_maintenance1_enabled(_other.swapchain_maintenance1_enabled),
+        swapchain_maintenance1(_other.swapchain_maintenance1),
         sampler_anisotropy_enabled(_other.sampler_anisotropy_enabled),
         max_sampler_anisotropy(_other.max_sampler_anisotropy),
         bindless_enabled(_other.bindless_enabled),
@@ -455,7 +734,7 @@ namespace Renderer_System {
             present_queue = _other.present_queue;
             queue_family_indices = _other.queue_family_indices;
             device_name = std::move(_other.device_name);
-            swapchain_maintenance1_enabled = _other.swapchain_maintenance1_enabled;
+            swapchain_maintenance1 = _other.swapchain_maintenance1;
             sampler_anisotropy_enabled = _other.sampler_anisotropy_enabled;
             max_sampler_anisotropy = _other.max_sampler_anisotropy;
             bindless_enabled = _other.bindless_enabled;
@@ -505,7 +784,11 @@ namespace Renderer_System {
     }
 
     bool Vulkan_Device::Is_swapchain_maintenance1_enabled() const {
-        return swapchain_maintenance1_enabled;
+        return swapchain_maintenance1 != nullptr;
+    }
+
+    const Swapchain_Maintenance1_Variant* Vulkan_Device::Get_swapchain_maintenance1_variant() const {
+        return swapchain_maintenance1;
     }
 
     bool Vulkan_Device::Is_bindless_supported() const {
@@ -544,257 +827,8 @@ namespace Renderer_System {
         return bindless_limits;
     }
 
-    // ---------- Enumerate_physical_devices ----------
-    std::vector<VkPhysicalDevice> Vulkan_Device::Enumerate_physical_devices(
-        VkInstance _instance) const
-    {
-        uint32_t device_count = 0;
-        VK_CHECK(vkEnumeratePhysicalDevices(_instance, &device_count, nullptr),
-            "Vulkan_Device: enumerate physical devices");
-
-        std::vector<VkPhysicalDevice> devices(device_count);
-        VK_CHECK(vkEnumeratePhysicalDevices(_instance, &device_count, devices.data()),
-            "Vulkan_Device: enumerate physical devices");
-        return devices;
-    }
-
-    // ---------- Query_device_support ----------
-    Device_Support Vulkan_Device::Query_device_support(VkPhysicalDevice _device,VkSurfaceKHR _surface,const Vulkan_Instance& _instance) const
-    {
-        assert(_device != VK_NULL_HANDLE);
-        assert(_surface != VK_NULL_HANDLE);
-
-        Device_Support support;
-
-        // Properties: API version and limits. The version the application
-        // can rely on is the minimum of the instance's and the device's:
-        // the device may report a higher one than the instance enables.
-        VkPhysicalDeviceProperties properties{};
-        vkGetPhysicalDeviceProperties(_device, &properties);
-        support.api_version = std::min(_instance.Get_api_version(), properties.apiVersion);
-        support.max_sampler_anisotropy = properties.limits.maxSamplerAnisotropy;
-        support.max_bound_descriptor_sets = properties.limits.maxBoundDescriptorSets;
-        support.max_draw_indirect_count = properties.limits.maxDrawIndirectCount;
-        support.max_per_stage_storage_buffers = properties.limits.maxPerStageDescriptorStorageBuffers;
-        support.max_set_storage_buffers = properties.limits.maxDescriptorSetStorageBuffers;
-        support.timestamp_period = properties.limits.timestampPeriod;
-
-        // Descriptor indexing limits. The properties struct is core only
-        // from Vulkan 1.2, and chaining it on an older device is invalid;
-        // such devices keep all-zero limits and are rejected anyway.
-        if (support.api_version >= VK_API_VERSION_1_2) {
-            VkPhysicalDeviceDescriptorIndexingProperties indexing_properties{};
-            indexing_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES;
-
-            VkPhysicalDeviceProperties2 properties2{};
-            properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
-            properties2.pNext = &indexing_properties;
-
-            vkGetPhysicalDeviceProperties2(_device, &properties2);
-
-            Bindless_Limits& limits = support.bindless_limits;
-            limits.max_per_stage_sampled_images = indexing_properties.maxPerStageDescriptorUpdateAfterBindSampledImages;
-            limits.max_per_set_sampled_images = indexing_properties.maxDescriptorSetUpdateAfterBindSampledImages;
-            limits.max_per_stage_samplers = indexing_properties.maxPerStageDescriptorUpdateAfterBindSamplers;
-            limits.max_per_set_samplers = indexing_properties.maxDescriptorSetUpdateAfterBindSamplers;
-            limits.max_per_stage_resources = indexing_properties.maxPerStageUpdateAfterBindResources;
-            limits.max_descriptors_in_all_pools = indexing_properties.maxUpdateAfterBindDescriptorsInAllPools;
-        }
-
-        // Extensions.
-        const std::unordered_set<std::string> extensions = Enumerate_device_extensions(_device);
-
-        support.swapchain_extension = true;
-        for (const char* required : required_device_extensions)
-            if (extensions.count(required) == 0) support.swapchain_extension = false;
-
-        if (extensions.count(VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME))
-            support.swapchain_maintenance1_extension = VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME;
-        else if (extensions.count(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME))
-            support.swapchain_maintenance1_extension = VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME;
-
-        // Features, through one chained query. The swapchain maintenance1
-        // struct is chained only when the extension exists (and its
-        // instance half is present), as required for a feature query.
-        // VkPhysicalDeviceVulkan12Features is chained only on a Vulkan 1.2
-        // device, where the structure is defined; older devices keep every
-        // Vulkan 1.2 feature false and are rejected anyway. It is the same
-        // structure the device is created with, so the query and the
-        // creation read the features from one place.
-        VkPhysicalDeviceVulkan12Features vulkan12_features{};
-        vulkan12_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-
-        VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR maintenance1_features{};
-        maintenance1_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_KHR;
-
-        const bool query_vulkan12 = support.api_version >= VK_API_VERSION_1_2;
-        const bool query_maintenance1 = support.swapchain_maintenance1_extension != nullptr && _instance.Is_surface_maintenance1_enabled();
-
-        void* feature_chain = query_maintenance1 ? &maintenance1_features : nullptr;
-
-        if (query_vulkan12)
-        {
-            vulkan12_features.pNext = feature_chain;
-            feature_chain = &vulkan12_features;
-        }
-
-        VkPhysicalDeviceFeatures2 features2{};
-        features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-        features2.pNext = feature_chain;
-
-        vkGetPhysicalDeviceFeatures2(_device, &features2);
-
-        support.sampler_anisotropy = features2.features.samplerAnisotropy == VK_TRUE;
-        support.multi_draw_indirect = features2.features.multiDrawIndirect == VK_TRUE;
-        support.draw_indirect_first_instance = features2.features.drawIndirectFirstInstance == VK_TRUE;
-        support.fill_mode_non_solid = features2.features.fillModeNonSolid == VK_TRUE;
-        support.independent_blend = features2.features.independentBlend == VK_TRUE;
-        support.draw_indirect_count = vulkan12_features.drawIndirectCount == VK_TRUE;
-        support.timeline_semaphore = vulkan12_features.timelineSemaphore == VK_TRUE;
-        support.depth_format = Select_float_depth_format(_device);
-        support.vertex_formats = true;
-        for (VkFormat format : _instance.Get_requirements().vertex_formats)
-        {
-            VkFormatProperties format_properties{};
-            vkGetPhysicalDeviceFormatProperties(_device, format, &format_properties);
-
-            if ((format_properties.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT) == 0)
-                support.vertex_formats = false;
-        }
-        support.bindless = vulkan12_features.runtimeDescriptorArray == VK_TRUE &&
-                           vulkan12_features.descriptorBindingPartiallyBound == VK_TRUE &&
-                           vulkan12_features.shaderSampledImageArrayNonUniformIndexing == VK_TRUE &&
-                           vulkan12_features.descriptorBindingSampledImageUpdateAfterBind == VK_TRUE &&
-                           vulkan12_features.descriptorBindingUpdateUnusedWhilePending == VK_TRUE;
-
-
-        support.swapchain_maintenance1_feature =
-            query_maintenance1 && maintenance1_features.swapchainMaintenance1 == VK_TRUE;
-
-        // Queues and surface.
-        support.queue_families = Find_queue_families(_device, _surface);
-
-        // Timestamp support belongs to the queue family that records the
-        // frame: the graphics family, which also records every dispatch.
-        if (support.queue_families.graphics_family.has_value())
-        {
-            uint32_t family_count = 0;
-            vkGetPhysicalDeviceQueueFamilyProperties(_device, &family_count, nullptr);
-
-            std::vector<VkQueueFamilyProperties> families(family_count);
-            vkGetPhysicalDeviceQueueFamilyProperties(_device, &family_count, families.data());
-
-            const uint32_t graphics_family = support.queue_families.graphics_family.value();
-
-            if (graphics_family < family_count)
-                support.timestamp_valid_bits = families[graphics_family].timestampValidBits;
-        }
-
-        if (support.swapchain_extension) {
-            uint32_t format_count = 0;
-            VK_CHECK(vkGetPhysicalDeviceSurfaceFormatsKHR(_device, _surface, &format_count, nullptr),
-                "Vulkan_Device: query surface formats");
-
-            uint32_t present_mode_count = 0;
-            VK_CHECK(vkGetPhysicalDeviceSurfacePresentModesKHR(_device, _surface, &present_mode_count, nullptr),
-                "Vulkan_Device: query surface present modes");
-
-            support.surface_adequate = (format_count > 0) && (present_mode_count > 0);
-        }
-
-        return support;
-    }
-
-    // ---------- Is_device_suitable ----------
-    bool Vulkan_Device::Is_device_suitable(const Device_Support& _support, const Device_Requirements& _requirements) const
-    {
-        // The requirements and their reasons live in
-        // Find_missing_requirements, which also words the error raised
-        // when no device qualifies.
-        return Find_missing_requirements(_support, _requirements).empty();
-    }
-
-    // ---------- Find_queue_families ----------
-    Queue_Family_Indices Vulkan_Device::Find_queue_families(
-        VkPhysicalDevice _device, VkSurfaceKHR _surface) const
-    {
-        assert(_device != VK_NULL_HANDLE);
-        assert(_surface != VK_NULL_HANDLE);
-
-        Queue_Family_Indices indices;
-
-        uint32_t queue_family_count = 0;
-        vkGetPhysicalDeviceQueueFamilyProperties(
-            _device, &queue_family_count, nullptr);
-
-        std::vector<VkQueueFamilyProperties> queue_families(queue_family_count);
-        vkGetPhysicalDeviceQueueFamilyProperties(
-            _device, &queue_family_count, queue_families.data());
-
-        // The graphics queue also records every compute dispatch, so its
-        // family must support both kinds of work. Desktop GPUs always
-        // expose such a family, but the specification only guarantees
-        // that one family of one device of the implementation supports
-        // graphics and compute together, not that every graphics family
-        // does. A device without such a family ends up without
-        // graphics_family and is rejected as incomplete.
-        constexpr VkQueueFlags required_graphics_flags = VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT;
-
-        for (uint32_t i = 0; i < queue_family_count; ++i) 
-        {
-            if ((queue_families[i].queueFlags & required_graphics_flags) == required_graphics_flags)
-                indices.graphics_family = i;
-
-            VkBool32 present_support = VK_FALSE;
-            VK_CHECK(vkGetPhysicalDeviceSurfaceSupportKHR(_device, i, _surface, &present_support),
-                "Vulkan_Device: query surface support");
-
-            if (present_support == VK_TRUE)
-                indices.present_family = i;
-
-            if (indices.Is_complete()) break;
-        }
-
-        return indices;
-    }
-
-    // ---------- Rate_device_suitability ----------
-    std::optional<Device_Rank> Vulkan_Device::Rate_device_suitability(
-        VkPhysicalDevice _device, const Device_Support& _support, const Device_Requirements& _requirements) const
-    {
-        assert(_device != VK_NULL_HANDLE);
-
-        if (!Is_device_suitable(_support, _requirements)) return std::nullopt;
-
-        VkPhysicalDeviceProperties properties{};
-        vkGetPhysicalDeviceProperties(_device, &properties);
-
-        VkPhysicalDeviceMemoryProperties memory_properties{};
-        vkGetPhysicalDeviceMemoryProperties(_device, &memory_properties);
-
-        Device_Rank rank;
-
-        if (properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
-            rank.type_level = 2;
-        else if (properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU)
-            rank.type_level = 1;
-
-        for (uint32_t i = 0; i < memory_properties.memoryHeapCount; ++i)
-            if (memory_properties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
-                rank.device_local_bytes = std::max<uint64_t>(
-                    rank.device_local_bytes, memory_properties.memoryHeaps[i].size);
-
-        rank.vendor_id = properties.vendorID;
-        rank.device_id = properties.deviceID;
-
-        return rank;
-    }
-
     // ---------- Log_selected_device ----------
-    void Vulkan_Device::Log_selected_device(VkPhysicalDevice _device) {
-        VkPhysicalDeviceProperties properties{};
-        vkGetPhysicalDeviceProperties(_device, &properties);
-
+    void Vulkan_Device::Log_selected_device(const VkPhysicalDeviceProperties& properties) {
         device_name = properties.deviceName;
 
         std::cout << "[Vulkan_Device] Selected GPU: " << properties.deviceName << "\n";

@@ -63,8 +63,8 @@ namespace Renderer_System {
         // stencilStoreOp in the render pass, barriers on the image with
         // both aspects, and a separate STENCIL view if the stencil is ever
         // sampled.
-        depth_image_view(_device, Vulkan_Image_Utils::Create_image_view(_device, depth_image.Get(),
-                                                                        _depth_format, VK_IMAGE_ASPECT_DEPTH_BIT, 1)) {
+        depth_image_view(Create_unique_image_view(_device, depth_image.Get(),
+                                                  _depth_format, VK_IMAGE_ASPECT_DEPTH_BIT, 1)) {
 
         assert(device_handle != VK_NULL_HANDLE && "Vulkan_Device must be fully constructed before creating depth resources");
 

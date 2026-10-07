@@ -262,6 +262,35 @@ namespace Platform {
                 reinterpret_cast<const char*>(_data.data()), static_cast<std::streamsize>(_data.size()), "binary");
         }
 
+        bool Write_binary_file_atomic(const std::string& _path, const std::vector<uint8_t>& _data) {
+            // Next to the destination, so both are on the same volume and
+            // the rename moves a directory entry instead of copying bytes.
+            // Write_file removes the temporary file by itself when the write
+            // fails, and never touches _path.
+            const std::string temp_path = _path + ".tmp";
+
+            if (!Write_binary_file(temp_path, _data)) {
+                return false;
+            }
+
+            // rename replaces an existing destination in one step on every
+            // platform std::filesystem supports (POSIX rename; MoveFileEx
+            // with MOVEFILE_REPLACE_EXISTING on Windows).
+            std::error_code rename_error;
+            fs::rename(To_path(temp_path), To_path(_path), rename_error);
+
+            if (rename_error) {
+                std::cerr << "[Filesystem] Failed to replace " << _path << " with its temporary file: "
+                    << rename_error.message() << "\n";
+
+                std::error_code cleanup_error;
+                fs::remove(To_path(temp_path), cleanup_error);
+                return false;
+            }
+
+            return true;
+        }
+
         // =========================================================
         // Executable and working directory
         // =========================================================

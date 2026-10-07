@@ -93,8 +93,11 @@
     <ClInclude Include="..\code\headers\Pipeline_Cache.hpp" />
     <ClInclude Include="..\code\headers\Shader_Stages.hpp" />
     <ClInclude Include="..\code\headers\Storage_Image.hpp" />
+    <ClInclude Include="..\code\headers\Swapchain_Maintenance1.hpp" />
     <ClInclude Include="..\code\headers\Texture_GPU.hpp" />
+    <ClInclude Include="..\code\headers\Upload_Context.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Allocator.hpp" />
+    <ClInclude Include="..\code\headers\Vulkan_Barrier.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Buffer_Utils.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Command_Pool.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Compute_Pipeline.hpp" />
@@ -104,6 +107,7 @@
     <ClInclude Include="..\code\headers\Vulkan_Image_Utils.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Instance.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Pipeline.hpp" />
+    <ClInclude Include="..\code\headers\Vulkan_Pipeline_Utils.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Surface.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Swapchain.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Utils.hpp" />
@@ -113,7 +117,9 @@
     <ClCompile Include="..\code\sources\Pipeline_Cache.cpp" />
     <ClCompile Include="..\code\sources\Storage_Image.cpp" />
     <ClCompile Include="..\code\sources\Texture_GPU.cpp" />
+    <ClCompile Include="..\code\sources\Upload_Context.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Allocator.cpp" />
+    <ClCompile Include="..\code\sources\Vulkan_Barrier.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Buffer_Utils.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Command_Pool.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Compute_Pipeline.cpp" />
@@ -122,6 +128,7 @@
     <ClCompile Include="..\code\sources\Vulkan_Image_Utils.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Instance.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Pipeline.cpp" />
+    <ClCompile Include="..\code\sources\Vulkan_Pipeline_Utils.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Surface.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Swapchain.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Utils.cpp" />

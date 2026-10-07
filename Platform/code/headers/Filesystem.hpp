@@ -89,6 +89,23 @@ namespace Platform {
         // Same guarantees as Write_text_file.
         bool Write_binary_file(const std::string& _path, const std::vector<uint8_t>& _data);
 
+        // Like Write_binary_file, but the file at _path is never seen half
+        // written: the bytes go to "<_path>.tmp" next to it, which replaces
+        // _path in one rename once it is complete. A crash, a kill or a full
+        // disk in the middle of the write leaves the previous content of
+        // _path exactly as it was (Write_binary_file truncates _path first,
+        // so an interruption leaves a prefix of the new content, and a
+        // failed write deletes the old file). Meant for files that are
+        // rebuilt from scratch and must survive the process dying while it
+        // saves them, such as caches.
+        //
+        // Returns true once _path holds the new content. On failure _path is
+        // untouched, the temporary file is removed, and the error is logged.
+        // The durability of the rename itself across a power loss is not
+        // forced to disk (no fsync). Two processes writing the same _path at
+        // the same time share the temporary file and are not supported.
+        bool Write_binary_file_atomic(const std::string& _path, const std::vector<uint8_t>& _data);
+
         // =========================================================
         // Executable and working directory
         // =========================================================

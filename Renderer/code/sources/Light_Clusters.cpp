@@ -2,6 +2,7 @@
 #include <Cluster_Grid.hpp>
 #include <Descriptor_Sets.hpp>
 #include <Renderer_Limits.hpp>
+#include <Vulkan_Barrier.hpp>
 
 #include <algorithm>
 #include <cassert>
@@ -74,7 +75,7 @@ namespace Renderer_System
         // still executing, reads the single copy of the boxes. An
         // execution dependency is enough: nothing written before has to
         // become visible to the update.
-        Vulkan_Buffer_Utils::Record_memory_barrier(_command_buffer,
+        Vulkan_Barrier::Record_memory_barrier(_command_buffer,
             { VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0 },
             { VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT });
 

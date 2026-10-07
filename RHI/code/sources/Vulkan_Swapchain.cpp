@@ -240,30 +240,27 @@ namespace Renderer_System
         extent = chosen_extent;
         selected_present_mode = present_mode;
 
-        uint32_t actual_image_count = 0;
-        VK_CHECK(vkGetSwapchainImagesKHR(device_handle, swapchain.Get(), &actual_image_count, nullptr),
+        images = Vulkan_Utils::Enumerate<VkImage>(
+            [&](uint32_t* _count, VkImage* _data)
+            {
+                return vkGetSwapchainImagesKHR(device_handle, swapchain.Get(), _count, _data);
+            },
             "Vulkan_Swapchain: query swapchain images");
-        images.resize(actual_image_count);
-        VK_CHECK(vkGetSwapchainImagesKHR(device_handle, swapchain.Get(), &actual_image_count, images.data()),
-            "Vulkan_Swapchain: query swapchain images");
+
+        const uint32_t actual_image_count = static_cast<uint32_t>(images.size());
 
         std::cout << "[Vulkan_Swapchain] Swapchain created: "
             << extent.width << "x" << extent.height
             << ", " << actual_image_count << " images, present mode: "
             << (present_mode == VK_PRESENT_MODE_MAILBOX_KHR ? "MAILBOX" : "FIFO") << "\n";
 
-       // Negotiated color format: decides WHO applies the gamma curve.
-       // An *_SRGB format means the hardware encodes linear -> sRGB when
-       // writing the attachment, so the fragment shader must output LINEAR.
+        // Negotiated color format. Choose_surface_format only accepts an
+        // *_SRGB format with the SRGB_NONLINEAR color space: the hardware
+        // encodes linear -> sRGB when writing the attachment, so the
+        // fragment shaders output LINEAR color and never apply gamma.
         std::cout << "[Vulkan_Swapchain] Surface format: "
             << Vulkan_Utils::Vk_format_to_string(image_format)
-            << (Vulkan_Utils::Is_srgb_format(image_format)
-                ? "  (hardware encodes linear -> sRGB: shader must output LINEAR)"
-                : "  (no hardware encode: shader must apply gamma)")
-            << ", color space: "
-            << (surface_format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR
-                ? "SRGB_NONLINEAR" : "non-standard")
-            << "\n";
+            << "  (hardware encodes linear -> sRGB: shader must output LINEAR), color space: SRGB_NONLINEAR\n";
     }
 
     // ---------- Create_image_views ----------
@@ -277,26 +274,9 @@ namespace Renderer_System
         created.reserve(images.size());
 
         for (size_t i = 0; i < images.size(); ++i) {
-            VkImageViewCreateInfo view_create_info{};
-            view_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-            view_create_info.image = images[i];
-            view_create_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-            view_create_info.format = image_format;
-            view_create_info.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-            view_create_info.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-            view_create_info.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-            view_create_info.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-            view_create_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            view_create_info.subresourceRange.baseMipLevel = 0;
-            view_create_info.subresourceRange.levelCount = 1;
-            view_create_info.subresourceRange.baseArrayLayer = 0;
-            view_create_info.subresourceRange.layerCount = 1;
-
-            VkImageView view = VK_NULL_HANDLE;
-            VK_CHECK(vkCreateImageView(device_handle, &view_create_info, nullptr, &view),
-                "Failed to create swapchain image view");
-
-            created.emplace_back(device_handle, view);
+            // A plain color 2D view of the whole image: one level, one
+            // layer, identity swizzle.
+            created.push_back(Create_unique_image_view(device_handle, images[i], image_format, VK_IMAGE_ASPECT_COLOR_BIT, 1));
         }
 
         image_views = std::move(created);
@@ -314,23 +294,22 @@ namespace Renderer_System
         VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(_physical_device, _surface, &details.capabilities),
             "Vulkan_Swapchain: query surface capabilities");
 
-        uint32_t format_count = 0;
-        VK_CHECK(vkGetPhysicalDeviceSurfaceFormatsKHR(_physical_device, _surface, &format_count, nullptr),
+        // The formats and present modes of a surface can change while the
+        // program runs (the window moves to another monitor), so they are
+        // read with the helper that repeats an incomplete query.
+        details.formats = Vulkan_Utils::Enumerate<VkSurfaceFormatKHR>(
+            [&](uint32_t* _count, VkSurfaceFormatKHR* _data)
+            {
+                return vkGetPhysicalDeviceSurfaceFormatsKHR(_physical_device, _surface, _count, _data);
+            },
             "Vulkan_Swapchain: query surface formats");
-        if (format_count > 0) {
-            details.formats.resize(format_count);
-            VK_CHECK(vkGetPhysicalDeviceSurfaceFormatsKHR(_physical_device, _surface, &format_count, details.formats.data()),
-                "Vulkan_Swapchain: query surface formats");
-        }
 
-        uint32_t present_mode_count = 0;
-        VK_CHECK(vkGetPhysicalDeviceSurfacePresentModesKHR(_physical_device, _surface, &present_mode_count, nullptr),
+        details.present_modes = Vulkan_Utils::Enumerate<VkPresentModeKHR>(
+            [&](uint32_t* _count, VkPresentModeKHR* _data)
+            {
+                return vkGetPhysicalDeviceSurfacePresentModesKHR(_physical_device, _surface, _count, _data);
+            },
             "Vulkan_Swapchain: query surface present modes");
-        if (present_mode_count > 0) {
-            details.present_modes.resize(present_mode_count);
-            VK_CHECK(vkGetPhysicalDeviceSurfacePresentModesKHR(_physical_device, _surface, &present_mode_count, details.present_modes.data()),
-                "Vulkan_Swapchain: query surface present modes");
-        }
 
         return details;
     }
@@ -358,14 +337,14 @@ namespace Renderer_System
                 return format;
         }
 
-        // Fallback: no sRGB format at all. Nothing will apply the gamma curve
-        // and the image will look washed out - warn instead of failing silently.
-        std::cout << "[Vulkan_Swapchain] WARNING: no sRGB surface format available, "
-            << "falling back to "
-            << Vulkan_Utils::Vk_format_to_string(_available_formats[0].format)
-            << ". Shader output would need manual gamma correction.\n";
-
-        return _available_formats[0];
+        // No sRGB format at all. Nothing would apply the gamma curve (the
+        // shaders output linear color) and every frame would come out
+        // wrong without any error, so the swapchain is refused instead.
+        // Device selection already requires an sRGB surface format, so this
+        // is only reached when the surface changed after the GPU was chosen.
+        throw std::runtime_error("Vulkan_Swapchain: the surface offers no sRGB format (the first one it lists is " +
+            Vulkan_Utils::Vk_format_to_string(_available_formats[0].format) +
+            "); the shaders output linear color and rely on the hardware sRGB encode");
     }
 
     // ---------- Choose_present_mode ----------

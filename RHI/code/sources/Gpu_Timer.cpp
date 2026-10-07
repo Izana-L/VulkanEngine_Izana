@@ -1,4 +1,5 @@
 #include <Gpu_Timer.hpp>
+#include <Vulkan_Barrier.hpp>
 #include <Vulkan_Utils.hpp>
 
 #include <cassert>
@@ -178,10 +179,17 @@ namespace Renderer_System
         // No WAIT flag: the last serial of the slot was waited on, so the
         // results are available; VK_NOT_READY means the command buffer was
         // not submitted.
-        const VkResult result = vkGetQueryPoolResults(device_handle, query_pool,
+        //
+        // An error result (a lost device above all, but also running out of
+        // memory) is not "no timings this frame": it throws, so the Renderer
+        // sees it like any other failure of the frame instead of the timings
+        // going missing without a word. VK_NOT_READY is not an error and
+        // passes through the check.
+        const VkResult result = VK_CHECK(vkGetQueryPoolResults(device_handle, query_pool,
             _frame_slot * points_per_frame, slot.points_written,
             static_cast<size_t>(slot.points_written) * sizeof(uint64_t), raw_results.data(), sizeof(uint64_t),
-            VK_QUERY_RESULT_64_BIT);
+            VK_QUERY_RESULT_64_BIT),
+            "Gpu_Timer: read the timestamp queries");
 
         if (result != VK_SUCCESS)
             return false;
@@ -226,13 +234,9 @@ namespace Renderer_System
     {
         // Every stage of every earlier command finishes, and every write is
         // made available and visible, before any later command starts.
-        VkMemoryBarrier barrier{};
-        barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-        barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
-        barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-
-        vkCmdPipelineBarrier(_command_buffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
-            1, &barrier, 0, nullptr, 0, nullptr);
+        Vulkan_Barrier::Record_memory_barrier(_command_buffer,
+            { VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_WRITE_BIT },
+            { VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT });
     }
 
 } // namespace Renderer_System

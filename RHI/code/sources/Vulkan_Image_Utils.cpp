@@ -6,7 +6,8 @@
 #include <string>
 #include <cassert>
 #include <algorithm>
-#include <cmath>
+#include <bit>
+#include <vector>
 
 namespace Renderer_System
 {
@@ -24,9 +25,13 @@ namespace Renderer_System
             VkImageUsageFlags _usage,
             bool              _dedicated)
         {
-            assert(_allocator != VK_NULL_HANDLE && "Create_image() called with a null allocator");
-            assert(_width > 0 && _height > 0 && "Create_image() called with zero dimensions");
-            assert(_mip_levels > 0 && "Create_image() called with zero mip levels");
+            // Enforced in every build, before anything is created: the
+            // size, the format and the usage are checked against what the
+            // device can create instead of being handed to the driver.
+            if (_allocator == VK_NULL_HANDLE)
+                throw std::invalid_argument("Create_image: null allocator");
+
+            Require_image_support(_allocator, _format, _tiling, _usage, _width, _height, _mip_levels, "Create_image");
 
             // ---------- Image creation ----------
             VkImageCreateInfo image_info{};
@@ -95,6 +100,62 @@ namespace Renderer_System
                 vmaDestroyImage(_allocator, _image.image, _image.allocation);
                 _image.image = VK_NULL_HANDLE;
                 _image.allocation = VK_NULL_HANDLE;
+            }
+        }
+
+        // ---------- Require_image_support ----------
+        void Require_image_support(
+            VmaAllocator      _allocator,
+            VkFormat          _format,
+            VkImageTiling     _tiling,
+            VkImageUsageFlags _usage,
+            uint32_t          _width,
+            uint32_t          _height,
+            uint32_t          _mip_levels,
+            const char*       _caller)
+        {
+            // The text of the messages is only built when one is thrown: the
+            // check runs for every image that is created.
+            const auto description = [&]()
+            {
+                return std::string(_caller) + ": a " + std::to_string(_width) + "x" + std::to_string(_height) +
+                       " image of format " + Vulkan_Utils::Vk_format_to_string(_format);
+            };
+
+            if (_width == 0 || _height == 0)
+                throw std::invalid_argument(description() + " has a dimension of 0");
+
+            if (_mip_levels == 0)
+                throw std::invalid_argument(description() + " needs at least one mip level");
+
+            VmaAllocatorInfo allocator_info{};
+            vmaGetAllocatorInfo(_allocator, &allocator_info);
+
+            // The limits of image creation (imageCreateMaxExtent,
+            // imageCreateMaxMipLevels of the specification) depend on the
+            // format, tiling and usage, not only on maxImageDimension2D, so
+            // the device is asked about this exact combination.
+            VkImageFormatProperties properties{};
+            const VkResult result = vkGetPhysicalDeviceImageFormatProperties(allocator_info.physicalDevice, _format,
+                VK_IMAGE_TYPE_2D, _tiling, _usage, 0, &properties);
+
+            if (result == VK_ERROR_FORMAT_NOT_SUPPORTED)
+                throw std::runtime_error(description() + " cannot be created on this device with this tiling and usage");
+
+            VK_CHECK(result, (std::string(_caller) + ": query the image format limits").c_str());
+
+            if (_width > properties.maxExtent.width || _height > properties.maxExtent.height)
+            {
+                throw std::runtime_error(description() + " is larger than this device allows (at most " +
+                                         std::to_string(properties.maxExtent.width) + "x" + std::to_string(properties.maxExtent.height) +
+                                         " for this format, tiling and usage)");
+            }
+
+            if (_mip_levels > properties.maxMipLevels)
+            {
+                throw std::runtime_error(description() + " with " + std::to_string(_mip_levels) +
+                                         " mip levels has more than this device allows (at most " +
+                                         std::to_string(properties.maxMipLevels) + ")");
             }
         }
 
@@ -187,59 +248,13 @@ namespace Renderer_System
             return image_view;
         }
 
-        // ---------- Record_image_barrier ----------
-        void Record_image_barrier(
-            VkCommandBuffer      _command_buffer,
-            VkImage              _image,
-            VkImageLayout        _old_layout,
-            VkImageLayout        _new_layout,
-            const Barrier_Scope& _source,
-            const Barrier_Scope& _destination,
-            uint32_t             _mip_levels)
-        {
-            assert(_command_buffer != VK_NULL_HANDLE &&
-                "Record_image_barrier() called with a null command buffer");
-            assert(_image != VK_NULL_HANDLE &&
-                "Record_image_barrier() called with a null image");
-            assert(_mip_levels > 0 &&
-                "Record_image_barrier() called with zero mip levels");
-
-            // Enforced in every build: an empty stage mask is invalid usage
-            // without synchronization2, which the device does not enable,
-            // and nothing guarantees a validation layer is present to
-            // report it.
-            if (_source.stages == 0 || _destination.stages == 0)
-                throw std::invalid_argument("Record_image_barrier: the source and destination stage masks must not be empty");
-
-            VkImageMemoryBarrier barrier{};
-            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            barrier.oldLayout = _old_layout;
-            barrier.newLayout = _new_layout;
-            barrier.srcAccessMask = _source.access;
-            barrier.dstAccessMask = _destination.access;
-
-            // No queue family ownership transfer: the barrier stays within
-            // the queue family that records it.
-            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-
-            barrier.image = _image;
-            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            barrier.subresourceRange.baseMipLevel = 0;
-            barrier.subresourceRange.levelCount = _mip_levels;
-            barrier.subresourceRange.baseArrayLayer = 0;
-            barrier.subresourceRange.layerCount = 1;
-
-            vkCmdPipelineBarrier(_command_buffer, _source.stages, _destination.stages, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-        }
-
         // ---------- Transition_image_layout ----------
         void Transition_image_layout(
-            VkCommandBuffer _command_buffer,
-            VkImage         _image,
-            VkImageLayout   _old_layout,
-            VkImageLayout   _new_layout,
-            uint32_t        _mip_levels)
+            VkCommandBuffer                _command_buffer,
+            VkImage                        _image,
+            VkImageLayout                  _old_layout,
+            VkImageLayout                  _new_layout,
+            const Vulkan_Barrier::Mip_Range& _mips)
         {
             assert(_command_buffer != VK_NULL_HANDLE &&
                 "Transition_image_layout() called with a null command buffer");
@@ -251,8 +266,8 @@ namespace Renderer_System
             // must finish before the transition and what kind of work must
             // wait until after it, so the barrier actually synchronizes
             // correctly instead of just changing the layout label.
-            Barrier_Scope source;
-            Barrier_Scope destination;
+            Vulkan_Barrier::Access_Scope source;
+            Vulkan_Barrier::Access_Scope destination;
 
             if (_old_layout == VK_IMAGE_LAYOUT_UNDEFINED &&
                 _new_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
@@ -261,7 +276,7 @@ namespace Renderer_System
                 // earlier command accesses it. Transfer writes must happen
                 // after this barrier. An image that was already in use needs
                 // its earlier accesses in the source scope, so it goes
-                // through Record_image_barrier instead.
+                // through Vulkan_Barrier::Record_image_barrier instead.
                 source = { VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0 };
                 destination = { VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT };
             }
@@ -298,41 +313,56 @@ namespace Renderer_System
                 // record wrong stages and accesses without any error.
                 throw std::runtime_error("Transition_image_layout: unsupported layout transition; only the texture upload "
                                          "transitions are derived from the layouts. Record any other transition with "
-                                         "Record_image_barrier and explicit source and destination scopes.");
+                                         "Vulkan_Barrier::Record_image_barrier and explicit source and destination scopes.");
             }
 
-            Record_image_barrier(_command_buffer, _image, _old_layout, _new_layout, source, destination, _mip_levels);
+            Vulkan_Barrier::Record_image_barrier(_command_buffer, _image, _old_layout, _new_layout, source, destination, _mips);
         }
 
         // ---------- Copy_buffer_to_image ----------
-        void Copy_buffer_to_image(VkCommandBuffer _command_buffer,VkBuffer _buffer, VkImage _image,uint32_t _width,uint32_t _height)
+        void Copy_buffer_to_image(
+            VkCommandBuffer                  _command_buffer,
+            VkBuffer                         _buffer,
+            VkImage                          _image,
+            std::span<const Mip_Copy_Region> _levels)
         {
             assert(_command_buffer != VK_NULL_HANDLE && "Copy_buffer_to_image() called with a null command buffer");
             assert(_buffer != VK_NULL_HANDLE && "Copy_buffer_to_image() called with a null buffer");
             assert(_image != VK_NULL_HANDLE && "Copy_buffer_to_image() called with a null image");
 
-            VkBufferImageCopy region{};
-            region.bufferOffset = 0;
+            if (_levels.empty())
+                throw std::invalid_argument("Copy_buffer_to_image: no mip level to copy");
 
-            // 0 means "tightly packed" — the buffer has no row padding,
-            // matches how Image_Loader lays out pixel data.
-            region.bufferRowLength = 0;
-            region.bufferImageHeight = 0;
+            std::vector<VkBufferImageCopy> regions;
+            regions.reserve(_levels.size());
 
-            region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            region.imageSubresource.mipLevel = 0;   // mip 0 only — mips are generated separately
-            region.imageSubresource.baseArrayLayer = 0;
-            region.imageSubresource.layerCount = 1;
+            for (const Mip_Copy_Region& level : _levels)
+            {
+                VkBufferImageCopy region{};
+                region.bufferOffset = level.buffer_offset;
 
-            region.imageOffset = { 0, 0, 0 };
-            region.imageExtent = { _width, _height, 1 };
+                // 0 means "tightly packed" — the buffer has no row padding,
+                // matches how Image_Loader lays out pixel data.
+                region.bufferRowLength = 0;
+                region.bufferImageHeight = 0;
+
+                region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                region.imageSubresource.mipLevel = level.mip_level;
+                region.imageSubresource.baseArrayLayer = 0;
+                region.imageSubresource.layerCount = 1;
+
+                region.imageOffset = { 0, 0, 0 };
+                region.imageExtent = { level.width, level.height, 1 };
+
+                regions.push_back(region);
+            }
 
             vkCmdCopyBufferToImage(
                 _command_buffer,
                 _buffer,
                 _image,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                1, &region
+                static_cast<uint32_t>(regions.size()), regions.data()
             );
         }
 
@@ -344,14 +374,17 @@ namespace Renderer_System
             VkFormat             _format,
             int32_t              _width,
             int32_t              _height,
-            uint32_t             _mip_levels)
+            uint32_t             _mip_levels,
+            uint32_t             _first_generated_level)
         {
             assert(_command_buffer != VK_NULL_HANDLE &&
                 "Generate_mipmaps() called with a null command buffer");
             assert(_image != VK_NULL_HANDLE &&
                 "Generate_mipmaps() called with a null image");
-            assert(_mip_levels > 0 &&
-                "Generate_mipmaps() called with zero mip levels");
+
+            if (_mip_levels == 0 || _first_generated_level == 0 || _first_generated_level > _mip_levels)
+                throw std::invalid_argument("Generate_mipmaps: the first generated level (" + std::to_string(_first_generated_level) +
+                                            ") must be between 1 and the number of levels (" + std::to_string(_mip_levels) + ")");
 
             // Checked in every build, before anything is recorded: each level
             // is blitted from the previous one of the same image, so the
@@ -359,48 +392,43 @@ namespace Renderer_System
             // VK_FILTER_LINEAR requires linear filtering on the source
             // format. The 8-bit color formats support all three on every
             // device; R32_SFLOAT, for example, is not guaranteed linear
-            // filtering.
-            Require_optimal_tiling_features(_device, _format,
-                VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT,
-                "Generate_mipmaps");
-
-            VkImageMemoryBarrier barrier{};
-            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            barrier.image = _image;
-            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            barrier.subresourceRange.baseArrayLayer = 0;
-            barrier.subresourceRange.layerCount = 1;
-            barrier.subresourceRange.levelCount = 1;
-
-            int32_t mip_width = _width;
-            int32_t mip_height = _height;
-
-            // For each level i (starting at 1), blit from level i-1 (the
-            // previous, already-filled level) into level i at half the size.
-            // Mip 0 is assumed to already be in TRANSFER_DST_OPTIMAL (just
-            // copied from the staging buffer by the caller).
-            for (uint32_t i = 1; i < _mip_levels; ++i)
+            // filtering. Only needed when there is something to blit.
+            if (_first_generated_level < _mip_levels)
             {
-                // Transition level i-1: TRANSFER_DST -> TRANSFER_SRC.
-                // It was either just copied into (mip 0) or just blitted into
-                // (mip i-1 from a previous loop iteration) — either way it's
-                // currently TRANSFER_DST and needs to become the blit source.
-                barrier.subresourceRange.baseMipLevel = i - 1;
-                barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-                barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                Require_optimal_tiling_features(_device, _format,
+                    VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT,
+                    "Generate_mipmaps");
+            }
 
-                vkCmdPipelineBarrier(
-                    _command_buffer,
-                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                    0,
-                    0, nullptr,
-                    0, nullptr,
-                    1, &barrier
-                );
+            // The levels below the last copied one were filled from the
+            // staging buffer and are never a blit source: straight to
+            // shader-readable. The last copied level is the first blit
+            // source and is handled by the loop below.
+            if (_first_generated_level > 1)
+            {
+                Transition_image_layout(_command_buffer, _image,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    { 0, _first_generated_level - 1 });
+            }
+
+            // Size of the level the first blit reads.
+            int32_t mip_width = std::max(_width >> (_first_generated_level - 1), 1);
+            int32_t mip_height = std::max(_height >> (_first_generated_level - 1), 1);
+
+            // For each level i, blit from level i-1 (the previous, already
+            // filled level) into level i at half the size. Level
+            // _first_generated_level - 1 is assumed to be in
+            // TRANSFER_DST_OPTIMAL (just copied from the staging buffer by
+            // the caller).
+            for (uint32_t i = _first_generated_level; i < _mip_levels; ++i)
+            {
+                // Level i-1: TRANSFER_DST -> TRANSFER_SRC. It was either just
+                // copied into or just blitted into (mip i-1 from a previous
+                // loop iteration) — either way it's currently TRANSFER_DST
+                // and needs to become the blit source.
+                Transition_image_layout(_command_buffer, _image,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    { i - 1, 1 });
 
                 // Blit level i-1 -> level i, halving dimensions (clamped to 1).
                 const int32_t next_width = mip_width > 1 ? mip_width / 2 : 1;
@@ -429,49 +457,27 @@ namespace Renderer_System
                     VK_FILTER_LINEAR
                 );
 
-                // Transition level i-1: TRANSFER_SRC -> SHADER_READ_ONLY.
-                // This level is done — it was only needed as a blit source.
-                // The destination covers every stage that can read the image
+                // Level i-1: TRANSFER_SRC -> SHADER_READ_ONLY. This level is
+                // done — it was only needed as a blit source. The
+                // destination covers every stage that can read the image
                 // through the bindless set (Bindless_Reader_Pipeline_Stages,
                 // Shader_Stages.hpp).
-                barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-                barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-                barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-                vkCmdPipelineBarrier(
-                    _command_buffer,
-                    VK_PIPELINE_STAGE_TRANSFER_BIT, Bindless_Reader_Pipeline_Stages,
-                    0,
-                    0, nullptr,
-                    0, nullptr,
-                    1, &barrier
-                );
+                Transition_image_layout(_command_buffer, _image,
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    { i - 1, 1 });
 
                 mip_width = next_width;
                 mip_height = next_height;
             }
 
-            // The last mip level was only ever a blit DESTINATION, never a
-            // source — its loop iteration above only transitioned levels
-            // 0..mip_levels-2. Transition the final level separately:
-             // TRANSFER_DST -> SHADER_READ_ONLY, with the same destination
-            // stages as the per-level barrier above.
-            barrier.subresourceRange.baseMipLevel = _mip_levels - 1;
-            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-            vkCmdPipelineBarrier(
-                _command_buffer,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, 
-                Bindless_Reader_Pipeline_Stages,
-                0,
-                0, nullptr,
-                0, nullptr,
-                1, &barrier
-            );
+            // The last mip level was only ever a copy or blit DESTINATION,
+            // never a source — the loop above only transitioned the levels
+            // before it. Transition it separately: TRANSFER_DST ->
+            // SHADER_READ_ONLY, with the same destination stages as the
+            // per-level barrier above.
+            Transition_image_layout(_command_buffer, _image,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                { _mip_levels - 1, 1 });
         }
 
         // ---------- To_vk_format ----------
@@ -514,13 +520,15 @@ namespace Renderer_System
         // ---------- Compute_mip_levels ----------
         uint32_t Compute_mip_levels(uint32_t _width, uint32_t _height)
         {
-            assert(_width > 0 && _height > 0 &&
-                "Compute_mip_levels() called with zero dimensions");
+            // Enforced in every build: the logarithm of 0 is not a number of
+            // levels, and converting it would be undefined behavior.
+            if (_width == 0 || _height == 0)
+                throw std::invalid_argument("Compute_mip_levels: a dimension is zero (" +
+                                            std::to_string(_width) + "x" + std::to_string(_height) + ")");
 
-            const uint32_t max_dimension = std::max(_width, _height);
-
-            return static_cast<uint32_t>(
-                std::floor(std::log2(static_cast<double>(max_dimension)))) + 1;
+            // bit_width(n) is floor(log2(n)) + 1 for n > 0, computed on the
+            // integer itself instead of through floating point.
+            return static_cast<uint32_t>(std::bit_width(std::max(_width, _height)));
         }
 
     } // namespace Vulkan_Image_Utils

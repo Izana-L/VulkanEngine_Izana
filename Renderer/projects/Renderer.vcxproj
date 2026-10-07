@@ -115,6 +115,7 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
     <ClCompile Include="..\code\sources\Material_Table.cpp" />
     <ClCompile Include="..\code\sources\Mesh_GPU.cpp" />
     <ClCompile Include="..\code\sources\Mesh_Registry.cpp" />
+    <ClCompile Include="..\code\sources\Mesh_Upload.cpp" />
     <ClCompile Include="..\code\sources\Pipeline_Layout.cpp" />
     <ClCompile Include="..\code\sources\Pipeline_Registry.cpp" />
     <ClCompile Include="..\code\sources\Present_Sync.cpp" />
@@ -124,7 +125,6 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
     <ClCompile Include="..\code\sources\Renderer_Setup.cpp" />
     <ClCompile Include="..\code\sources\Sampler_Cache.cpp" />
     <ClCompile Include="..\code\sources\Source.cpp" />
-    <ClCompile Include="..\code\sources\Upload_Context.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Depth_Resources.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_Framebuffer.cpp" />
     <ClCompile Include="..\code\sources\Vulkan_OIT_Resources.cpp" />
@@ -146,6 +146,7 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
     <ClInclude Include="..\code\headers\Material_Table.hpp" />
     <ClInclude Include="..\code\headers\Mesh_GPU.hpp" />
     <ClInclude Include="..\code\headers\Mesh_Registry.hpp" />
+    <ClInclude Include="..\code\headers\Mesh_Upload.hpp" />
     <ClInclude Include="..\code\headers\Pipeline_Layout.hpp" />
     <ClInclude Include="..\code\headers\Pipeline_Registry.hpp" />
     <ClInclude Include="..\code\headers\Present_Sync.hpp" />
@@ -155,7 +156,6 @@ for %%f in ("$(ProjectDir)..\shaders\*.vert" "$(ProjectDir)..\shaders\*.frag" "$
     <ClInclude Include="..\code\headers\RenderPacket.hpp" />
     <ClInclude Include="..\code\headers\Render_Debug_Settings.hpp" />
     <ClInclude Include="..\code\headers\Sampler_Cache.hpp" />
-    <ClInclude Include="..\code\headers\Upload_Context.hpp" />
     <ClInclude Include="..\code\headers\Validation_Mode.hpp" />
     <ClInclude Include="..\code\headers\Vertex_Packing.hpp" />
     <ClInclude Include="..\code\headers\Vulkan_Depth_Resources.hpp" />

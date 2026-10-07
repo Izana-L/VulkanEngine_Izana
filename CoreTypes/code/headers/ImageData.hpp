@@ -24,11 +24,16 @@ namespace CoreTypes
     // (via stb_image or AssetCooker) and consumed by the Renderer
     // to create and upload a VkImage.
     //
-    // pixels: raw bytes in row-major order, tightly packed.
-    //   Size = width * height * bytes_per_pixel(format) * mip_levels
-    //   (mip levels are stored consecutively, largest first).
-    // mip_levels: 1 means no mipmaps; the Renderer generates them
-    //   at upload time if needed and mip_levels == 1.
+    // pixels: raw bytes in row-major order, tightly packed. The mip levels
+    //   are stored consecutively, largest first, and level L has
+    //   max(width >> L, 1) x max(height >> L, 1) texels, so
+    //   Size = the sum, over the mip_levels levels, of
+    //   max(width >> L, 1) * max(height >> L, 1) * bytes_per_pixel(format).
+    // mip_levels: how many levels of the chain `pixels` holds, at least 1.
+    //   1 is the base level alone: the Renderer generates the rest of the
+    //   chain on the GPU at upload time. A larger value (a texture cooked
+    //   offline with its own mips) is uploaded as it is, and only the levels
+    //   it lacks, if any, are generated from the last one it holds.
     struct ImageData
     {
         std::vector< uint8_t > pixels;

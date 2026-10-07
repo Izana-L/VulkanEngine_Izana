@@ -156,7 +156,12 @@ namespace Renderer_System
         // Reads the last frame recorded in _frame_slot into _out (its
         // vectors keep their capacity). Returns false, leaving _out
         // untouched, when timestamps are unsupported, the slot never
-        // recorded a complete frame, or the results are not available.
+        // recorded a complete frame, or the results are not available
+        // (VK_NOT_READY: the command buffer was not submitted).
+        //
+        // Throws Vulkan_Error when the query itself fails, a lost device
+        // (VK_ERROR_DEVICE_LOST) included: that is not "no timings", and
+        // the caller must see it.
         //
         // Precondition: the submission that recorded the slot has completed
         // (its serial was waited on), and the slot has not been recorded

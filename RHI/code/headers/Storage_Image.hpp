@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.h>
 
 #include <Vulkan_Device.hpp>
+#include <Vulkan_Handles.hpp>
 #include <Vulkan_Image_Utils.hpp>
 #include <Shader_Stages.hpp>
 
@@ -50,7 +51,7 @@ namespace Renderer_System
     //     texel. A chain of dispatches in which one reads what an earlier
     //     one wrote (imageLoad in GENERAL) records its own GENERAL ->
     //     GENERAL barrier between them, with
-    //     Vulkan_Image_Utils::Record_image_barrier (compute shader write ->
+    //     Vulkan_Barrier::Record_image_barrier (compute shader write ->
     //     compute shader read).
     //
     // Synchronization is explicit, never derived from the layouts: the
@@ -70,7 +71,9 @@ namespace Renderer_System
     // One mip level: a compute write produces a single level, and a mip
     // chain would need a separate generation pass.
     //
-    // Not copyable; movable, like Vulkan_Depth_Resources.
+    // The image and its view are owned by Unique_Image / Unique_Image_View:
+    // destruction and moves are theirs. Not copyable; movable, like
+    // Vulkan_Depth_Resources.
     class Storage_Image
     {
     public:
@@ -96,9 +99,10 @@ namespace Renderer_System
         // Throws std::invalid_argument if a dimension is zero, or if
         // _reader_stages is empty or holds a stage outside
         // Bindless_Reader_Pipeline_Stages (only those stages can read a
-        // bindless slot). Throws std::runtime_error if the device does not
-        // support _format with optimal tiling as a storage image, a
-        // transfer destination and a bindless texture
+        // bindless slot). Throws std::runtime_error if the device cannot
+        // create an image of that size (Vulkan_Image_Utils::Require_image_support),
+        // or does not support _format with optimal tiling as a storage
+        // image, a transfer destination and a bindless texture
         // (Vulkan_Image_Utils::Bindless_Sampled_Format_Features: sampled
         // image with linear filtering, since any sampler preset may read
         // the slot). VK_FORMAT_R8G8B8A8_UNORM and
@@ -115,13 +119,13 @@ namespace Renderer_System
             VkFormat             _format,
             VkPipelineStageFlags _reader_stages = Bindless_Reader_Pipeline_Stages);
 
-        ~Storage_Image();
+        ~Storage_Image() = default;
 
         Storage_Image(const Storage_Image&) = delete;
         Storage_Image& operator=(const Storage_Image&) = delete;
 
-        Storage_Image(Storage_Image&& _other) noexcept;
-        Storage_Image& operator=(Storage_Image&& _other) noexcept;
+        Storage_Image(Storage_Image&& _other) noexcept = default;
+        Storage_Image& operator=(Storage_Image&& _other) noexcept = default;
 
         // Replaces the image and its view with new ones of _new_extent
         // (same format and reader stages) and records their initial clear
@@ -136,12 +140,13 @@ namespace Renderer_System
         // between frames, as in Renderer::Recreate_swapchain.
         //
         // Throws std::invalid_argument if a dimension of _new_extent is
-        // zero. If creating the new image fails, the exception propagates
-        // and the old image, its view and its slot stay valid.
+        // zero, and std::runtime_error if the device cannot create an image
+        // of that size. If creating the new image fails, the exception
+        // propagates and the old image, its view and its slot stay valid.
         void Recreate(VkCommandBuffer _command_buffer, VkExtent2D _new_extent);
 
         // Records UNDEFINED -> GENERAL through
-        // Vulkan_Image_Utils::Record_image_barrier: waits for the reader
+        // Vulkan_Barrier::Record_image_barrier: waits for the reader
         // stages of earlier frames, then allows compute shader writes.
         // Expects the image back in its declared layout, after the initial
         // clear or after the previous End_write.
@@ -160,28 +165,28 @@ namespace Renderer_System
 
         // Layout left by the last recorded operation: the initial clear or
         // End_write leave SHADER_READ_ONLY_OPTIMAL, Begin_write leaves
-        // GENERAL. UNDEFINED only for a moved-from object. Recording
-        // order, not execution order.
+        // GENERAL. Recording order, not execution order. Meaningless for a
+        // moved-from object.
         VkImageLayout Get_recorded_layout() const;
 
     private:
-        // Creates an image of _extent with its view into the output
-        // parameters. On failure, destroys whatever it created and
-        // rethrows, leaving the outputs untouched.
-        void Create_image_and_view(VkExtent2D _extent,
-            Vulkan_Image_Utils::Image_Allocation& _out_image,
-            VkImageView&                          _out_view) const;
+        // An image with the view that looks at it, each owned by its own
+        // wrapper.
+        struct Image_And_View
+        {
+            Unique_Image      image;
+            Unique_Image_View view;
+        };
+
+        // Creates an image of _extent with its view. If the view cannot be
+        // created, the image is released by its wrapper while the exception
+        // propagates, so nothing leaks and nothing is left half built.
+        Image_And_View Create_image_and_view(VkExtent2D _extent) const;
 
         // Records the initial clear of the current image into
         // _command_buffer: UNDEFINED -> TRANSFER_DST_OPTIMAL, clear to
         // zero, TRANSFER_DST_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL.
         void Record_initial_clear(VkCommandBuffer _command_buffer);
-
-        // Destroys the view, then the image and its allocation. Safe on a
-        // partially created or moved-from object. Shared by the
-        // destructor, move assignment, Recreate and the constructor's
-        // failure path.
-        void Destroy();
 
         VkDevice             device_handle;
         VmaAllocator         allocator;
@@ -189,8 +194,14 @@ namespace Renderer_System
         VkExtent2D           extent;
         VkPipelineStageFlags reader_stages;
 
-        Vulkan_Image_Utils::Image_Allocation image;
-        VkImageView                          image_view;
+        // The view is declared after the image, so the destructor releases
+        // it first (Recreate does the same by hand). A move assignment
+        // assigns the members in declaration order and releases the old
+        // image before the old view; Vulkan only requires that no pending
+        // work uses either of them, not an order between an image and its
+        // views.
+        Unique_Image      image;
+        Unique_Image_View image_view;
 
         VkImageLayout recorded_layout;
     };

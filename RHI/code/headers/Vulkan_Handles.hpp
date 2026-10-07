@@ -129,11 +129,36 @@ namespace Renderer_System
         static void Destroy(VkDevice _device, VkFence _handle) noexcept { vkDestroyFence(_device, _handle, nullptr); }
     };
 
-    using Unique_Image_View  = Unique_Device_Handle<VkImageView, Image_View_Deleter>;
-    using Unique_Framebuffer = Unique_Device_Handle<VkFramebuffer, Framebuffer_Deleter>;
-    using Unique_Swapchain   = Unique_Device_Handle<VkSwapchainKHR, Swapchain_Deleter>;
-    using Unique_Semaphore   = Unique_Device_Handle<VkSemaphore, Semaphore_Deleter>;
-    using Unique_Fence       = Unique_Device_Handle<VkFence, Fence_Deleter>;
+    struct Pipeline_Deleter
+    {
+        static void Destroy(VkDevice _device, VkPipeline _handle) noexcept { vkDestroyPipeline(_device, _handle, nullptr); }
+    };
+
+    // Destroying a command pool frees every command buffer allocated from it.
+    struct Command_Pool_Deleter
+    {
+        static void Destroy(VkDevice _device, VkCommandPool _handle) noexcept { vkDestroyCommandPool(_device, _handle, nullptr); }
+    };
+
+    struct Render_Pass_Deleter
+    {
+        static void Destroy(VkDevice _device, VkRenderPass _handle) noexcept { vkDestroyRenderPass(_device, _handle, nullptr); }
+    };
+
+    struct Shader_Module_Deleter
+    {
+        static void Destroy(VkDevice _device, VkShaderModule _handle) noexcept { vkDestroyShaderModule(_device, _handle, nullptr); }
+    };
+
+    using Unique_Image_View    = Unique_Device_Handle<VkImageView, Image_View_Deleter>;
+    using Unique_Framebuffer   = Unique_Device_Handle<VkFramebuffer, Framebuffer_Deleter>;
+    using Unique_Swapchain     = Unique_Device_Handle<VkSwapchainKHR, Swapchain_Deleter>;
+    using Unique_Semaphore     = Unique_Device_Handle<VkSemaphore, Semaphore_Deleter>;
+    using Unique_Fence         = Unique_Device_Handle<VkFence, Fence_Deleter>;
+    using Unique_Pipeline      = Unique_Device_Handle<VkPipeline, Pipeline_Deleter>;
+    using Unique_Command_Pool  = Unique_Device_Handle<VkCommandPool, Command_Pool_Deleter>;
+    using Unique_Render_Pass   = Unique_Device_Handle<VkRenderPass, Render_Pass_Deleter>;
+    using Unique_Shader_Module = Unique_Device_Handle<VkShaderModule, Shader_Module_Deleter>;
 
     // =========================================================
     // Creation of synchronization objects
@@ -181,6 +206,18 @@ namespace Renderer_System
         VK_CHECK(vkCreateFence(_device, &info, nullptr, &fence), _what);
 
         return Unique_Fence(_device, fence);
+    }
+
+    // =========================================================
+    // Image views
+    // =========================================================
+
+    // A 2D view of _image over the mip levels 0 .. _mip_levels - 1, owned
+    // from the moment it exists (Vulkan_Image_Utils::Create_image_view).
+    inline Unique_Image_View Create_unique_image_view(VkDevice _device, VkImage _image, VkFormat _format,
+                                                      VkImageAspectFlags _aspect_flags, uint32_t _mip_levels)
+    {
+        return Unique_Image_View(_device, Vulkan_Image_Utils::Create_image_view(_device, _image, _format, _aspect_flags, _mip_levels));
     }
 
     // =========================================================

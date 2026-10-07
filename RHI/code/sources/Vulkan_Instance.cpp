@@ -1,4 +1,5 @@
 #include <Vulkan_Instance.hpp>
+#include <Swapchain_Maintenance1.hpp>
 
 
 // GLFW reports the instance extensions the platform needs for a surface.
@@ -48,12 +49,11 @@ namespace Renderer_System
          // otherwise the query fails with VK_ERROR_LAYER_NOT_PRESENT.
         std::unordered_set<std::string> Enumerate_instance_extensions(const char* _layer_name = nullptr)
         {
-            uint32_t count = 0;
-            VK_CHECK(vkEnumerateInstanceExtensionProperties(_layer_name, &count, nullptr),
-                "Vulkan_Instance: enumerate instance extensions");
-
-            std::vector<VkExtensionProperties> properties(count);
-            VK_CHECK(vkEnumerateInstanceExtensionProperties(_layer_name, &count, properties.data()),
+            const std::vector<VkExtensionProperties> properties = Vulkan_Utils::Enumerate<VkExtensionProperties>(
+                [&](uint32_t* _count, VkExtensionProperties* _data)
+                {
+                    return vkEnumerateInstanceExtensionProperties(_layer_name, _count, _data);
+                },
                 "Vulkan_Instance: enumerate instance extensions");
 
             std::unordered_set<std::string> names;
@@ -80,16 +80,15 @@ namespace Renderer_System
         // so it is the value device selection sees.
         std::vector<Device_Set_Limit> Query_descriptor_set_limits(VkInstance _instance)
         {
-            uint32_t device_count = 0;
-            VK_CHECK(vkEnumeratePhysicalDevices(_instance, &device_count, nullptr),
-                "Vulkan_Instance: enumerate physical devices");
-
-            std::vector<VkPhysicalDevice> devices(device_count);
-            VK_CHECK(vkEnumeratePhysicalDevices(_instance, &device_count, devices.data()),
+            const std::vector<VkPhysicalDevice> devices = Vulkan_Utils::Enumerate<VkPhysicalDevice>(
+                [&](uint32_t* _count, VkPhysicalDevice* _data)
+                {
+                    return vkEnumeratePhysicalDevices(_instance, _count, _data);
+                },
                 "Vulkan_Instance: enumerate physical devices");
 
             std::vector<Device_Set_Limit> limits;
-            limits.reserve(device_count);
+            limits.reserve(devices.size());
 
             for (VkPhysicalDevice device : devices)
             {
@@ -117,13 +116,28 @@ namespace Renderer_System
             return limits;
         }
 
+        // Owner of the temporary instance of Query_layerless_descriptor_set_limits:
+        // destroys it on every exit path, including an exception thrown
+        // while its devices are queried.
+        struct Probe_Instance
+        {
+            VkInstance handle;
+
+            explicit Probe_Instance(VkInstance _handle) noexcept : handle(_handle) {}
+            ~Probe_Instance() { vkDestroyInstance(handle, nullptr); }
+
+            Probe_Instance(const Probe_Instance&) = delete;
+            Probe_Instance& operator=(const Probe_Instance&) = delete;
+        };
+
         // Reads the real limits of every physical device through a
         // temporary instance created without layers or extensions, so no
-        // validation layer can adjust them. Returns false if that instance
-        // cannot be created or queried. A layer forced on from outside the
-        // engine (Vulkan Configurator, VK_INSTANCE_LAYERS) also loads into
-        // this instance; its limits are then not the real ones.
-        bool Query_layerless_descriptor_set_limits(uint32_t _api_version, std::vector<Device_Set_Limit>& _out_limits)
+        // validation layer can adjust them. Throws Vulkan_Error, carrying the
+        // VkResult, if that instance cannot be created or queried. A layer
+        // forced on from outside the engine (Vulkan Configurator,
+        // VK_INSTANCE_LAYERS) also loads into this instance; its limits are
+        // then not the real ones.
+        std::vector<Device_Set_Limit> Query_layerless_descriptor_set_limits(uint32_t _api_version)
         {
             VkApplicationInfo app_info{};
             app_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -133,23 +147,14 @@ namespace Renderer_System
             create_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
             create_info.pApplicationInfo = &app_info;
 
-            VkInstance probe = VK_NULL_HANDLE;
-            if (vkCreateInstance(&create_info, nullptr, &probe) != VK_SUCCESS)
-                return false;
+            // The output of a failed creation is undefined: the owner is
+            // built only from the handle of a successful one.
+            VkInstance created = VK_NULL_HANDLE;
+            VK_CHECK(vkCreateInstance(&create_info, nullptr, &created), "Vulkan_Instance: create the layerless probe instance");
 
-            bool queried = true;
+            const Probe_Instance probe(created);
 
-            try
-            {
-                _out_limits = Query_descriptor_set_limits(probe);
-            }
-            catch (const std::exception&)
-            {
-                queried = false;
-            }
-
-            vkDestroyInstance(probe, nullptr);
-            return queried;
+            return Query_descriptor_set_limits(probe.handle);
         }
 
         // Decides, before the real instance is created, whether GPU-AV can
@@ -171,10 +176,15 @@ namespace Renderer_System
                 return false;
             }
 
-            if (!Query_layerless_descriptor_set_limits(_api_version, _out_layerless_limits))
+            try
             {
-                std::cerr << "[Vulkan_instance] GPU-assisted validation requested, but a temporary instance to read the "
-                    "real descriptor set limits could not be created - falling back to standard validation.\n";
+                _out_layerless_limits = Query_layerless_descriptor_set_limits(_api_version);
+            }
+            catch (const std::exception& _error)
+            {
+                std::cerr << "[Vulkan_instance] GPU-assisted validation requested, but the real descriptor set limits "
+                    "could not be read through a temporary instance (" << _error.what()
+                    << ") - falling back to standard validation.\n";
                 return false;
             }
 
@@ -407,17 +417,7 @@ namespace Renderer_System
             create_info.enabledLayerCount = static_cast<uint32_t>(required_layers.size());
             create_info.ppEnabledLayerNames = required_layers.data();
 
-            debug_create_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-            debug_create_info.messageSeverity =
-                VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
-                VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
-                VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-            debug_create_info.messageType =
-                VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
-                VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
-                VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-            debug_create_info.pfnUserCallback = Debug_callback;
-            debug_create_info.pUserData = debug_state.get();
+            debug_create_info = Make_messenger_create_info(debug_state.get());
 
             // pNext is Vulkan's mechanism for "extending" a struct with
             // additional data without changing its original definition.
@@ -700,15 +700,28 @@ namespace Renderer_System
         }
 
         // Instance half of swapchain maintenance1. It is independent of
-        // validation: without it, Vulkan_Device must not enable
-        // VK_KHR_swapchain_maintenance1 and the Renderer falls back to
+        // validation: without it, Vulkan_Device must not enable any
+        // swapchain maintenance1 extension and the Renderer falls back to
         // per-image semaphores alone for present synchronization.
-        // The KHR names are preferred; drivers that only ship the EXT
-        // promotion predecessors are accepted too (same functionality).
+        //
+        // Every variant the loader reports is enabled (KHR and its EXT
+        // predecessor, SWAPCHAIN_MAINTENANCE1_VARIANTS): the device
+        // extension of a GPU has to be paired with the instance extension of
+        // its own name, and which of the two names a GPU exposes is only
+        // known once it is selected, so the instance cannot choose for it.
+        // Enabling both is harmless: they are aliases of the same
+        // functionality.
         const bool capabilities2 = try_enable(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
-        const bool maintenance1 = capabilities2 &&
-            (try_enable(VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME) ||
-                try_enable(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME));
+        bool maintenance1 = false;
+
+        if (capabilities2)
+        {
+            for (const Swapchain_Maintenance1_Variant& variant : SWAPCHAIN_MAINTENANCE1_VARIANTS)
+            {
+                if (try_enable(variant.surface_extension))
+                    maintenance1 = true;
+            }
+        }
 
         surface_maintenance1_enabled = maintenance1;
 
@@ -724,18 +737,13 @@ namespace Renderer_System
 
     // ---------- Check_validation_layer_support ----------
     bool Vulkan_Instance::Check_validation_layer_support(const std::vector<const char*>& _layers) const {
-        uint32_t layer_count = 0;
-
-        // First call: ask Vulkan how many layers are available, without
-        // requesting the actual data yet (standard "query size, then query
-        // data" pattern used throughout the Vulkan API).
-        VK_CHECK(vkEnumerateInstanceLayerProperties(&layer_count, nullptr),
-            "Vulkan_Instance: enumerate instance layers");
-
-        std::vector<VkLayerProperties> available_layers(layer_count);
-
-        // Second call: now actually fill the vector with the real data
-        VK_CHECK(vkEnumerateInstanceLayerProperties(&layer_count, available_layers.data()),
+        // The standard "query the count, then query the data" pattern of the
+        // Vulkan API, done by the shared helper.
+        const std::vector<VkLayerProperties> available_layers = Vulkan_Utils::Enumerate<VkLayerProperties>(
+            [](uint32_t* _count, VkLayerProperties* _data)
+            {
+                return vkEnumerateInstanceLayerProperties(_count, _data);
+            },
             "Vulkan_Instance: enumerate instance layers");
 
         for (const char* requested_layer : _layers) {
@@ -785,6 +793,18 @@ namespace Renderer_System
         // Same configuration as the temporary one set up inside the
         // constructor, but this time creating the permanent messenger that
         // stays active for the lifetime of this Vulkan_instance.
+        const VkDebugUtilsMessengerCreateInfoEXT create_info = Make_messenger_create_info(debug_state.get());
+
+        VkResult result = Create_debug_utils_messenger_ext(instance, &create_info, nullptr, &debug_messenger);
+        if (result != VK_SUCCESS) {
+            debug_messenger = VK_NULL_HANDLE;
+            std::cerr << "[Vulkan_instance] Failed to set up debug messenger: " << Vulkan_Utils::Vk_result_to_string(result) << "\n";
+        }
+    }
+
+    // ---------- Make_messenger_create_info ----------
+    VkDebugUtilsMessengerCreateInfoEXT Vulkan_Instance::Make_messenger_create_info(void* _user_data)
+    {
         VkDebugUtilsMessengerCreateInfoEXT create_info{};
         create_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
         create_info.messageSeverity =
@@ -796,13 +816,9 @@ namespace Renderer_System
             VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
             VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
         create_info.pfnUserCallback = Debug_callback;
-        create_info.pUserData = debug_state.get();
+        create_info.pUserData = _user_data;
 
-        VkResult result = Create_debug_utils_messenger_ext(instance, &create_info, nullptr, &debug_messenger);
-        if (result != VK_SUCCESS) {
-            debug_messenger = VK_NULL_HANDLE;
-            std::cerr << "[Vulkan_instance] Failed to set up debug messenger: " << Vulkan_Utils::Vk_result_to_string(result) << "\n";
-        }
+        return create_info;
     }
 
     // ---------- Debug_callback ----------

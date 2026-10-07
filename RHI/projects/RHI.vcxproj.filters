@@ -30,10 +30,19 @@
     <ClInclude Include="..\code\headers\Storage_Image.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\code\headers\Swapchain_Maintenance1.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="..\code\headers\Texture_GPU.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\code\headers\Upload_Context.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="..\code\headers\Vulkan_Allocator.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code\headers\Vulkan_Barrier.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\code\headers\Vulkan_Buffer_Utils.hpp">
@@ -63,6 +72,9 @@
     <ClInclude Include="..\code\headers\Vulkan_Pipeline.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\code\headers\Vulkan_Pipeline_Utils.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="..\code\headers\Vulkan_Surface.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -86,7 +98,13 @@
     <ClCompile Include="..\code\sources\Texture_GPU.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\code\sources\Upload_Context.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\code\sources\Vulkan_Allocator.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code\sources\Vulkan_Barrier.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\code\sources\Vulkan_Buffer_Utils.cpp">
@@ -111,6 +129,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\code\sources\Vulkan_Pipeline.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code\sources\Vulkan_Pipeline_Utils.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\code\sources\Vulkan_Surface.cpp">

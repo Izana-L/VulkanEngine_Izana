@@ -1,5 +1,6 @@
 #include <Frame_Statistics.hpp>
 #include <Renderer_Limits.hpp>
+#include <Vulkan_Barrier.hpp>
 
 #include <algorithm>
 #include <cassert>
@@ -55,7 +56,7 @@ namespace Renderer_System
         // Device writes reach host reads only through a barrier with the
         // host as destination; the wait for the frame's serial then orders
         // the read.
-        Vulkan_Buffer_Utils::Record_memory_barrier(_command_buffer,
+        Vulkan_Barrier::Record_memory_barrier(_command_buffer,
             { VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT },
             { VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT });
     }

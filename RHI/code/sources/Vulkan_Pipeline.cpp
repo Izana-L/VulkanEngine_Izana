@@ -1,42 +1,22 @@
 #include <Vulkan_Pipeline.hpp>
+#include <Vulkan_Pipeline_Utils.hpp>
 #include <Vulkan_Utils.hpp>
-#include <Filesystem.hpp>
 
 #include <array>
-#include <cstring>
 #include <iterator>
 #include <stdexcept>
-#include <iostream>
 #include <cassert>
-#include <vector>
 
 namespace Renderer_System
 {
 
-    namespace
-    {
-        // Scoped owner of a VkShaderModule. Shader modules are only needed
-        // while vkCreateGraphicsPipelines runs; this guarantees they are
-        // destroyed on every exit path of the constructor, including an
-        // exception thrown by the creation of a later module.
-        struct Shader_Module
-        {
-            VkDevice       device;
-            VkShaderModule handle;
-
-            Shader_Module(VkDevice _device, VkShaderModule _handle) : device(_device), handle(_handle) {}
-            ~Shader_Module() { if (handle != VK_NULL_HANDLE) vkDestroyShaderModule(device, handle, nullptr); }
-
-            Shader_Module(const Shader_Module&) = delete;
-            Shader_Module& operator=(const Shader_Module&) = delete;
-        };
-    }
-
     // ---------- Constructor ----------
     Vulkan_Pipeline::Vulkan_Pipeline(const Vulkan_Device& _device, VkRenderPass _render_pass, uint32_t _subpass_count,
         VkPipelineCache _pipeline_cache, VkPipelineLayout _pipeline_layout, Pipeline_Config _config)
-        : device_handle(_device.Get_logical_device_handle()),pipeline(VK_NULL_HANDLE)
+        : pipeline()
     {
+        const VkDevice device_handle = _device.Get_logical_device_handle();
+
         assert(device_handle != VK_NULL_HANDLE &&
             "Vulkan_Device must be fully constructed before creating a pipeline");
         assert(_render_pass != VK_NULL_HANDLE &&
@@ -58,21 +38,22 @@ namespace Renderer_System
             throw std::invalid_argument("Pipeline_Config: subpass is not a subpass of the render pass");
 
         // ---------- Shader modules ----------
-        // Owned by RAII guards: if the second module (or anything after it)
-        // throws, the first one is destroyed on unwinding instead of leaking.
-        const Shader_Module vertex_shader_module(device_handle, Create_shader_module(_config.vertex_shader_path));
-        const Shader_Module fragment_shader_module(device_handle, Create_shader_module(_config.fragment_shader_path));
+        // Owned by RAII wrappers: if the second module (or anything after
+        // it) throws, the first one is destroyed on unwinding instead of
+        // leaking.
+        const Unique_Shader_Module vertex_shader_module = Vulkan_Pipeline_Utils::Create_shader_module(device_handle, _config.vertex_shader_path);
+        const Unique_Shader_Module fragment_shader_module = Vulkan_Pipeline_Utils::Create_shader_module(device_handle, _config.fragment_shader_path);
 
         VkPipelineShaderStageCreateInfo vertex_stage_info{};
         vertex_stage_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         vertex_stage_info.stage = VK_SHADER_STAGE_VERTEX_BIT;
-        vertex_stage_info.module = vertex_shader_module.handle;
+        vertex_stage_info.module = vertex_shader_module.Get();
         vertex_stage_info.pName = "main";
 
         VkPipelineShaderStageCreateInfo fragment_stage_info{};
         fragment_stage_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         fragment_stage_info.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-        fragment_stage_info.module = fragment_shader_module.handle;
+        fragment_stage_info.module = fragment_shader_module.Get();
         fragment_stage_info.pName = "main";
 
         VkPipelineShaderStageCreateInfo shader_stages[] = {
@@ -185,19 +166,13 @@ namespace Renderer_System
         // ---------- Creation feedback (core in Vulkan 1.3) ----------
         // The only way to know whether the cache is actually being hit
         // instead of assuming it. Must be chained BEFORE creation.
-        VkPipelineCreationFeedback pipeline_feedback{};
-        VkPipelineCreationFeedback stage_feedbacks[2]{};
-
-        VkPipelineCreationFeedbackCreateInfo feedback_info{};
-        feedback_info.sType = VK_STRUCTURE_TYPE_PIPELINE_CREATION_FEEDBACK_CREATE_INFO;
-        feedback_info.pPipelineCreationFeedback = &pipeline_feedback;
-        feedback_info.pipelineStageCreationFeedbackCount = 2;
-        feedback_info.pPipelineStageCreationFeedbacks = stage_feedbacks;
+        // Not const: the driver writes the feedback into it during creation.
+        Vulkan_Pipeline_Utils::Creation_Feedback feedback(2);
 
         // ---------- Pipeline creation ----------
         VkGraphicsPipelineCreateInfo pipeline_info{};
         pipeline_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-        pipeline_info.pNext = &feedback_info;
+        pipeline_info.pNext = feedback.Get_create_info();
 
         pipeline_info.stageCount = 2;
         pipeline_info.pStages = shader_stages;
@@ -213,124 +188,25 @@ namespace Renderer_System
         pipeline_info.renderPass = _render_pass;
         pipeline_info.subpass = _config.subpass;
 
-        // The shader modules are destroyed by their guards when this
+        // The shader modules are destroyed by their wrappers when this
         // constructor returns or throws; the pipeline keeps no reference
-        // to them once created.
-        VK_CHECK(vkCreateGraphicsPipelines(device_handle, _pipeline_cache, 1, &pipeline_info, nullptr, &pipeline),
+        // to them once created. The output of a failed creation is
+        // undefined: the owner is built only from a successful one.
+        VkPipeline created = VK_NULL_HANDLE;
+        VK_CHECK(vkCreateGraphicsPipelines(device_handle, _pipeline_cache, 1, &pipeline_info, nullptr, &created),
             "Failed to create graphics pipeline");
 
-        // VALID_BIT first: if the driver didn't fill the feedback in, every
-        // other bit in it is meaningless.
-        if (pipeline_feedback.flags & VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT)
-        {
-            const bool cache_hit = (pipeline_feedback.flags &
-                VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT) != 0;
+        pipeline = Unique_Pipeline(device_handle, created);
 
-            std::cout << "[Vulkan_Pipeline] Graphics pipeline created — "
-                << (cache_hit ? "CACHE HIT" : "cache miss (compiled)")
-                << ", " << (pipeline_feedback.duration / 1000000.0)
-                << " ms.\n";
-        }
-        else
-        {
-            std::cout << "[Vulkan_Pipeline] Graphics pipeline created "
-                "(driver reported no creation feedback).\n";
-        }
-    }
-
-    // ---------- Destructor ----------
-    Vulkan_Pipeline::~Vulkan_Pipeline()
-    {
-        Destroy();
-    }
-
-    // ---------- Destroy ----------
-    void Vulkan_Pipeline::Destroy()
-    {
-        if (pipeline != VK_NULL_HANDLE) {
-            vkDestroyPipeline(device_handle, pipeline, nullptr);
-            pipeline = VK_NULL_HANDLE;
-        }
-        
-    }
-
-    // ---------- Move constructor ----------
-    Vulkan_Pipeline::Vulkan_Pipeline(Vulkan_Pipeline&& _other) noexcept
-        : device_handle(_other.device_handle),
-        pipeline(_other.pipeline)
-    {
-        
-        _other.pipeline = VK_NULL_HANDLE;
-    }
-
-    // ---------- Move assignment ----------
-    Vulkan_Pipeline& Vulkan_Pipeline::operator=(Vulkan_Pipeline&& _other) noexcept
-    {
-        if (this != &_other) {
-            Destroy();
-
-            device_handle = _other.device_handle;
-            
-            pipeline = _other.pipeline;
-
-
-            _other.pipeline = VK_NULL_HANDLE;
-        }
-        return *this;
+        feedback.Log("Graphics pipeline");
     }
 
     // ---------- Getters ----------
     VkPipeline Vulkan_Pipeline::Get_handle() const
     {
-        assert(pipeline != VK_NULL_HANDLE &&
+        assert(pipeline &&
             "Get_handle() called on a moved-from or destroyed Vulkan_Pipeline");
-        return pipeline;
-    }
-
-    
-    
-
-    // ---------- Create_shader_module ----------
-    VkShaderModule Vulkan_Pipeline::Create_shader_module(const std::string& _spv_file_path) const
-    {
-        const std::optional<std::vector<uint8_t>> shader_file = Platform::Filesystem::Read_binary_file(_spv_file_path);
-
-        if (!shader_file) {
-            throw std::runtime_error(
-                "Failed to read shader file: " + _spv_file_path
-            );
-        }
-
-        const std::vector<uint8_t>& shader_code = *shader_file;
-
-        if (shader_code.empty()) {
-            throw std::runtime_error(
-                "Shader file is empty: " + _spv_file_path
-            );
-        }
-
-        if (shader_code.size() % sizeof(uint32_t) != 0) {
-            throw std::runtime_error(
-                "Shader file is not valid SPIR-V (size is not a multiple of 4): " + _spv_file_path
-            );
-        }
-
-        // pCode must point at 4-byte aligned words; a std::vector<uint8_t>
-        // gives no such guarantee, so the words are copied into a uint32_t
-        // vector first.
-        std::vector<uint32_t> words(shader_code.size() / sizeof(uint32_t));
-        std::memcpy(words.data(), shader_code.data(), shader_code.size());
-
-        VkShaderModuleCreateInfo create_info{};
-        create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        create_info.codeSize = shader_code.size();
-        create_info.pCode = words.data();
-
-        VkShaderModule shader_module = VK_NULL_HANDLE;
-        VK_CHECK(vkCreateShaderModule(device_handle, &create_info, nullptr, &shader_module),
-            ("Failed to create shader module from '" + _spv_file_path + "'").c_str());
-
-        return shader_module;
+        return pipeline.Get();
     }
 
 } // namespace Renderer

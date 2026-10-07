@@ -5,8 +5,10 @@
 #include <stdexcept>
 #include <string>
 #include <cstdint>
+#include <type_traits>
+#include <vector>
 
-namespace Renderer_System::Vulkan_Utils 
+namespace Renderer_System::Vulkan_Utils
 {
 
     // Vulkan_utils: shared helper functions used across multiple Vulkan_*
@@ -21,8 +23,9 @@ namespace Renderer_System::Vulkan_Utils
     std::string Vk_result_to_string(int32_t _result);
 
     // Converts a VkFormat into a readable string. Only covers the formats
-    // this engine can realistically negotiate (swapchain and depth buffer);
-    // anything else falls through to the raw numeric code.
+    // this engine can realistically negotiate (swapchain, depth buffer and
+    // the texture formats it uploads); anything else falls through to the
+    // raw numeric code.
     std::string Vk_format_to_string(int32_t _format);
 
     // True if the format applies the automatic linear -> sRGB encode on
@@ -65,6 +68,68 @@ namespace Renderer_System::Vulkan_Utils
 
     // Strict variant: anything other than VK_SUCCESS throws Vulkan_Error.
     void Check_success(VkResult _result, const char* _what);
+
+    // Reads a Vulkan array with the two-call pattern (first the count, then
+    // the data) and returns exactly the elements the driver wrote.
+    //
+    // _call receives (uint32_t* count, T* data) and forwards them to the
+    // Vulkan function, for example:
+    //
+    //   Enumerate<VkPhysicalDevice>([&](uint32_t* _count, VkPhysicalDevice* _data)
+    //       { return vkEnumeratePhysicalDevices(instance, _count, _data); }, "enumerate physical devices");
+    //
+    // The two calls are not atomic: the list can change between them (a GPU
+    // plugged in, a window moved to another monitor with other surface
+    // formats). A function that returns VkResult reports it with
+    // VK_INCOMPLETE, and the query is repeated from the count until a call
+    // is complete, instead of keeping a truncated list. When the list
+    // shrinks, the vector is cut to the number of elements written, so it
+    // never ends with value-initialized entries (null handles, for example)
+    // that no driver wrote. A failed call throws Vulkan_Error. Functions
+    // that return void (vkGetPhysicalDeviceQueueFamilyProperties) have no
+    // way to report an incomplete list and are queried once.
+    //
+    // T must be default-constructible; the Vulkan structures that carry an
+    // sType (the *2 queries) are not supported.
+    template <typename T, typename Call>
+    std::vector<T> Enumerate(Call _call, const char* _what)
+    {
+        std::vector<T> items;
+
+        if constexpr (std::is_void_v<std::invoke_result_t<Call&, uint32_t*, T*>>)
+        {
+            uint32_t count = 0;
+            _call(&count, static_cast<T*>(nullptr));
+
+            items.resize(count);
+            _call(&count, items.data());
+
+            items.resize(count);
+            return items;
+        }
+        else
+        {
+            // A driver that keeps answering VK_INCOMPLETE would otherwise
+            // loop forever; no real list changes this many times in a row.
+            constexpr int MAX_ATTEMPTS = 8;
+
+            for (int attempt = 0; attempt < MAX_ATTEMPTS; ++attempt)
+            {
+                uint32_t count = 0;
+                Check(_call(&count, static_cast<T*>(nullptr)), _what);
+
+                items.resize(count);
+                const VkResult result = Check(_call(&count, items.data()), _what);
+
+                items.resize(count);
+
+                if (result != VK_INCOMPLETE)
+                    return items;
+            }
+
+            throw Vulkan_Error(VK_INCOMPLETE, std::string(_what) + ": the list kept changing between the count and the data queries");
+        }
+    }
 
 }
 

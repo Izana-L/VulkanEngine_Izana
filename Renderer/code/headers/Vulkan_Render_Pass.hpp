@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.h>
 
 #include <Vulkan_Device.hpp>
+#include <Vulkan_Handles.hpp>
 
 #include <cstdint>
 
@@ -84,10 +85,11 @@ namespace Renderer_System {
     //                  counts as a write).
     //   0 -> 2         color writes before the composite blends over them,
     //                  and depth writes before the test of the debug view.
+    //
+    // The handle is owned by a Unique_Render_Pass. Not copyable; movable.
     class Vulkan_Render_Pass
     {
-        VkDevice device_handle;
-        VkRenderPass render_pass;
+        Unique_Render_Pass render_pass;
         VkFormat depth_format;
 
     public:
@@ -105,13 +107,13 @@ namespace Renderer_System {
             VkFormat _revealage_format
         );
 
-        ~Vulkan_Render_Pass();
+        ~Vulkan_Render_Pass() = default;
 
         Vulkan_Render_Pass(const Vulkan_Render_Pass&) = delete;
         Vulkan_Render_Pass& operator=(const Vulkan_Render_Pass&) = delete;
 
-        Vulkan_Render_Pass(Vulkan_Render_Pass&& _other) noexcept;
-        Vulkan_Render_Pass& operator=(Vulkan_Render_Pass&& _other) noexcept;
+        Vulkan_Render_Pass(Vulkan_Render_Pass&& _other) noexcept = default;
+        Vulkan_Render_Pass& operator=(Vulkan_Render_Pass&& _other) noexcept = default;
 
         // Raw handle, needed by Vulkan_Pipeline (to build a pipeline
         // compatible with this render pass) and Vulkan_Framebuffer (to
@@ -122,12 +124,6 @@ namespace Renderer_System {
         // whoever creates the actual depth image/view to make sure it
         // matches what this render pass expects.
         VkFormat Get_depth_format() const;
-
-    private:
-        // Destroys the VkRenderPass. Shared by destructor and move assignment.
-        void Destroy();
-
-
     };
 
 }

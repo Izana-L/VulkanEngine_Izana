@@ -34,12 +34,16 @@ namespace Renderer_System
     //     VK_EXT_validation_features (deprecated), each one enabled and
     //     chained when the layer exposes it, so GPU-AV is requested
     //     through whichever of the two the installed layer honours;
-    //   - VK_KHR_get_surface_capabilities2 + VK_KHR_surface_maintenance1
-    //     (the instance half of VK_KHR_swapchain_maintenance1, whose
+    //   - VK_KHR_get_surface_capabilities2 + the surface maintenance1
+    //     extensions (the instance half of swapchain maintenance1, whose
     //     device half Vulkan_Device enables) are enabled whenever the
-    //     loader exposes them, independently of validation. Vulkan_Device
-    //     reads Is_surface_maintenance1_enabled() and only enables the
-    //     device extension when this half is present.
+    //     loader exposes them, independently of validation. Every variant
+    //     the loader reports is enabled (SWAPCHAIN_MAINTENANCE1_VARIANTS:
+    //     the KHR extension and its EXT predecessor), because the device
+    //     extension of the selected GPU must be paired with the instance
+    //     extension of its own name. Vulkan_Device reads
+    //     Is_extension_enabled() for each variant and only enables a device
+    //     extension whose instance half is present.
     //
     // GPU-assisted validation is verified, not assumed (see
     // Is_gpu_assisted_validation_enabled):
@@ -150,9 +154,10 @@ namespace Renderer_System
         // returns already excludes the reserved slot.
         bool Is_gpu_assisted_validation_enabled() const;
 
-        // Whether VK_KHR_get_surface_capabilities2 and
-        // VK_KHR_surface_maintenance1 were enabled. This is the
-        // precondition for VK_KHR_swapchain_maintenance1 on the device.
+        // Whether VK_KHR_get_surface_capabilities2 and at least one surface
+        // maintenance1 extension (KHR or EXT) were enabled. This is the
+        // precondition for swapchain maintenance1 on the device; which
+        // variants are available is read with Is_extension_enabled().
         bool Is_surface_maintenance1_enabled() const;
 
         // True if the named extension was enabled on this instance.
@@ -200,6 +205,12 @@ namespace Renderer_System
         // having to guess or attach a debugger.
         void Log_activated_extensions_and_layers(const std::vector<const char*>& _extensions,const std::vector<const char*>& _layers ) const;
       
+
+        // The one configuration of the debug messenger (severities, message
+        // types, callback), used both by the temporary messenger chained
+        // through pNext during vkCreateInstance and by the permanent one.
+        // _user_data is the Debug_Report_State the callback writes to.
+        static VkDebugUtilsMessengerCreateInfoEXT Make_messenger_create_info(void* _user_data);
 
         // Creates the "real" debug messenger that stays active for the
         // entire lifetime of this Vulkan_instance (as opposed to the

@@ -70,7 +70,7 @@ namespace Renderer_System
         // Creates the swapchain for the given device/surface.
         // _desired_extent: the size to build it for, in framebuffer pixels;
         // used only when the surface does not dictate its own size. Throws
-        // if the surface currently has no area.
+        // if the surface currently has no area, or offers no sRGB format.
         // _preferred_image_count: how many images to request (default 3,
         // triple buffering). The driver may clamp this to what the surface
         // actually supports.
@@ -176,11 +176,14 @@ namespace Renderer_System
 
         // Picks the best color format/color space from the available
         // options. Prefers VK_FORMAT_B8G8R8A8_SRGB with
-        // VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, then any other sRGB format,
-        // and only as a last resort the first available format (logging a
-        // warning). An sRGB format is a contract with the shaders: the
-        // hardware does the linear -> sRGB encode on write, so fragment
-        // shaders must output LINEAR color and never apply gamma by hand.
+        // VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, then any other sRGB format
+        // with that color space. An sRGB format is a contract with the
+        // shaders: the hardware does the linear -> sRGB encode on write, so
+        // fragment shaders must output LINEAR color and never apply gamma
+        // by hand. When the surface offers none, throws std::runtime_error
+        // instead of falling back to a format that would show wrong colors
+        // without any error; Vulkan_Device only selects a GPU whose
+        // surface offers one.
         VkSurfaceFormatKHR Choose_surface_format(const std::vector<VkSurfaceFormatKHR>& _available_formats) const;
 
         // Picks the present mode: MAILBOX if available and preferred,

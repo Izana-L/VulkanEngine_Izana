@@ -24,6 +24,13 @@ namespace Renderer_System
     // invalidates it — Is_blob_usable() checks that before handing anything
     // to Vulkan, so a stale file degrades to "start empty" instead of
     // undefined behaviour.
+    //
+    // The file is also protected against damage: it is a small container
+    // (magic, format version, payload size and a checksum) around the
+    // driver blob, which is checked before the driver sees it, so a file
+    // cut short or corrupted degrades to "start empty" as well. It is
+    // written atomically (to a temporary file that replaces the old one in
+    // one step), so a crash while saving leaves the previous cache.
     class Pipeline_Cache
     {
         VkDevice         device_handle;
@@ -51,8 +58,9 @@ namespace Renderer_System
 
     private:
 
-        // Rejects a blob this driver/GPU can't use: too short, wrong header
-        // version, different vendor, device, or cache UUID.
+        // Rejects a driver blob this driver/GPU can't use: too short, wrong
+        // header version, different vendor, device, or cache UUID. The
+        // container of the file was already checked by then.
         bool Is_blob_usable(const std::vector<uint8_t>& _blob) const;
     };
 

@@ -56,8 +56,18 @@ namespace Renderer_System ::Vulkan_Utils
         case VK_FORMAT_R8G8B8A8_UNORM:           return "VK_FORMAT_R8G8B8A8_UNORM";
         case VK_FORMAT_A2B10G10R10_UNORM_PACK32: return "VK_FORMAT_A2B10G10R10_UNORM_PACK32";
         case VK_FORMAT_R16G16B16A16_SFLOAT:      return "VK_FORMAT_R16G16B16A16_SFLOAT";
+        case VK_FORMAT_R32G32B32A32_SFLOAT:      return "VK_FORMAT_R32G32B32A32_SFLOAT";
+        case VK_FORMAT_R8_UNORM:                 return "VK_FORMAT_R8_UNORM";
+        case VK_FORMAT_R8_SRGB:                  return "VK_FORMAT_R8_SRGB";
+        case VK_FORMAT_R8G8_UNORM:               return "VK_FORMAT_R8G8_UNORM";
+        case VK_FORMAT_R32_SFLOAT:               return "VK_FORMAT_R32_SFLOAT";
+        case VK_FORMAT_BC7_UNORM_BLOCK:          return "VK_FORMAT_BC7_UNORM_BLOCK";
+        case VK_FORMAT_BC7_SRGB_BLOCK:           return "VK_FORMAT_BC7_SRGB_BLOCK";
+        case VK_FORMAT_BC5_UNORM_BLOCK:          return "VK_FORMAT_BC5_UNORM_BLOCK";
         case VK_FORMAT_D32_SFLOAT:               return "VK_FORMAT_D32_SFLOAT";
         case VK_FORMAT_D32_SFLOAT_S8_UINT:       return "VK_FORMAT_D32_SFLOAT_S8_UINT";
+        case VK_FORMAT_D24_UNORM_S8_UINT:        return "VK_FORMAT_D24_UNORM_S8_UINT";
+        case VK_FORMAT_D16_UNORM:                return "VK_FORMAT_D16_UNORM";
         default:                                 return "VkFormat(" + std::to_string(_format) + ")";
         }
     }

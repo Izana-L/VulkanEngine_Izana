@@ -5,6 +5,7 @@
 #include <Vulkan_Instance.hpp>
 #include <Vulkan_Surface.hpp>
 #include <Device_Requirements.hpp>
+#include <Swapchain_Maintenance1.hpp>
 #include <vector>
 #include <optional>
 #include <string>
@@ -53,10 +54,10 @@ namespace Renderer_System
     };
 
     // Everything Vulkan_Device needs to know about a candidate GPU before
-    // deciding whether to use it and what to enable on it. Filled by
-    // Query_device_support(), read by Is_device_suitable() and by the
-    // constructor when building VkDeviceCreateInfo, so the two can never
-    // disagree about what was checked.
+    // deciding whether to use it and what to enable on it. Filled once per
+    // GPU by the selection (Vulkan_Device.cpp), read by the check of the
+    // requirements and by the constructor when building VkDeviceCreateInfo,
+    // so the two can never disagree about what was checked.
     struct Device_Support
     {
         // Version of the functionality the device offers to the
@@ -163,14 +164,29 @@ namespace Renderer_System
         // can be read from a vertex buffer. REQUIRED: the mesh pipeline
         // cannot be created without it.
         bool vertex_formats = false;
-        // Device half of swapchain maintenance1: which extension name the
-        // driver exposes (KHR preferred, EXT accepted), and whether the
-        // feature bit behind it is supported.
-        const char* swapchain_maintenance1_extension = nullptr;
-        bool        swapchain_maintenance1_feature = false;
+        // Device half of swapchain maintenance1: the variant (KHR preferred,
+        // EXT accepted) whose device extension the driver exposes AND whose
+        // instance extension is enabled on the instance, so the two halves
+        // always carry the same name; nullptr when there is none. And
+        // whether the feature bit behind it is supported.
+        const Swapchain_Maintenance1_Variant* swapchain_maintenance1_variant = nullptr;
+        bool                                  swapchain_maintenance1_feature = false;
 
         bool swapchain_extension = false;
+
+        // The surface offers at least one format and one present mode. Only
+        // queried for a GPU that can present to the surface (the
+        // specification does not allow asking any other), so it stays false
+        // for a GPU without a present family.
         bool surface_adequate = false;
+
+        // The surface offers an sRGB format with the SRGB_NONLINEAR color
+        // space. REQUIRED: the shaders output linear color and depend on the
+        // hardware linear -> sRGB encode on write, so a surface without one
+        // would show wrong colors without any error. Same condition as the
+        // formats Vulkan_Swapchain accepts.
+        bool surface_srgb_format = false;
+
         Queue_Family_Indices queue_families;
     };
 
@@ -231,7 +247,10 @@ namespace Renderer_System
         Queue_Family_Indices queue_family_indices;
         std::string          device_name;
 
-        bool  swapchain_maintenance1_enabled;
+        // The swapchain maintenance1 variant enabled on the device, nullptr
+        // when it is not enabled.
+        const Swapchain_Maintenance1_Variant* swapchain_maintenance1;
+
         bool  sampler_anisotropy_enabled;
         float max_sampler_anisotropy;
 
@@ -274,6 +293,11 @@ namespace Renderer_System
         // is enabled on this device, together with its instance half.
         bool Is_swapchain_maintenance1_enabled() const;
 
+        // The variant (KHR or EXT) enabled, which also names the entry point
+        // that gives back an acquired image (release_images_function);
+        // nullptr when swapchain maintenance1 is not enabled.
+        const Swapchain_Maintenance1_Variant* Get_swapchain_maintenance1_variant() const;
+
         // True when the descriptor indexing features bindless textures need
         // (Device_Support::bindless) were enabled on this device. The value
         // is recorded from the selected GPU when the device is created, not
@@ -315,17 +339,8 @@ namespace Renderer_System
 
         void Destroy();
 
-        std::vector<VkPhysicalDevice> Enumerate_physical_devices(VkInstance _instance) const;
-
-        // Queries everything Is_device_suitable() and the constructor need.
-        Device_Support Query_device_support(VkPhysicalDevice _device, VkSurfaceKHR _surface, const Vulkan_Instance& _instance) const;
-
-        bool             Is_device_suitable(const Device_Support& _support, const Device_Requirements& _requirements) const;
-        Queue_Family_Indices Find_queue_families(VkPhysicalDevice _device, VkSurfaceKHR _surface) const;
-
-        // Rank of a suitable GPU, std::nullopt when it is not suitable.
-        std::optional<Device_Rank> Rate_device_suitability(VkPhysicalDevice _device, const Device_Support& _support, const Device_Requirements& _requirements) const;
-        void             Log_selected_device(VkPhysicalDevice _device);
+        // Stores the name of the selected GPU and logs it.
+        void Log_selected_device(const VkPhysicalDeviceProperties& _properties);
     };
 
 } // namespace Renderer

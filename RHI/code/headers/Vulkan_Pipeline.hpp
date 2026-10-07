@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.h>
 
 #include <Vulkan_Device.hpp>
+#include <Vulkan_Handles.hpp>
 
 #include <array>
 #include <cstdint>
@@ -183,8 +184,8 @@ namespace Renderer_System
         std::array<Color_Blend_State, MAX_COLOR_ATTACHMENTS>  color_blend{};
     };
 
-    // Vulkan_Pipeline: owns the VkPipeline (graphics pipeline) along with
-    // its VkPipelineLayout and VkDescriptorSetLayout.
+    // Vulkan_Pipeline: owns a graphics VkPipeline, created against a render
+    // pass and a pipeline layout that the caller owns.
     //
     // The pipeline bundles together everything needed to rasterize
     // geometry: which shaders to run, how to interpret vertex data, what
@@ -193,15 +194,11 @@ namespace Renderer_System
     // OpenGL, all of this state is fixed into a single immutable object
     // at creation time.
     //
-    // Also creates a descriptor set layout for a single uniform buffer
-    // (intended for Model/View/Projection matrices) — the actual uniform
-    // buffer itself will be created later in Renderer, once per
-    // frame-in-flight, but the layout describing its shape must exist
-    // before the pipeline can be built.
+    // The handle is owned by a Unique_Pipeline: destruction and moves are
+    // the wrapper's. Not copyable; movable.
     class Vulkan_Pipeline
     {
-        VkDevice              device_handle;
-        VkPipeline            pipeline;
+        Unique_Pipeline pipeline;
 
     public:
 
@@ -214,24 +211,17 @@ namespace Renderer_System
         Vulkan_Pipeline(const Vulkan_Device& _device, VkRenderPass _render_pass, uint32_t _subpass_count,
                         VkPipelineCache _pipeline_cache, VkPipelineLayout _pipeline_layout, Pipeline_Config _config);
 
-        ~Vulkan_Pipeline();
+        ~Vulkan_Pipeline() = default;
 
         Vulkan_Pipeline(const Vulkan_Pipeline&) = delete;
         Vulkan_Pipeline& operator=(const Vulkan_Pipeline&) = delete;
 
-        Vulkan_Pipeline(Vulkan_Pipeline&& _other) noexcept;
-        Vulkan_Pipeline& operator=(Vulkan_Pipeline&& _other) noexcept;
+        Vulkan_Pipeline(Vulkan_Pipeline&& _other) noexcept = default;
+        Vulkan_Pipeline& operator=(Vulkan_Pipeline&& _other) noexcept = default;
 
         // The pipeline itself — bound with vkCmdBindPipeline before
         // issuing draw calls.
         VkPipeline Get_handle() const;
-
-
-
-    private:
-
-        void Destroy();
-        VkShaderModule Create_shader_module(const std::string& _spv_file_path) const;
     };
 
 } // namespace Renderer
