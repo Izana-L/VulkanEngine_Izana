@@ -21,6 +21,13 @@ namespace EngineCore
 
         // Called once, after the loop ends and before the engine is
         // destroyed. Does nothing by default.
+        //
+        // It also runs when the loop ends by an exception (a system that
+        // threw, for example): the exception propagates out of
+        // Engine::Run afterwards, and one thrown from here in that case is
+        // reported and dropped so it cannot hide the first. It does NOT run
+        // if On_start throws: the application is then half built, and what
+        // it had acquired by then is released by its own destructors.
         virtual void On_shutdown(Engine_Context&) {}
     };
 

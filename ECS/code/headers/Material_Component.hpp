@@ -104,14 +104,24 @@ namespace ECS
         static constexpr uint32_t INVALID_GPU_MATERIAL_ID = 0xFFFFFFFFu;
 
         // Slot of this material in the Renderer's material table, set by
-        // the Engine when it registers the material (the fields above,
-        // resolved to GPU indices). The Extractor copies it into
-        // Draw_Item::material_index; while it is INVALID_GPU_MATERIAL_ID
+        // Gpu_Assets::Create_material when it registers the material (the
+        // fields above, resolved to GPU indices). The Extractor copies it
+        // into Draw_Item::material_index; while it is INVALID_GPU_MATERIAL_ID
         // the item draws with CoreTypes::Default_Material.
         //
         // Changing a field above does NOT update the GPU copy: the material
-        // has to be registered again, which yields a new slot.
+        // has to be registered again with Create_material, which yields a
+        // new slot if any value changed (an equal material keeps its slot).
         uint32_t gpu_material_id = INVALID_GPU_MATERIAL_ID;
+
+        // The alpha mode the registered copy has: what alpha_mode was when
+        // gpu_material_id was assigned. The Extractor routes each item to
+        // the opaque or the transparent pass with this one, never with
+        // alpha_mode, so the pass always matches the material the GPU draws
+        // with, even if alpha_mode is edited afterwards without registering
+        // again. Only meaningful while gpu_material_id is valid; the default
+        // material is Opaque.
+        CoreTypes::Alpha_Mode gpu_alpha_mode = CoreTypes::Alpha_Mode::Opaque;
     };
 
 } // namespace ECS

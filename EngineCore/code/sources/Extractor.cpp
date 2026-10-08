@@ -35,16 +35,18 @@ namespace EngineCore
         // infinite far plane the classic extraction yields a degenerate far
         // plane and signs that differ from the usual derivation.
         //
-        // _right, _up, _forward: orthonormal world space basis of the view,
-        // the same one Look_at builds. Order of the planes: left, right,
-        // bottom, top, near (Renderer_System::Frustum).
+        // _basis: orthonormal world space basis of the view, the same one
+        // the view matrix is built from (Mat4::Make_view_basis). Order of the
+        // planes: left, right, bottom, top, near (Renderer_System::Frustum).
         Renderer_System::Frustum Make_camera_frustum(const ECS::Camera_Component& _camera,
             const MathLib::Vector3& _position,
-            const MathLib::Vector3& _right,
-            const MathLib::Vector3& _up,
-            const MathLib::Vector3& _forward,
+            const MathLib::Mat4::View_basis& _basis,
             float _aspect)
         {
+            const MathLib::Vector3& right = _basis.right;
+            const MathLib::Vector3& up = _basis.up;
+            const MathLib::Vector3& forward = _basis.forward;
+
             Renderer_System::Frustum frustum;
 
             if (_camera.projection == ECS::Camera_Component::Projection::Perspective)
@@ -56,10 +58,10 @@ namespace EngineCore
                 const float tan_half_height = std::tan(_camera.fov * MathLib::Constants::DEG_TO_RAD * 0.5f);
                 const float tan_half_width = tan_half_height * _aspect;
 
-                frustum.planes[0] = Make_plane(MathLib::Vec3::Normalize(_right + _forward * tan_half_width), _position);   // left
-                frustum.planes[1] = Make_plane(MathLib::Vec3::Normalize(-_right + _forward * tan_half_width), _position);   // right
-                frustum.planes[2] = Make_plane(MathLib::Vec3::Normalize(_up + _forward * tan_half_height), _position);     // bottom
-                frustum.planes[3] = Make_plane(MathLib::Vec3::Normalize(-_up + _forward * tan_half_height), _position);     // top
+                frustum.planes[0] = Make_plane(MathLib::Vec3::Normalize(right + forward * tan_half_width), _position);   // left
+                frustum.planes[1] = Make_plane(MathLib::Vec3::Normalize(-right + forward * tan_half_width), _position);   // right
+                frustum.planes[2] = Make_plane(MathLib::Vec3::Normalize(up + forward * tan_half_height), _position);     // bottom
+                frustum.planes[3] = Make_plane(MathLib::Vec3::Normalize(-up + forward * tan_half_height), _position);     // top
             }
             else
             {
@@ -67,14 +69,14 @@ namespace EngineCore
                 const float half_height = _camera.ortho_size;
                 const float half_width = half_height * _aspect;
 
-                frustum.planes[0] = Make_plane( _right, _position - _right * half_width);    // left
-                frustum.planes[1] = Make_plane(-_right, _position + _right * half_width);    // right
-                frustum.planes[2] = Make_plane( _up, _position - _up * half_height);         // bottom
-                frustum.planes[3] = Make_plane(-_up, _position + _up * half_height);         // top
+                frustum.planes[0] = Make_plane( right, _position - right * half_width);    // left
+                frustum.planes[1] = Make_plane(-right, _position + right * half_width);    // right
+                frustum.planes[2] = Make_plane( up, _position - up * half_height);         // bottom
+                frustum.planes[3] = Make_plane(-up, _position + up * half_height);         // top
             }
 
             // Near plane, facing the view direction.
-            frustum.planes[4] = Make_plane(_forward, _position + _forward * _camera.near_plane);
+            frustum.planes[4] = Make_plane(forward, _position + forward * _camera.near_plane);
 
             return frustum;
         }
@@ -126,36 +128,58 @@ namespace EngineCore
         // No active camera: caller should skip Render this frame.
         if (!camera_comp) return false;
 
+        // The fields of a camera are public and can change at any time, so
+        // the values are checked here, where they become projection and
+        // culling planes: an invalid camera is reported once and replaced by
+        // its sanitized copy. Both the projection and the frustum are built
+        // from that copy, so they always agree (the projection builders only
+        // assert in Debug and clamp in Release, which the frustum would not
+        // follow).
+        if (!camera_comp->Is_valid() && !warned_invalid_camera)
+        {
+            std::cerr << "[Extractor] The active camera has an invalid " << camera_comp->Invalid_field()
+                << "; its sanitized values are used. Further occurrences are not reported.\n";
+            warned_invalid_camera = true;
+        }
+
+        const ECS::Camera_Component camera = camera_comp->Sanitized();
+
         // =========================================================
         // 2. Build RenderView (world space)
         // =========================================================
 
         const MathLib::Vector3 cam_pos = camera_transform->World_position();
-        const MathLib::Vector3 cam_forward = camera_transform->World_forward();
-        const MathLib::Vector3 cam_up = camera_transform->World_up();
 
-        const MathLib::Matrix4 view = MathLib::Mat4::Look_at(cam_pos, cam_pos + cam_forward, cam_up);
+        // The one view basis everything below derives from: the view matrix,
+        // the culling planes, the forward vector and the item depths. It is
+        // finite and orthonormal even for a degenerate transform.
+        const MathLib::Mat4::View_basis view_basis =
+            MathLib::Mat4::Make_view_basis(camera_transform->World_forward(), camera_transform->World_up());
+
+        const MathLib::Vector3& cam_forward = view_basis.forward;
+
+        const MathLib::Matrix4 view = MathLib::Mat4::View_from_basis(cam_pos, view_basis);
 
         // Effective aspect ratio: camera override or viewport default.
-        const float aspect = (camera_comp->aspect_ratio > 0.0f)
-            ? camera_comp->aspect_ratio
+        const float aspect = (camera.aspect_ratio > 0.0f)
+            ? camera.aspect_ratio
             : _params.aspect_ratio;
 
         // Projection matrix (Reverse-Z, see Matrix4.hpp).
         MathLib::Matrix4 projection;
 
-        if (camera_comp->projection == ECS::Camera_Component::Projection::Perspective)
+        if (camera.projection == ECS::Camera_Component::Projection::Perspective)
         {
             projection = MathLib::Mat4::Perspective_reverse_z_infinite(
-                camera_comp->fov * MathLib::Constants::DEG_TO_RAD, aspect, camera_comp->near_plane);
+                camera.fov * MathLib::Constants::DEG_TO_RAD, aspect, camera.near_plane);
         }
         else
         {
-            const float h = camera_comp->ortho_size;
+            const float h = camera.ortho_size;
             const float w = h * aspect;
 
             projection = MathLib::Mat4::Reverse_z_correction() *
-                MathLib::Mat4::Orthographic(-w, w, -h, h, camera_comp->near_plane, camera_comp->far_plane);
+                MathLib::Mat4::Orthographic(-w, w, -h, h, camera.near_plane, camera.far_plane);
         }
 
         // Vulkan clip space has Y flipped compared to OpenGL.
@@ -168,19 +192,12 @@ namespace EngineCore
         _out_packet.view.view_projection = projection * view;
         _out_packet.view.camera_position = cam_pos;
         _out_packet.view.camera_forward = cam_forward;
-        _out_packet.view.near_plane = camera_comp->near_plane;
-        _out_packet.clear_color = camera_comp->clear_color;
+        _out_packet.view.near_plane = camera.near_plane;
+        _out_packet.clear_color = camera.clear_color;
 
-        // Culling planes, from the same basis Look_at builds: forward, the
-        // right vector cross(forward, up) and the up vector re-orthogonalized
-        // from both, so the planes match the view matrix exactly.
-        {
-            const MathLib::Vector3 view_forward = MathLib::Vec3::Normalize(cam_forward);
-            const MathLib::Vector3 view_right = MathLib::Vec3::Normalize(MathLib::Vec3::Cross(view_forward, cam_up));
-            const MathLib::Vector3 view_up = MathLib::Vec3::Cross(view_right, view_forward);
-
-            _out_packet.view.frustum = Make_camera_frustum(*camera_comp, cam_pos, view_right, view_up, view_forward, aspect);
-        }
+        // Culling planes, from the basis of the view matrix itself, so they
+        // match it exactly.
+        _out_packet.view.frustum = Make_camera_frustum(camera, cam_pos, view_basis, aspect);
 
         // =========================================================
         // 3. Build Draw_Items from (Transform + Mesh) entities
@@ -195,12 +212,26 @@ namespace EngineCore
                 if (!mesh_comp.mesh.Is_valid()) return;
 
                 // INVALID_GPU_ID covers "never uploaded" and "stale handle".
+                // The entity has a mesh it cannot draw, which is a mistake
+                // (Gpu_Assets is the way to get a drawable mesh), so it is
+                // reported once instead of the entity just not appearing.
                 const uint32_t gpu_id = _resources.Get_gpu_id(mesh_comp.mesh);
 
-                if (gpu_id == ResourceManager::Resource_Manager::INVALID_GPU_ID) return;
+                if (gpu_id == ResourceManager::Resource_Manager::INVALID_GPU_ID)
+                {
+                    if (!warned_mesh_without_gpu_id)
+                    {
+                        std::cerr << "[Extractor] Entity " << entity
+                            << " has a mesh without a GPU id (never uploaded, or a stale handle); it is not drawn. "
+                            "Create meshes through Gpu_Assets. Further occurrences are not reported.\n";
+                        warned_mesh_without_gpu_id = true;
+                    }
+
+                    return;
+                }
 
                 // Optional material, already registered in the Renderer's
-                // material table by the Engine: the item only carries its
+                // material table by Gpu_Assets: the item only carries its
                 // slot. Without a material, or with one not registered yet,
                 // the item draws with the default material, which looks
                 // exactly like an untextured, untinted draw. The textures
@@ -210,20 +241,28 @@ namespace EngineCore
                 item.mesh_gpu_id = gpu_id;
                 item.material_index = Renderer_System::Default_Material;
 
-                // Alpha mode of the material: what routes the item to the
-                // opaque or the transparent pass below. The mode is an
-                // authoring decision, not a guess from the value of the
-                // tint alpha: Mask materials stay in the opaque pass (their
-                // fragments are discarded by the shader), and only Blend
-                // ones are blended.
+                // Alpha mode of the material the item is DRAWN with: what
+                // routes it to the opaque or the transparent pass below. It
+                // is the mode of the registered copy (gpu_alpha_mode), not
+                // the live alpha_mode of the component: the two differ when
+                // the component was edited after registering, or was never
+                // registered (then the default material, which is opaque,
+                // is what is drawn), and the pass must match the material
+                // or an opaque material would go through the blended pass
+                // and the other way round. The mode is an authoring
+                // decision, not a guess from the value of the tint alpha:
+                // Mask materials stay in the opaque pass (their fragments
+                // are discarded by the shader), and only Blend ones are
+                // blended.
                 bool blended = false;
 
                 if (const ECS::Material_Component* material = _world.Try_get_component<ECS::Material_Component>(entity))
                 {
                     if (material->gpu_material_id != ECS::Material_Component::INVALID_GPU_MATERIAL_ID)
+                    {
                         item.material_index = material->gpu_material_id;
-
-                    blended = material->alpha_mode == CoreTypes::Alpha_Mode::Blend;
+                        blended = material->gpu_alpha_mode == CoreTypes::Alpha_Mode::Blend;
+                    }
                 }
 
                 // Store the world matrix and record its index.

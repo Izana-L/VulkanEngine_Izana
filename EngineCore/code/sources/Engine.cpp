@@ -4,12 +4,33 @@
 #include <Engine_Context.hpp>
 #include <Environment.hpp>
 
+#include <exception>
 #include <iostream>
 
 namespace EngineCore
 {
     namespace
     {
+        // Calls On_shutdown while an exception from the loop is on its way
+        // out. A second exception must neither replace the first (the one
+        // that explains why the loop ended) nor reach the handler of the
+        // first one, which would terminate: it is reported and dropped.
+        void Shutdown_after_failure(Application& _application, Engine_Context& _context) noexcept
+        {
+            try
+            {
+                _application.On_shutdown(_context);
+            }
+            catch (const std::exception& _error)
+            {
+                std::cerr << "[Engine] On_shutdown threw while the main loop was failing: " << _error.what() << "\n";
+            }
+            catch (...)
+            {
+                std::cerr << "[Engine] On_shutdown threw while the main loop was failing.\n";
+            }
+        }
+
         // Validation level for the Renderer. It is the engine's default:
         // Engine_Config::render.validation overrides it.
         //   Release (NDEBUG) - Off. The layer adds CPU cost to every API
@@ -92,7 +113,21 @@ namespace EngineCore
 
         std::cout << "[Engine] Starting main loop.\n";
 
-        loop.Run(window, renderer, resources, extractor, context);
+        // On_shutdown runs however the loop ends, so the application always
+        // gets to release what On_start created. If the loop throws (a
+        // system of a phase, the extract...), the exception goes on after
+        // On_shutdown has run.
+        try
+        {
+            loop.Run(window, renderer, resources, extractor, context);
+        }
+        catch (...)
+        {
+            std::cerr << "[Engine] Main loop aborted by an exception.\n";
+
+            Shutdown_after_failure(_application, context);
+            throw;
+        }
 
         std::cout << "[Engine] Main loop ended.\n";
 

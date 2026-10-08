@@ -57,7 +57,8 @@ namespace EngineCore
         Engine& operator=(Engine&&) = delete;
 
         // Calls _application.On_start(), runs the main loop until the window
-        // is closed, then calls _application.On_shutdown().
+        // is closed, then calls _application.On_shutdown(), also when the
+        // loop ends by an exception (which is rethrown afterwards).
         void Run(Application& _application);
 
     private:

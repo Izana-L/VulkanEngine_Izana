@@ -89,6 +89,13 @@ namespace Platform {
         // dispatches the callbacks, which modify the window (resize flag,
         // input state), so only the owner of the main loop calls it.
         void Wait_events();
+        // Like Wait_events(), but returns after at most _seconds even if no
+        // event arrived (a finite, non-negative value; anything else counts
+        // as 0, i.e. a poll). For idle states where the loop must keep
+        // running its systems at a modest rate, such as a scene without a
+        // camera: it sleeps instead of spinning, and still wakes up at once
+        // when an event arrives.
+        void Wait_events_timeout(double _seconds);
         // =========================================================
         // Size
         // =========================================================

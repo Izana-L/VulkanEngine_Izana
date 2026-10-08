@@ -83,6 +83,11 @@ namespace Platform
         // Must be called exactly once per frame, at the start of the loop,
         // before any system reads delta time for that frame.
         //
+        // The first call has no previous frame to measure: the time since
+        // construction is startup (including whatever the application did
+        // before the loop), not a frame, so the deltas of the first frame
+        // are 0. The total times still count that interval.
+        //
         // When a target FPS is set, the call first sleeps until the frame
         // period since the previous Update() has elapsed, so consecutive
         // frames are paced evenly instead of alternating long and short.
@@ -95,7 +100,8 @@ namespace Platform
         // Time elapsed since the previous frame, in seconds, clamped to
         // max_delta and multiplied by the current time_scale. Use this for
         // gameplay logic that should respect pause/slow-motion (movement,
-        // AI, physics...).
+        // AI, physics...). 0 in the first frame (see Update()), as when
+        // paused: systems must accept a zero step.
         float Get_delta_time() const;
 
         // Time elapsed since the previous frame, in seconds, clamped to

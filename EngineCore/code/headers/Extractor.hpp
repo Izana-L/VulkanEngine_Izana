@@ -38,13 +38,16 @@ namespace EngineCore
     //      with is_active=true) and builds the RenderView from its WORLD
     //      transform, plus the clear color, the near plane distance and the
     //      world space culling planes (Frustum), built from the
-    //      camera parameters and the same basis as the view matrix.
+    //      camera parameters and the same basis as the view matrix. A camera
+    //      with invalid parameters is reported once and used sanitized.
     //   2. Iterates entities with Transform_Component + Mesh_Component,
-    //      resolves Asset_Handle -> gpu_id, reads the optional
-    //      Material_Component (its material table slot, and its alpha mode,
-    //      which routes each item to the opaque or the transparent list)
-    //      and fills the transforms. Textures are not resolved here: the
-    //      Engine did it once, when it registered the material.
+    //      resolves Asset_Handle -> gpu_id (a mesh without one is skipped,
+    //      and reported once), reads the optional Material_Component (its
+    //      material table slot, and the alpha mode of that registered
+    //      material, which routes each item to the opaque or the
+    //      transparent list) and fills the transforms. Textures are not
+    //      resolved here: Gpu_Assets did it once, when it registered the
+    //      material.
     //   3. Iterates entities with Transform_Component + Light_Component,
     //      fills the GPU_Light array from WORLD positions and directions,
     //      directional lights first (RenderPacket::directional_light_count).
@@ -85,10 +88,14 @@ namespace EngineCore
         // the next Extract() call.
         std::vector<MathLib::Matrix4> transform_buffer;
 
-        // Set once a material selecting a sampler preset that does not
-        // exist has been reported; such materials fall back to the default
-        // preset silently afterwards.
-        bool warned_invalid_sampler = false;
+        // Set once a camera with invalid fields has been reported; the
+        // extract keeps sanitizing it silently afterwards.
+        bool warned_invalid_camera = false;
+
+        // Set once a mesh without a GPU id (never uploaded, or a stale
+        // handle) has been reported; such entities are skipped silently
+        // afterwards.
+        bool warned_mesh_without_gpu_id = false;
 
         // Set once a light with invalid fields, or of an unknown type, has
         // been reported; the extract keeps sanitizing (or skipping) them

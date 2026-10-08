@@ -53,35 +53,30 @@ namespace EngineCore
         return procedural_texture;
     }
 
-    uint32_t Gpu_Assets::Ensure_mesh_uploaded(CoreTypes::Asset_Handle _mesh)
+    void Gpu_Assets::Ensure_mesh_uploaded(CoreTypes::Asset_Handle _mesh)
     {
-        const uint32_t existing = resources.Get_gpu_id(_mesh);
-        if (existing != ResourceManager::Resource_Manager::INVALID_GPU_ID)
-            return existing;
+        if (resources.Get_gpu_id(_mesh) != ResourceManager::Resource_Manager::INVALID_GPU_ID)
+            return;
 
-        const uint32_t gpu_id = renderer.Upload_mesh(resources.Get_mesh_data(_mesh));
-        resources.Register_gpu_id(_mesh, gpu_id);
-
-        return gpu_id;
+        resources.Register_gpu_id(_mesh, renderer.Upload_mesh(resources.Get_mesh_data(_mesh)));
     }
 
-    uint32_t Gpu_Assets::Ensure_image_uploaded(CoreTypes::Asset_Handle _image)
+    void Gpu_Assets::Ensure_image_uploaded(CoreTypes::Asset_Handle _image)
     {
-        const uint32_t existing = resources.Get_image_gpu_id(_image);
-        if (existing != ResourceManager::Resource_Manager::INVALID_GPU_ID)
-            return existing;
+        if (resources.Get_image_gpu_id(_image) != ResourceManager::Resource_Manager::INVALID_GPU_ID)
+            return;
 
-        const uint32_t bindless_index = renderer.Upload_texture(resources.Get_image_data(_image));
-        resources.Register_image_gpu_id(_image, bindless_index);
-
-        return bindless_index;
+        resources.Register_image_gpu_id(_image, renderer.Upload_texture(resources.Get_image_data(_image)));
     }
 
     uint32_t Gpu_Assets::Create_material(ECS::Material_Component& _material)
     {
-        if (_material.gpu_material_id != ECS::Material_Component::INVALID_GPU_MATERIAL_ID)
-            return _material.gpu_material_id;
-
+        // No shortcut for a material that already has a slot: its fields may
+        // have changed since (a copy of a registered material with another
+        // tint, an albedo uploaded after the first registration), and the
+        // slot would silently keep the old values. The Renderer
+        // deduplicates by value, so an unchanged material gets its own slot
+        // back and a changed one a new slot.
         Renderer_System::Material_Desc desc;
         desc.base_color = _material.base_color_factor;
         desc.sampler = _material.sampler;
@@ -110,7 +105,10 @@ namespace EngineCore
                 ? texture_index : Renderer_System::Default_Texture::Error;
         }
 
+        // Written together and after the registration succeeded, so the
+        // component never holds a slot with the alpha mode of another one.
         _material.gpu_material_id = renderer.Register_material(desc);
+        _material.gpu_alpha_mode = desc.alpha_mode;
 
         return _material.gpu_material_id;
     }

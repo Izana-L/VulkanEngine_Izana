@@ -10,6 +10,7 @@
 #include <Extractor.hpp>
 #include <RenderPacket.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <exception>
 #include <iostream>
@@ -19,13 +20,21 @@ namespace EngineCore
 
     namespace
     {
-        // Failures of the Renderer in a row (a frame, or the recreation of the
-        // swapchain) after which the loop gives up. A failure of the Renderer
-        // leaves it able to draw the next frame, so an isolated one (for
-        // example, a moment without memory) is only logged; a Renderer that
-        // fails again and again is not going to recover, and looping on it
-        // would only print the same error forever.
+        // Failures of the same Renderer call in a row (a frame, or the
+        // recreation of the swapchain) after which the loop gives up. A
+        // failure of the Renderer leaves it able to draw the next frame, so
+        // an isolated one (for example, a moment without memory) is only
+        // logged; a Renderer that fails again and again is not going to
+        // recover, and looping on it would only print the same error forever.
         constexpr uint32_t MAX_CONSECUTIVE_RENDERER_FAILURES = 5;
+
+        // Longest an iteration with nothing to draw waits for an event (no
+        // active camera, or no surface to build a swapchain for). Nothing is
+        // presented then, so nothing else paces the loop, which would spin
+        // a core at 100 %. The wait ends at once when an event arrives; the
+        // systems keep running at this rate meanwhile, so a camera created
+        // by one of them is picked up.
+        constexpr double IDLE_FRAME_PERIOD = 1.0 / 60.0;
     }
 
     void Engine_Loop::Run(Platform::Window& _window,
@@ -43,24 +52,36 @@ namespace EngineCore
         extract_params.opaque_pipeline_id = _renderer.Get_opaque_pipeline_id();
         extract_params.transparent_pipeline_id = _renderer.Get_transparent_pipeline_id();
 
-        // Failures of the Renderer since its last successful frame.
-        uint32_t consecutive_failures = 0;
+        // Failures of each Renderer call since the last time that same call
+        // returned normally. One counter per call, each cleared by its own
+        // success: the frames skipped for lack of a camera never clear a
+        // streak of Render, and a recreation that works says nothing about
+        // whether Render does.
+        uint32_t recreation_failures = 0;
+        uint32_t render_failures = 0;
+
+        // True while the "no active camera" warning is the last thing said
+        // about the camera, so it is printed when the camera is lost and not
+        // on every iteration.
+        bool camera_missing_reported = false;
 
         // Runs a call into the Renderer that can throw. A failure is logged
-        // and counted, and reported to the caller as false; it does not leave
-        // the loop by itself.
-        const auto guarded = [&](const char* _what, const auto& _call) -> bool
+        // and counted in _failures, and reported to the caller as false; it
+        // does not leave the loop by itself. A call that returns normally
+        // clears _failures.
+        const auto guarded = [](const char* _what, uint32_t& _failures, const auto& _call) -> bool
             {
                 try
                 {
                     _call();
+                    _failures = 0;
                     return true;
                 }
                 catch (const std::exception& _error)
                 {
-                    ++consecutive_failures;
+                    ++_failures;
 
-                    std::cerr << "[Engine_Loop] " << _what << " failed (" << consecutive_failures
+                    std::cerr << "[Engine_Loop] " << _what << " failed (" << _failures
                         << " in a row): " << _error.what() << "\n";
 
                     return false;
@@ -77,9 +98,11 @@ namespace EngineCore
                     return true;
                 }
 
-                if (consecutive_failures >= MAX_CONSECUTIVE_RENDERER_FAILURES)
+                const uint32_t worst_streak = std::max(recreation_failures, render_failures);
+
+                if (worst_streak >= MAX_CONSECUTIVE_RENDERER_FAILURES)
                 {
-                    std::cerr << "[Engine_Loop] " << consecutive_failures
+                    std::cerr << "[Engine_Loop] " << worst_streak
                         << " consecutive Renderer failures: leaving the main loop.\n";
                     return true;
                 }
@@ -119,11 +142,27 @@ namespace EngineCore
             if (_window.Consume_resized_flag())
                 _renderer.Notify_framebuffer_resized();
 
-            if (!guarded("Swapchain recreation", [&] { _renderer.Recreate_swapchain_if_needed(); }))
+            bool swapchain_ready = false;
+
+            if (!guarded("Swapchain recreation", recreation_failures,
+                [&] { swapchain_ready = _renderer.Recreate_swapchain_if_needed(); }))
             {
                 if (must_stop())
                     break;
 
+                continue;
+            }
+
+            if (!swapchain_ready)
+            {
+                // The surface has no area to build a swapchain for (the
+                // Renderer's view of a minimized window), so no frame can be
+                // drawn. Like the minimized case above: what the callbacks
+                // accumulated has no frame to go to. The wait has a timeout,
+                // since the window itself did not report being minimized and
+                // there may be no event coming.
+                input.Discard_pending();
+                _window.Wait_events_timeout(IDLE_FRAME_PERIOD);
                 continue;
             }
 
@@ -163,16 +202,31 @@ namespace EngineCore
             // ── 8. Render ─────────────────────────────────────────
             _context.Run_phase(Phase::Render, dt);
 
+            if (!has_camera)
+            {
+                // Nothing is drawn, so nothing is presented and nothing
+                // paces the loop: wait for events instead of spinning.
+                if (!camera_missing_reported)
+                {
+                    std::cerr << "[Engine_Loop] No active camera: nothing is rendered until one exists.\n";
+                    camera_missing_reported = true;
+                }
+
+                _window.Wait_events_timeout(IDLE_FRAME_PERIOD);
+                continue;
+            }
+
+            if (camera_missing_reported)
+            {
+                std::cout << "[Engine_Loop] An active camera exists again: rendering resumes.\n";
+                camera_missing_reported = false;
+            }
+
             // A failed frame has been undone by the Renderer, so the loop
             // goes on with the next one unless the Renderer is lost or keeps
             // failing.
-            if (has_camera)
-            {
-                if (guarded("Render", [&] { _renderer.Render(packet); }))
-                    consecutive_failures = 0;
-                else if (must_stop())
-                    break;
-            }
+            if (!guarded("Render", render_failures, [&] { _renderer.Render(packet); }) && must_stop())
+                break;
         }
     }
 

@@ -24,7 +24,8 @@ namespace EngineCore
     //      (minimized: discard pending input, wait for events, restart)
     //   2. Time::Update()                - delta time, FPS
     //   3. Resize handling               - Window flag -> Renderer swapchain;
-    //      the only place that recreates it
+    //      the only place that recreates it (no surface to build one for:
+    //      discard pending input, wait for an event, restart)
     //   4. Input::Update()               - publish edges and deltas, flush
     //                                      actions
     //      Phase::Input systems          - after the engine's input steps
@@ -38,11 +39,14 @@ namespace EngineCore
     //      Extractor::Extract()          - ECS -> RenderPacket
     //   8. Phase::Render systems, then
     //      Renderer::Render()            - draw the frame
+    //      (no active camera: nothing is drawn, a warning is printed once
+    //      and the loop waits for events instead of spinning)
     //
     // The Renderer's calls in steps 3 and 8 may throw. A failure is logged
     // and the loop goes on with the next frame, since a failed frame is
     // undone by the Renderer; it leaves the loop when the Renderer reports
-    // itself lost, or after several failures in a row.
+    // itself lost, or after several failures in a row of the same call
+    // (each call has its own count, cleared by its own success).
     //
     // Separated from Engine so the loop strategy can be changed
     // (fixed timestep, render thread) without touching Engine's

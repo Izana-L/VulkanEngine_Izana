@@ -3,6 +3,7 @@
 #include <Vector.hpp>
 #include <MathConstants.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 namespace ECS
@@ -119,21 +120,77 @@ namespace ECS
 
         // True when the parameters describe a usable projection: finite, a
         // positive near plane (the reverse-Z matrix divides by it), a field of
-        // view strictly inside (0, 180) and, for orthographic cameras, a
+        // view in [FOV_MIN, FOV_MAX] and, for orthographic cameras, a
         // positive size and a far plane beyond the near one.
         bool Is_valid() const noexcept
         {
-            if (!std::isfinite(near_plane) || near_plane <= 0.0f) return false;
-            if (!std::isfinite(aspect_ratio) || aspect_ratio < 0.0f) return false;
+            return Invalid_field() == nullptr;
+        }
+
+        // Name of the first invalid field, or nullptr when the camera is
+        // valid. Only the fields the projection type reads are checked.
+        const char* Invalid_field() const noexcept
+        {
+            if (projection != Projection::Perspective && projection != Projection::Orthographic)
+                return "projection";
+
+            if (!std::isfinite(near_plane) || near_plane <= 0.0f) return "near_plane";
+            if (!std::isfinite(aspect_ratio) || aspect_ratio < 0.0f) return "aspect_ratio";
 
             if (projection == Projection::Perspective)
             {
-                return std::isfinite(fov) &&
-                    fov >= MathLib::Constants::FOV_MIN && fov <= MathLib::Constants::FOV_MAX;
+                if (!std::isfinite(fov) ||
+                    fov < MathLib::Constants::FOV_MIN || fov > MathLib::Constants::FOV_MAX)
+                    return "fov";
+
+                return nullptr;
             }
 
-            return std::isfinite(ortho_size) && ortho_size > 0.0f &&
-                std::isfinite(far_plane) && far_plane > near_plane;
+            if (!std::isfinite(ortho_size) || ortho_size <= 0.0f) return "ortho_size";
+            if (!std::isfinite(far_plane) || far_plane <= near_plane) return "far_plane (must be > near_plane)";
+
+            return nullptr;
+        }
+
+        // Returns a copy whose projection parameters are always safe to
+        // build a projection and culling planes from: a non-finite or
+        // out of range value falls back to the default (or to the nearest
+        // valid value, for the field of view), an aspect ratio that is not
+        // usable becomes 0 (automatic) and a far plane that is not beyond
+        // the near one is pushed past it. Like Invalid_field(), it only
+        // looks at the fields the projection type reads. The fields are
+        // public and can change at any time, so the code that fills the
+        // RenderPacket uses this instead of trusting whoever set them. A
+        // valid camera comes back unchanged.
+        Camera_Component Sanitized() const noexcept
+        {
+            const Camera_Component defaults;
+            Camera_Component out = *this;
+
+            if (projection != Projection::Perspective && projection != Projection::Orthographic)
+                out.projection = defaults.projection;
+
+            out.near_plane = (std::isfinite(near_plane) && near_plane > 0.0f) ? near_plane : defaults.near_plane;
+            out.aspect_ratio = (std::isfinite(aspect_ratio) && aspect_ratio >= 0.0f) ? aspect_ratio : 0.0f;
+
+            if (out.projection == Projection::Perspective)
+            {
+                out.fov = std::isfinite(fov)
+                    ? std::clamp(fov, MathLib::Constants::FOV_MIN, MathLib::Constants::FOV_MAX)
+                    : defaults.fov;
+
+                return out;
+            }
+
+            out.ortho_size = (std::isfinite(ortho_size) && ortho_size > 0.0f) ? ortho_size : defaults.ortho_size;
+
+            if (!std::isfinite(far_plane) || far_plane <= out.near_plane)
+            {
+                out.far_plane = std::min(std::max(defaults.far_plane, out.near_plane * 2.0f),
+                    MathLib::Constants::FLOAT_MAX);
+            }
+
+            return out;
         }
 
         // =========================================================

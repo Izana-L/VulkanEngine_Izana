@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <iostream>
 #include <cassert>
+#include <cmath>
 #include <string>
 namespace Platform {
 
@@ -273,6 +274,12 @@ namespace Platform {
     void Window::Wait_events() {
         assert(window_handle != nullptr && "Wait_events() called on a moved-from Window");
         glfwWaitEvents();
+    }
+    void Window::Wait_events_timeout(double _seconds) {
+        assert(window_handle != nullptr && "Wait_events_timeout() called on a moved-from Window");
+        // GLFW raises an error for a negative, NaN or infinite timeout.
+        const bool valid = _seconds > 0.0 && std::isfinite(_seconds);
+        glfwWaitEventsTimeout(valid ? _seconds : 0.0);
     }
     // =========================================================
     // Size

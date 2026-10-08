@@ -146,12 +146,20 @@ namespace Platform {
             }
         }
 
-        const double raw_delta = std::chrono::duration<double>(now - last_frame_time).count();
+        const double elapsed = std::chrono::duration<double>(now - last_frame_time).count();
         const bool is_first_update = (frame_count == 0);
 
+        // The first Update() measures from construction, i.e. engine startup
+        // and whatever the application did before the loop (its On_start:
+        // loading assets, building the scene). That is not a frame, and
+        // clamping it would still hand the first frame a quarter-second
+        // step. There is no previous frame to measure, so the first frame
+        // lasts 0; the clocks below still count the startup.
+        const double raw_delta = is_first_update ? 0.0 : elapsed;
+
         // Clamp the SIMULATION step to avoid huge spikes (e.g. after a
-        // breakpoint, window drag-resize stall, or the very first frame) -
-        // prevents physics/gameplay from taking a giant step.
+        // breakpoint or a window drag-resize stall) - prevents
+        // physics/gameplay from taking a giant step.
         const double clamped_delta = std::min(raw_delta, static_cast<double>(max_delta));
 
         unscaled_delta_time = static_cast<float>(clamped_delta);
@@ -160,7 +168,7 @@ namespace Platform {
         // The clocks follow the real interval, not the clamped one: a stall
         // is not lost, it is simply not simulated as a single step.
         unscaled_total_time = std::chrono::duration<double>(now - start_time).count();
-        total_time += raw_delta * static_cast<double>(time_scale);
+        total_time += elapsed * static_cast<double>(time_scale);
 
         // Statistics see the real interval, not the clamped step: a stall
         // must show up in the worst frame and the FPS figures at its true
@@ -170,9 +178,8 @@ namespace Platform {
         last_frame_time = now;
         ++frame_count;
 
-        // Update rolling window for average FPS. The first Update() measures
-        // from construction, i.e. engine startup (device creation, asset
-        // loading), which is not a frame and would sit in the window, and in
+        // Update rolling window for average FPS. The first Update() is not a
+        // frame (see above), so it stays out of the window, and out of
         // Get_worst_frame_time(), for the next 60 frames.
         if (!is_first_update) {
             recent_delta_times.push_back(static_cast<float>(real_delta_time));
